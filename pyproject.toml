@@ -1,0 +1,22 @@
+[project]
+name = "jevstiller"
+version = "0.0.1"
+description = "Distill a repeated Jev classification task into a local model, on the fly."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+jev = ["typesafe-sdk"]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["jevstiller"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

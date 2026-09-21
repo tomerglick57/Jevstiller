@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Jevstiller experiment outputs
+experiments/results/
+experiments/data/
+experiments/cache/
