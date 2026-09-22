@@ -5,9 +5,9 @@ import hashlib
 import json
 import sqlite3
 import time
-from dataclasses import dataclass, field, fields
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -34,6 +34,7 @@ class Record:
     channel: str                        # bootstrap | audit | fallback | deferred | student
     ts: float = field(default_factory=time.time)
     weight: float = 1.0                 # importance weight: how many requests this row stands for
+    text_hash: str | None = None        # set by the caller when text is not stored
     latency_ms: float = 0.0
     teacher_label: str | None = None
     teacher_probs: dict | None = None
@@ -75,7 +76,7 @@ class SampleStore:
     def __init__(self, path: Path, calib_fraction: float = 0.2):
         self.path = Path(path)
         self.calib_fraction = calib_fraction
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_SCHEMA)
 
@@ -83,7 +84,7 @@ class SampleStore:
     def insert(self, recs: Sequence[Record]) -> None:
         rows = []
         for r in recs:
-            h = text_hash(r.text)
+            h = r.text_hash or text_hash(r.text)
             split = split_for(h, self.calib_fraction) if r.channel in IID_CHANNELS else "train"
             emb = r.embedding.astype(np.float32).tobytes() if r.embedding is not None else None
             rows.append((r.ts, r.task_version, r.text, h, r.encoder_id, emb,
@@ -133,7 +134,8 @@ class SampleStore:
         """Embeddings X, teacher distributions Y, teacher argmax y, importance weights w for teacher-labelled rows."""
         ch = tuple(channels)
         rows = self.db.execute(
-            f"SELECT embedding, teacher_probs, teacher_label, weight FROM samples WHERE task_version=? AND encoder_id=? "
+            f"SELECT embedding, teacher_probs, teacher_label, weight FROM samples "
+            f"WHERE task_version=? AND encoder_id=? "
             f"AND split=? AND teacher_label IS NOT NULL AND channel IN ({','.join('?' * len(ch))}) ORDER BY id",
             (task_version, encoder_id, split, *ch)).fetchall()
         return self._matrix(rows, labels, dim)
@@ -180,7 +182,8 @@ class SampleStore:
         c["teacher_cost_usd"] = self.db.execute(
             "SELECT COALESCE(SUM(teacher_cost_usd),0) FROM samples WHERE task_version=?", (task_version,)).fetchone()[0]
         c["teacher_calls"] = self.db.execute(
-            "SELECT COUNT(*) FROM samples WHERE task_version=? AND teacher_label IS NOT NULL", (task_version,)).fetchone()[0]
+            "SELECT COUNT(*) FROM samples WHERE task_version=? AND teacher_label IS NOT NULL",
+            (task_version,)).fetchone()[0]
         return c
 
     def max_id(self) -> int:

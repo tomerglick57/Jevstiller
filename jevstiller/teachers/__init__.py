@@ -1,8 +1,9 @@
 """Teacher protocol and adapters."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from ..task import Task
 
@@ -34,7 +35,8 @@ def peakedness(probs: dict[str, float]) -> float:
     return max(0.0, (k * max(probs.values()) - 1.0) / (k - 1.0))
 
 
+from .replay import CachedTeacher, ReplayTeacher  # noqa: E402
 from .synthetic import SyntheticTeacher, SyntheticWorld  # noqa: E402
-from .replay import ReplayTeacher, CachedTeacher  # noqa: E402
 
-__all__ = ["Teacher", "TeacherOutput", "peakedness", "SyntheticTeacher", "SyntheticWorld", "ReplayTeacher", "CachedTeacher"]
+__all__ = ["Teacher", "TeacherOutput", "peakedness", "SyntheticTeacher", "SyntheticWorld", "ReplayTeacher",
+           "CachedTeacher"]

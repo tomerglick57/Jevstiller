@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
@@ -29,7 +29,8 @@ class OnnxEncoder:
         self.tok.enable_truncation(max_length)
         self.tok.enable_padding()
         avail = ort.get_available_providers()
-        want = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device in ("auto", "cuda") else ["CPUExecutionProvider"]
+        cpu = ["CPUExecutionProvider"]
+        want = ["CUDAExecutionProvider", *cpu] if device in ("auto", "cuda") else cpu
         providers = [p for p in want if p in avail] or ["CPUExecutionProvider"]
         so = ort.SessionOptions()
         so.log_severity_level = 3

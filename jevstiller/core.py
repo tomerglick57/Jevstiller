@@ -1,10 +1,13 @@
 """The loop: route, record, train, calibrate, shadow, promote, monitor, fall back."""
 from __future__ import annotations
 
+import json
+import shutil
+import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
@@ -12,10 +15,10 @@ from .calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upp
 from .encoders import Encoder, HashEncoder
 from .ood import KnnOOD
 from .registry import Bundle, Registry
-from .store import Record, SampleStore
+from .store import Record, SampleStore, text_hash
 from .student import LinearStudent
 from .task import Config, Task
-from .teachers import Teacher, TeacherOutput
+from .teachers import Teacher
 
 
 @dataclass
@@ -70,7 +73,8 @@ class Status:
 
     def report(self) -> str:
         L = []
-        L.append(f"Task: {self.task}   version {self.task_version}   mode: {self.mode}   audit rate {self.audit_rate:.0%}")
+        L.append(f"Task: {self.task}   version {self.task_version}   mode: {self.mode}   "
+                 f"audit rate {self.audit_rate:.0%}")
         L.append(f"Production: {self.production or '-'}   Shadow: {self.shadow or '-'}")
         L.append(f"Requests: {self.requests:,}   student {self.student_share:.1%}   teacher {self.teacher_share:.1%}")
         ch = "   ".join(f"{k} {v:,}" for k, v in sorted(self.channels.items()))
@@ -110,6 +114,7 @@ class Jevstiller:
         self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction)
         self.registry = Registry(self.dir / "versions")
         self.rng = np.random.default_rng(self.cfg.seed)
+        self._lock = threading.RLock()
         self.forced_fallback = False
         self._retrain_requested = False
         self._suspicious = False
@@ -158,6 +163,10 @@ class Jevstiller:
         return self.classify_batch([text])[0]
 
     def classify_batch(self, texts: Sequence[str]) -> list[Result]:
+        with self._lock:
+            return self._classify_batch(texts)
+
+    def _classify_batch(self, texts: Sequence[str]) -> list[Result]:
         t0 = time.perf_counter()
         n = len(texts)
         X = self.encoder.encode(texts)
@@ -174,7 +183,8 @@ class Jevstiller:
         results: list[Result | None] = [None] * n
         to_teacher: list[int] = []
         for i in range(n):
-            r = Record(text=texts[i], task_version=self.task.version, encoder_id=self.encoder.id,
+            r = Record(text=texts[i] if self.cfg.store_text else "", text_hash=text_hash(texts[i]),
+                       task_version=self.task.version, encoder_id=self.encoder.id,
                        embedding=X[i], served_by="teacher", routing_reason="", channel="")
             if prod is not None:
                 r.student_version = prod.name
@@ -212,7 +222,7 @@ class Jevstiller:
 
         if to_teacher:
             outs = self.teacher.classify([texts[i] for i in to_teacher], self.task)
-            for i, o in zip(to_teacher, outs):
+            for i, o in zip(to_teacher, outs, strict=False):
                 r = recs[i]
                 r.teacher_label, r.teacher_probs, r.teacher_confidence = o.label, o.probs, o.confidence
                 r.teacher_model, r.teacher_input_tokens = self.teacher.name, o.input_tokens
@@ -220,7 +230,7 @@ class Jevstiller:
                 results[i] = Result(o.label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
 
         dt = (time.perf_counter() - t0) * 1000 / max(n, 1)
-        for r, res in zip(recs, results):
+        for r, res in zip(recs, results, strict=False):
             r.latency_ms = dt
             res.latency_ms = dt
         self.store.insert(recs)
@@ -232,7 +242,7 @@ class Jevstiller:
         if self._shadow is not None:
             self._judge_shadow()
         if self._shadow is None and self._should_train():
-            self.train_now()
+            self._train_now()
         if self._prod is not None and self.mode == "cascade":
             self._check_drift()
 
@@ -249,6 +259,10 @@ class Jevstiller:
         return (self.store.max_id() - self._last_train_id) >= self.cfg.min_new_samples
 
     def train_now(self) -> TrainReport:
+        with self._lock:
+            return self._train_now()
+
+    def _train_now(self) -> TrainReport:
         tv, eid, dim = self.task.version, self.encoder.id, self.encoder.dim
         X, Y, _, w = self.store.training_set(tv, eid, self.labels, dim)
         Xc, _, yc, _ = self.store.calib_set(tv, eid, self.labels, dim)
@@ -260,7 +274,8 @@ class Jevstiller:
             Y = np.eye(len(self.labels), dtype=np.float32)[Y.argmax(axis=1)]
         student = LinearStudent(dim, len(self.labels))
         fit = student.fit(X, Y, epochs=self.cfg.student_epochs, l2=self.cfg.student_l2, seed=self.cfg.seed,
-                          sample_weight=w if self.cfg.importance_weighting else None, patience=self.cfg.student_patience)
+                          sample_weight=w if self.cfg.importance_weighting else None,
+                          patience=self.cfg.student_patience)
         ood = KnnOOD(self.cfg.ood_k)
         ood.fit(X, seed=self.cfg.seed)
         Pc = student.predict_proba(Xc)
@@ -301,8 +316,10 @@ class Jevstiller:
         N = len(rows)
         if N == 0:
             return
-        s_lab = np.array([r[0] for r in rows]); s_conf = np.array([r[1] for r in rows], float)
-        s_ood = np.array([r[2] for r in rows], float); t_lab = np.array([r[3] for r in rows])
+        s_lab = np.array([r[0] for r in rows])
+        s_conf = np.array([r[1] for r in rows], float)
+        s_ood = np.array([r[2] for r in rows], float)
+        t_lab = np.array([r[3] for r in rows])
         acc = sh.policy.accepts(s_conf, s_ood)
         # Pool the calibration rows (used to fit the policy) with the fresh shadow rows: both are IID
         # teacher-labelled traffic, and pooling keeps the test powered while adding out-of-time evidence.
@@ -316,7 +333,8 @@ class Jevstiller:
         prod_cov = sh.meta.get("prod_calib_coverage")
         if ok and prod_cov is not None:
             ok = sh.policy.expected_coverage >= 0.95 * prod_cov
-        detail = dict(version=sh.name, n_shadow=N, n_pooled=N_pool, coverage=round(cov, 4), disagreement_ub=round(ub, 4),
+        detail = dict(version=sh.name, n_shadow=N, n_pooled=N_pool, coverage=round(cov, 4),
+                      disagreement_ub=round(ub, 4),
                       budget=self.task.budget, production_coverage=prod_cov)
         if ok:
             prev = self.registry.promote(sh.name)
@@ -378,7 +396,8 @@ class Jevstiller:
 
     def status(self) -> Status:
         c = self.store.counts(self.task.version)
-        sb = c["served_by"]; tot = c["total"] or 1
+        sb = c["served_by"]
+        tot = c["total"] or 1
         avoided = sb.get("student", 0)
         avg_cost = (c["teacher_cost_usd"] / c["teacher_calls"]) if c["teacher_calls"] else 0.0
         N = a = lb = ub = None
@@ -389,11 +408,33 @@ class Jevstiller:
             production=self._prod.name if self._prod else None, shadow=self._shadow.name if self._shadow else None,
             requests=c["total"], served_by_student=sb.get("student", 0), served_by_teacher=sb.get("teacher", 0),
             channels=c["channel"], student_share=sb.get("student", 0) / tot, teacher_share=sb.get("teacher", 0) / tot,
-            audit_n=N or 0, audit_agreement=a, audit_agreement_lb=lb, audit_agreement_ub=ub, target_agreement=self.task.target_agreement,
+            audit_n=N or 0, audit_agreement=a, audit_agreement_lb=lb, audit_agreement_ub=ub,
+            target_agreement=self.task.target_agreement,
             teacher_calls=c["teacher_calls"], teacher_calls_avoided=avoided, teacher_cost_usd=c["teacher_cost_usd"],
             teacher_cost_avoided_usd=avoided * avg_cost, labelled_train=c["labelled_train"],
             labelled_calib=c["labelled_calib"], policy=self._prod.policy.__dict__ if self._prod else None,
             events=self.store.events())
+
+    def versions(self) -> list[dict]:
+        """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back)."""
+        return self.registry.versions()
+
+    def export(self, path: str | Path, version: str | None = None) -> Path:
+        """Copy one student version (head, OOD reference, routing policy, metadata) plus the task and encoder
+        identity into a standalone directory. Enough to serve that version without the sample store."""
+        name = version or self.registry.production
+        if not name:
+            raise ValueError("no production version to export")
+        src = Path(self.registry.load(name).meta.get("dir") or (self.registry.root / name.replace(":", "-")))
+        dst = Path(path)
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+        (dst / "task.json").write_text(json.dumps({
+            "name": self.task.name, "instructions": self.task.instructions, "classes": self.task.classes,
+            "target_agreement": self.task.target_agreement, "task_version": self.task.version,
+            "encoder_id": self.encoder.id, "version": name, "config": self.cfg.to_dict()}, indent=2))
+        return dst
 
     def evaluate(self, texts: Sequence[str], teacher_labels: Sequence[str], version: str | None = None,
                  X: np.ndarray | None = None) -> dict:

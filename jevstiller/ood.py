@@ -33,7 +33,7 @@ class KnnOOD:
         np.savez(path, X=self.X, k=self.k)
 
     @classmethod
-    def load(cls, path: Path) -> "KnnOOD":
+    def load(cls, path: Path) -> KnnOOD:
         d = np.load(path)
         o = cls(int(d["k"]))
         o.X = d["X"]

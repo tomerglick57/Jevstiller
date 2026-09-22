@@ -1,7 +1,6 @@
 """End to end: the loop trains, shadows, promotes, routes, and the agreement bound holds."""
-import numpy as np
 
-from jevstiller import Jevstiller, Config, HashEncoder
+from jevstiller import Config, HashEncoder, Jevstiller
 
 
 def _cfg(**kw):
@@ -29,10 +28,10 @@ def test_loop_promotes_and_meets_budget(tmp_path, task, world, teacher):
     tail = [t for t, _ in world.sample(2000)]
     res = js.classify_batch(tail)
     student_served = sum(r.source != "teacher" for r in res)
-    disagree = sum(r.source != "teacher" and r.label != teacher.answer(t, task).label for t, r in zip(tail, res))
+    disagree = sum(r.source != "teacher" and r.label != teacher.answer(t, task).label for t, r in zip(tail, res, strict=False))
     assert student_served / len(tail) > 0.3, js.status().report()
     assert disagree / len(tail) <= task.budget + 0.01, js.status().report()
-    assert all(r.label == truth.get(t, r.label) or r.source != "teacher" for t, r in zip(tail, res))
+    assert all(r.label == truth.get(t, r.label) or r.source != "teacher" for t, r in zip(tail, res, strict=False))
 
     st = js.status()
     assert st.teacher_calls_avoided > 0 and st.audit_n > 0
@@ -45,7 +44,7 @@ def test_loop_promotes_and_meets_budget(tmp_path, task, world, teacher):
 
 def test_persistence_and_rollback(tmp_path, task, world, teacher):
     js = Jevstiller(task, teacher, tmp_path, config=_cfg())
-    for i in range(0, 4000, 200):
+    for _i in range(0, 4000, 200):
         js.classify_batch([t for t, _ in world.sample(200)])
     prod = js.status().production
     assert prod
@@ -60,12 +59,12 @@ def test_persistence_and_rollback(tmp_path, task, world, teacher):
 def test_drift_triggers_fallback(tmp_path, task, world, teacher):
     from jevstiller.teachers import SyntheticTeacher, SyntheticWorld
     js = Jevstiller(task, teacher, tmp_path, config=_cfg(audit_rate=0.3, drift_margin=0.0))
-    for i in range(0, 4000, 200):
+    for _i in range(0, 4000, 200):
         js.classify_batch([t for t, _ in world.sample(200)])
     assert js.mode == "cascade"
     # the teacher changes its mind: a different world's vocabulary mapping
     js.teacher = SyntheticTeacher(SyntheticWorld(task.labels, seed=99), temperature=0.7, noise=0.5)
-    for i in range(0, 3000, 200):
+    for _i in range(0, 3000, 200):
         js.classify_batch([t for t, _ in world.sample(200)])
         if js.mode == "teacher_only":
             break

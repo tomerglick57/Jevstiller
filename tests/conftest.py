@@ -1,6 +1,6 @@
 import pytest
 
-from jevstiller import Task, SyntheticWorld, SyntheticTeacher
+from jevstiller import SyntheticTeacher, SyntheticWorld, Task
 
 LABELS = ["billing", "technical", "cancellation", "sales", "other"]
 

@@ -1,7 +1,7 @@
 """Serve previously recorded teacher answers (from a sample store or a dict). Free and offline."""
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from ..task import Task
 from . import TeacherOutput
@@ -24,7 +24,7 @@ class ReplayTeacher:
                 raise KeyError(f"{len(missing)} texts not in replay and no fallback teacher")
             self.misses += len(missing)
             fresh = self.fallback.classify([texts[i] for i in missing], task)
-            for i, o in zip(missing, fresh):
+            for i, o in zip(missing, fresh, strict=False):
                 out[i] = o
                 self.answers[texts[i]] = o
         return out  # type: ignore[return-value]
@@ -62,7 +62,7 @@ class CachedTeacher:
         if missing:
             fresh = self.inner.classify([texts[i] for i in missing], task)
             with open(self.path, "a") as f:
-                for i, o in zip(missing, fresh):
+                for i, o in zip(missing, fresh, strict=False):
                     out[i] = o
                     self.cache[keys[i]] = o
                     f.write(json.dumps({"key": keys[i], "label": o.label, "probs": o.probs, "confidence": o.confidence,

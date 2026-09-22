@@ -44,8 +44,10 @@ class LinearStudent:
             Xv, Yv, wv = X[vi], Y[vi], (w[vi] / w[vi].sum())[:, None]
         self.W = rng.normal(0, 0.01, self.W.shape)
         self.b[:] = 0
-        mW = np.zeros_like(self.W); vW = np.zeros_like(self.W)
-        mb = np.zeros_like(self.b); vb = np.zeros_like(self.b)
+        mW = np.zeros_like(self.W)
+        vW = np.zeros_like(self.W)
+        mb = np.zeros_like(self.b)
+        vb = np.zeros_like(self.b)
         b1, b2, eps = 0.9, 0.999, 1e-8
         best = (np.inf, self.W.copy(), self.b.copy(), 0)
         bad = 0
@@ -55,8 +57,10 @@ class LinearStudent:
             G = wt * (P - Yt) / len(ti)
             gW = Xt.T @ G + l2 * self.W
             gb = G.sum(axis=0)
-            mW = b1 * mW + (1 - b1) * gW; vW = b2 * vW + (1 - b2) * gW * gW
-            mb = b1 * mb + (1 - b1) * gb; vb = b2 * vb + (1 - b2) * gb * gb
+            mW = b1 * mW + (1 - b1) * gW
+            vW = b2 * vW + (1 - b2) * gW * gW
+            mb = b1 * mb + (1 - b1) * gb
+            vb = b2 * vb + (1 - b2) * gb * gb
             c1, c2 = 1 - b1 ** t, 1 - b2 ** t
             self.W -= lr * (mW / c1) / (np.sqrt(vW / c2) + eps)
             self.b -= lr * (mb / c1) / (np.sqrt(vb / c2) + eps)
@@ -84,7 +88,7 @@ class LinearStudent:
         np.savez(path, W=self.W, b=self.b)
 
     @classmethod
-    def load(cls, path: Path) -> "LinearStudent":
+    def load(cls, path: Path) -> LinearStudent:
         d = np.load(path)
         s = cls(d["W"].shape[0], d["W"].shape[1])
         s.W, s.b = d["W"], d["b"]

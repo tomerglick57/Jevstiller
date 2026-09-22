@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -70,7 +70,7 @@ class RoutingPolicy:
         path.write_text(json.dumps(asdict(self), indent=2))
 
     @classmethod
-    def load(cls, path: Path) -> "RoutingPolicy":
+    def load(cls, path: Path) -> RoutingPolicy:
         return cls(**json.loads(path.read_text()))
 
 

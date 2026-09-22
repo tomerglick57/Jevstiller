@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import csv
-import io
 import json
 import urllib.request
 from pathlib import Path
@@ -35,7 +34,7 @@ def clinc150() -> dict:
     p = _fetch("https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json", "clinc150_full.json")
     d = json.loads(p.read_text())
     rows = []
-    for k, v in d.items():
+    for _k, v in d.items():
         for text, label in v:
             rows.append((text, "other" if label == "oos" else label))
     labels = sorted({c for _, c in rows if c != "other"})

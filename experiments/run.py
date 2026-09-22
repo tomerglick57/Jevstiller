@@ -14,9 +14,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from datasets import LOADERS  # noqa: E402
+
 from jevstiller import Config, Jevstiller, Task, load_encoder  # noqa: E402
 from jevstiller.teachers import CachedTeacher, SyntheticTeacher  # noqa: E402
-from datasets import LOADERS  # noqa: E402
+
 
 class OracleTeacher:
     """Returns the dataset's own label with probability `p_true`, the rest spread uniformly. Upper bound, not a product path."""
@@ -104,7 +106,9 @@ def main() -> None:
     ev_texts = [t for t, _ in ev]
     ev_truth = np.array([c for _, c in ev])
     enc.encode(ev_texts[:64])                                   # warm-up
-    t1 = time.perf_counter(); X_ev = enc.encode(ev_texts); enc_ms = (time.perf_counter() - t1) * 1000 / len(ev_texts)
+    t1 = time.perf_counter()
+    X_ev = enc.encode(ev_texts)
+    enc_ms = (time.perf_counter() - t1) * 1000 / len(ev_texts)
     print(f"encoder {enc.id} on {getattr(enc, 'device', 'cpu')}: {enc_ms:.2f} ms/text (batched)")
 
     # --- teacher profile on the held-out slice (also gives eval labels) --------------------------------
@@ -230,19 +234,27 @@ def plot(out: Path, r: dict) -> None:
     x = [c["examples"] for c in cps]
     fig, ax = plt.subplots(1, 3, figsize=(15, 4))
     ax[0].plot(x, [100 * (1 - c["student_share_window"]) for c in cps], marker="o")
-    ax[0].set_title("Jev share of traffic (last 1,000)"); ax[0].set_ylim(0, 105); ax[0].set_ylabel("%")
+    ax[0].set_title("Jev share of traffic (last 1,000)")
+    ax[0].set_ylim(0, 105)
+    ax[0].set_ylabel("%")
     ev = [(c["examples"], c["eval"]) for c in cps if c.get("eval")]
     if ev:
         ax[1].plot([e[0] for e in ev], [100 * e[1]["coverage"] for e in ev], marker="o", label="student coverage")
         ax[1].plot([e[0] for e in ev], [100 * e[1]["system_agreement"] for e in ev], marker="s", label="system agreement")
         ax[1].axhline(100 * r["args"]["target"], ls="--", c="grey", label="target")
-        ax[1].set_ylim(0, 105); ax[1].legend(); ax[1].set_title("held-out evaluation")
+        ax[1].set_ylim(0, 105)
+        ax[1].legend()
+        ax[1].set_title("held-out evaluation")
         ax[2].plot([e[0] for e in ev], [100 * e[1]["system_accuracy_vs_truth"] for e in ev], marker="o", label="system vs truth")
         ax[2].axhline(100 * r["teacher_profile"]["teacher_accuracy_vs_truth"], ls="--", c="grey", label="teacher vs truth")
-        ax[2].legend(); ax[2].set_title("accuracy vs hidden labels (research)")
+        ax[2].legend()
+        ax[2].set_title("accuracy vs hidden labels (research)")
     for a_ in ax:
-        a_.set_xscale("log"); a_.set_xlabel("examples streamed"); a_.grid(alpha=0.3)
-    fig.tight_layout(); fig.savefig(out / "curves.png", dpi=120)
+        a_.set_xscale("log")
+        a_.set_xlabel("examples streamed")
+        a_.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out / "curves.png", dpi=120)
 
 
 if __name__ == "__main__":

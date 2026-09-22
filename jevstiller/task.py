@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field, asdict
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,7 @@ class Config:
     drift_min_samples: int = 200
     drift_margin: float = 0.0           # ub(agreement) < target - margin -> hard fallback
     mode: str = "auto"                  # auto | teacher_only | cascade
+    store_text: bool = True             # False: keep only the hash + embedding (no raw text in the store)
     seed: int = 0
     student_epochs: int = 2000          # upper bound; early stopping on a validation slice decides
     label_target: str = "probs"        # train on the teacher's distribution, or 'hard' (argmax)

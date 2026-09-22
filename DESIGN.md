@@ -513,6 +513,7 @@ Everything below is a parameter with a default; nothing is hard-coded.
 | `teacher_rpm` | 1100 | local rate limiter, under Jev's 1,200/min |
 | `teacher_price_per_mtok` | 0.042 | for savings reporting |
 | `mode` | `auto` | or force `teacher_only` \| `shadow` \| `cascade` \| `hedge` |
+| `store_text` | true | false keeps only the text hash + embedding in the store |
 | `device` | `auto` | `cpu` \| `cuda` \| ... |
 
 ---

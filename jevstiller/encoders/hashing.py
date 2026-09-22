@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -34,7 +34,7 @@ class HashEncoder:
             toks = _TOKEN.findall(t.lower())
             feats = list(toks)
             if self.bigrams:
-                feats += [a + "_" + b for a, b in zip(toks, toks[1:])]
+                feats += [a + "_" + b for a, b in zip(toks, toks[1:], strict=False)]
             for f in feats:
                 j, sgn = self._slot(f)
                 X[i, j] += sgn

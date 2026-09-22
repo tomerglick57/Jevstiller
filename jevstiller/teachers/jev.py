@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Sequence
 
 from ..task import Task
 from . import TeacherOutput
@@ -36,7 +36,7 @@ class JevTeacher:
                  concurrency: int = 8, price_per_mtok: float = 0.042, question_id: str = "label",
                  max_retries: int = 5):
         try:
-            from typesafe_sdk import TypeSafeClient, RetryPolicy  # type: ignore
+            from typesafe_sdk import RetryPolicy, TypeSafeClient  # type: ignore
         except ImportError as e:  # pragma: no cover
             raise ImportError("pip install 'jevstiller[jev]' to use JevTeacher") from e
         self.model = model

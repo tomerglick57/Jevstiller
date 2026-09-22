@@ -1,6 +1,5 @@
-import json
 
-from jevstiller import Task, SyntheticWorld, SyntheticTeacher
+from jevstiller import SyntheticTeacher, SyntheticWorld, Task
 from jevstiller.teachers import CachedTeacher, ReplayTeacher
 
 

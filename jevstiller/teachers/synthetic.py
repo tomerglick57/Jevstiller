@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 import random
-from typing import Sequence
+from collections.abc import Sequence
 
 from ..task import Task
 from . import TeacherOutput, peakedness
