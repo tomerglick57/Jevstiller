@@ -145,32 +145,45 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 
 - [x] **P4.1** **Key verification before local answers.** Without it, anyone reaching the proxy with a made-up key would get student answers without ever touching Jev. Keep a cache `hash(key) → verified_at`. An unknown key's first request is always forwarded, and a 2xx marks it verified. A 401/403 from upstream (including on audit traffic) evicts it immediately. Re-verify after a TTL.
 - [x] **P4.2** Never persist or log raw keys. Salted hash only (salt per deployment). Redact `Authorization` in all logs and errors (the SDK's `SECRET_HEADERS` list is a good reference).
-- [~] **P4.3** Tenancy modes: `shared` (default: one tenant per deployment) and `per_key`. Plus an optional mapping file `key-hash → tenant` for grouping. The tenant is part of `task_key`, and no query crosses tenants.
-  *Status:* `shared` / `per_key` are done (`ProxySettings.tenancy`, `--tenancy`). The key-hash → tenant mapping file isn't done yet.
-- [ ] **P4.4** Optional proxy-level auth (e.g. an extra header or mTLS) for deployments that want to restrict who may use the proxy at all.
-- [ ] **P4.5** Admin API auth: a separate admin token. The admin API is off unless configured.
-- [ ] **P4.6** Data retention. `store_text` per deployment/task (off keeps only hash + embedding). Retention TTL for raw text. `DELETE` of a task or tenant (store + versions). Document what is stored and where.
-- [ ] **P4.7** TLS: document running behind a reverse proxy, and optionally built-in TLS (cert/key paths). Callers need a trusted cert if they use `https://`.
-- [ ] **P4.8** Run the `security-audit` pass before the first release (request smuggling via pass-through, header injection, path traversal in task names/export, pickle-free model loading — `np.load` must stay `allow_pickle=False`).
+- [x] **P4.3** Tenancy modes: `shared` (default: one tenant per deployment) and `per_key`. Plus an optional mapping file `key-hash → tenant` for grouping. The tenant is part of `task_key`, and no query crosses tenants.
+  *Result:* `shared` / `per_key`, plus a tenants map (`tenants` / `tenants_file`, key hashes from `jevstiller key-hash`, validated at startup).
+- [x] **P4.4** Optional proxy-level auth (e.g. an extra header or mTLS) for deployments that want to restrict who may use the proxy at all.
+- [x] **P4.5** Admin API auth: a separate admin token. The admin API is off unless configured.
+- [x] **P4.6** Data retention. `store_text` per deployment/task (off keeps only hash + embedding). Retention TTL for raw text. `DELETE` of a task or tenant (store + versions). Document what is stored and where.
+- [x] **P4.7** TLS: document running behind a reverse proxy, and optionally built-in TLS (cert/key paths). Callers need a trusted cert if they use `https://`.
+- [x] **P4.8** Run the `security-audit` pass before the first release (request smuggling via pass-through, header injection, path traversal in task names/export, pickle-free model loading — `np.load` must stay `allow_pickle=False`).
+  *Result:* security audit run 1 (2026-09-24) against `65fe64b`. It ran reconnaissance, 4 hunters, adversarial validation, and per-finding independent verification. It found 12 confirmed findings (4 Medium, 6 Low, 2 Informational), all fixed in `1f29f42` with regression tests (`tests/test_audit_fixes.py`). Summary and open hardening items: docs/security.md. The admin API, metrics and settings code came after the audit; run it again to cover them.
 
 ## Phase 5 — Operations
 
-- [ ] **P5.1** Config: one YAML file + env overrides (`JEVSTILLER_*`). Covers per-task `target_agreement` defaults and overrides by `task_key` or by question name, encoder tier, limits, tenancy, retention. Validated on start.
-- [ ] **P5.2** `target_agreement` per task without code changes. Default from config, override via admin API. Callers can't pass it through the Jev API. Optionally honour a request header `x-jevstiller-target-agreement` (ignored by Jev).
-- [ ] **P5.3** Health: `/healthz` (process up), `/readyz` (encoder loaded, store writable, upstream reachable).
-- [ ] **P5.4** Prometheus `/metrics`: requests by source/reason/task, latency histograms (local vs upstream), Jev calls avoided and $ avoided, audit agreement and its bound per task, fallback events, training queue depth and durations, loaded-task count, memory.
-- [ ] **P5.5** Structured JSON logs, one line per request (task, source, reason, latencies, request IDs). No text or keys unless debug is explicitly enabled.
-- [ ] **P5.6** Admin API + CLI (`jevstiller tasks|status|versions|promote|rollback|mode|train|delete|export`), covering DESIGN.md §13's HTTP list under a separate prefix (e.g. `/jevstiller/v1/...`) so it never collides with Jev paths.
+- [x] **P5.1** Config: one YAML file + env overrides (`JEVSTILLER_*`). Covers per-task `target_agreement` defaults and overrides by `task_key` or by question name, encoder tier, limits, tenancy, retention. Validated on start.
+- [x] **P5.2** `target_agreement` per task without code changes. Default from config, override via admin API. Callers can't pass it through the Jev API. Optionally honour a request header `x-jevstiller-target-agreement` (ignored by Jev).
+- [x] **P5.3** Health: `/healthz` (process up), `/readyz` (encoder loaded, store writable, upstream reachable).
+- [x] **P5.4** Prometheus `/metrics`: requests by source/reason/task, latency histograms (local vs upstream), Jev calls avoided and $ avoided, audit agreement and its bound per task, fallback events, training queue depth and durations, loaded-task count, memory.
+- [x] **P5.5** Structured JSON logs, one line per request (task, source, reason, latencies, request IDs). No text or keys unless debug is explicitly enabled.
+- [x] **P5.6** Admin API + CLI (`jevstiller tasks|status|versions|promote|rollback|mode|train|delete|export`), covering DESIGN.md §13's HTTP list under a separate prefix (e.g. `/jevstiller/v1/...`) so it never collides with Jev paths.
 - [ ] **P5.7** Minimal read-only status page (HTML) served by the proxy: tasks, share served locally, agreement vs target, events. Optional, after metrics.
-- [ ] **P5.8** Docker images: `jevstiller:cpu` (ONNX Runtime) and `jevstiller:gpu` (CUDA). Encoder weights baked in or downloaded on first start into a volume. Run as non-root. `docker-compose.yml` example with a data volume.
-- [ ] **P5.9** Graceful shutdown (drain in-flight, flush the store, finish or abandon training cleanly) and startup recovery (reload registry, resume shadows).
-- [ ] **P5.10** Backup/restore doc and command: what directory to snapshot, and a consistent SQLite backup.
-- [ ] **P5.11** Kubernetes: Helm chart or plain manifests, single replica + PVC. Mark multi-replica as unsupported until P2.3's Postgres backend exists.
+- [x] **P5.8** Docker images: `jevstiller:cpu` (ONNX Runtime) and `jevstiller:gpu` (CUDA). Encoder weights baked in or downloaded on first start into a volume. Run as non-root. `docker-compose.yml` example with a data volume.
+- [x] **P5.9** Graceful shutdown (drain in-flight, flush the store, finish or abandon training cleanly) and startup recovery (reload registry, resume shadows).
+- [x] **P5.10** Backup/restore doc and command: what directory to snapshot, and a consistent SQLite backup.
+- [x] **P5.11** Kubernetes: Helm chart or plain manifests, single replica + PVC. Mark multi-replica as unsupported until P2.3's Postgres backend exists.
+  *Phase 5 result:*
+  - Settings are a TOML file, `JEVSTILLER_*` env vars and flags (`jevstiller/settings.py`, strict validation, secrets from files, `jevstiller config`).
+  - Per-task target and mode: `[tasks]` in the file, or the admin API, persisted in `task.json`.
+  - `/healthz` and `/readyz` (manager, data dir, encoder).
+  - Prometheus `/metrics`, gated by the admin token.
+  - JSON access logs.
+  - Admin API `/jevstiller/v1/*` with `jevstiller admin`.
+  - Docker image (non-root, bge-small baked in, runs offline, read-only root, capabilities dropped: tested).
+  - `docker-compose.yml`, and a Kubernetes manifest (1 replica, Recreate, probes, security context).
+  - Graceful shutdown closes the upstream client, the manager and the training pool, and a restart resumes shadows and pending state.
+  - `jevstiller backup` / `restore` (online-consistent, tested while writing).
+  - Deferred: P5.7 (status page).
 
 ## Phase 6 — Testing
 
 - [x] **P6.1** Proxy contract tests with the **real `typesafe-sdk`** (sync + async) against the proxy, as in the 2026-09-24 check. Cover local answers, forwarded answers, 401/422/429/5xx pass-through, `request_id` present, multi-question requests, object `state`, non-Choice questions. Run in CI against the pinned SDK and the latest SDK.
-- [ ] **P6.2** Golden fixtures from P0.3 replayed through the proxy. The response bodies must parse identically to direct Jev.
+- [x] **P6.2** Golden fixtures from P0.3 replayed through the proxy. The response bodies must parse identically to direct Jev.
 - [ ] **P6.3** Concurrency tests: many tasks × many threads/async callers. The audit rate stays at its target ±CI. No lost or double-written rows.
 - [ ] **P6.4** Load test (locust or k6): throughput and p50/p99 for local-only, forward-only, and mixed traffic. Targets go in the README.
 - [ ] **P6.5** Chaos: Jev down, Jev slow, 429 storms, 401 on a previously verified key, disk full, kill -9 during training/promote. Each has an expected behaviour written down and tested.
@@ -179,10 +192,14 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 
 ## Phase 7 — Docs and release
 
-- [ ] **P7.1** README rewrite around the proxy: "set one env var". Quickstart with `docker run` + `export TYPESAFE_BASE_URL=...`. The library API moves to a secondary section.
-- [ ] **P7.2** `docs/deploy.md`: install, config reference, TLS, sizing (CPU vs GPU, memory per task), backup, upgrade.
-- [ ] **P7.3** `docs/operations.md` runbook: reading status, what fallback means, rollback, deleting data, common alerts.
-- [ ] **P7.4** `docs/security.md` + update `SECURITY.md`: key handling, what is stored, tenancy guarantees, threat model.
+- [x] **P7.1** README rewrite around the proxy: "set one env var". Quickstart with `docker run` + `export TYPESAFE_BASE_URL=...`. The library API moves to a secondary section.
+  *Result:* README leads with the proxy and a Docker quickstart.
+- [x] **P7.2** `docs/deploy.md`: install, config reference, TLS, sizing (CPU vs GPU, memory per task), backup, upgrade.
+  *Result:* docs/deploy.md: Docker, compose, Kubernetes, pip, configuration decisions, TLS and reverse proxies, sizing, upgrade.
+- [x] **P7.3** `docs/operations.md` runbook: reading status, what fallback means, rollback, deleting data, common alerts.
+  *Result:* docs/operations.md: health, admin CLI, status reports, metrics and alerts, logs, data, common situations.
+- [x] **P7.4** `docs/security.md` + update `SECURITY.md`: key handling, what is stored, tenancy guarantees, threat model.
+  *Result:* docs/security.md: threat model, what is stored, keys, access controls, audit results; SECURITY.md points to it.
 - [ ] **P7.5** Compatibility statement: supported `typesafe-sdk` versions and Jev API surface; what is forwarded vs served locally; the "agreement ≠ accuracy" note.
 - [ ] **P7.6** Release automation: PyPI trusted publishing, GHCR image publishing on tag, CHANGELOG, versioning policy. Keep DESIGN.md in sync (it still says "HTTP server out of scope").
 - [ ] **P7.7** Public API stability pass on what the hosted repo will import (`Engine`, `TaskManager`, store/validator/metering protocols). Mark everything else private.

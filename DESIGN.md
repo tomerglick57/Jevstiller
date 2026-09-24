@@ -557,7 +557,8 @@ Matching is exact on purpose: Jev reads its criteria literally, so a "similar" q
 `jevstiller serve` (Starlette + uvicorn + httpx, one process) implements Jev's `POST /v1/systemone` and forwards every other path. Behaviour, headers, key handling and errors are specified in [docs/proxy.md](docs/proxy.md). The design decisions:
 
 - **All or nothing per request.** A request is answered entirely locally or entirely by Jev, and Jev's response is returned unchanged. That keeps the proxy exactly as correct as Jev whenever it forwards, and it never has to guess whether Jev answers questions independently. *(roadmap)* Forwarding only the questions the students can't answer.
-- **Keys must be proven.** Local answers only for a key Jev accepted within the TTL; a 401/403 revokes at once. Keys are held as salted hashes in memory only.
+- **Keys must be proven.** A key counts as accepted only after Jev answered a `/v1/systemone` request made with it. Requests with an unaccepted key are forwarded first, and recorded only after Jev's successful answer, so a caller without a working key can't get local answers or create tasks. A 401/403 revokes at once. Keys are held as salted hashes in memory only. (Security audit, 2026-09-24: docs/security.md.)
+- **Bounded work per request.** At most `max_questions` distinct questions are routed; duplicate questions are routed once; the state is encoded once per request; the body limit is enforced while streaming.
 - **The requested model is part of the task key**, and the local response reports the concrete model version the student was trained against.
 - **Fail open to Jev.** Any error in the proxy's own logic forwards the request instead.
 - **Split engine API.** `Jevstiller.route()` decides, the proxy makes the upstream call itself (asynchronously), and `complete()` records. `classify_batch` is `route` + teacher + `complete`.
@@ -698,7 +699,12 @@ m.delete(key) ; m.sweep() ; m.close()
 
 ### HTTP: the proxy
 
-Jev's own API: `POST /v1/systemone` (answered locally or forwarded) and every other path (forwarded). Plus `GET /healthz`. See [docs/proxy.md](docs/proxy.md). *(Phase 5)* An admin API under its own prefix: tasks, status, versions, mode, rollback, delete, metrics.
+Jev's own API: `POST /v1/systemone` (answered locally or forwarded) and every other path (forwarded). Served locally, never forwarded:
+- `GET /healthz` and `GET /readyz`;
+- `GET /metrics` (Prometheus);
+- the admin API under `/jevstiller/v1/`: tasks, status, versions, mode, target, train, promote, rollback, delete a task or tenant, stats.
+
+See [docs/proxy.md](docs/proxy.md) and [docs/operations.md](docs/operations.md).
 
 ---
 
@@ -714,8 +720,8 @@ v2's MVP list was built in full, except the `shadow` *mode* (shadow exists as a 
 | Task manager, admission, LRU/memory limits, scheduler, shared batching encoder, OOD cap | done (P2) |
 | Drop-in proxy, key verification, tenancy (shared / per key), contract tests with the real SDK | done (P3, P4.1–P4.2, P6.1) |
 | Live Jev validation | done: see §15.5 (P0) |
-| Security hardening, data retention, admin auth, TLS | Phase 4 |
-| Config file, metrics, logs, admin API, Docker, health/readiness | Phase 5 |
+| Access controls, tenancy map, data retention, TLS; security audit (12 findings fixed) | done (P4) |
+| Config file, metrics, JSON logs, admin API and CLI, Docker/compose/Kubernetes, readiness, backup/restore | done (P5; status page deferred) |
 | `hedge` mode, MLP head, per-class thresholds, class-list changes, multilabel, `noul`/`score` distillation, multiple teachers, Postgres | roadmap (§16) |
 
 ---

@@ -15,7 +15,7 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels ".[${EXTRAS}]"
 FROM python:${PYTHON}-slim
 ARG PRELOAD_ENCODER=small
 RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin jevstiller \
- && mkdir -p /data /models && chown jevstiller:jevstiller /data
+ && mkdir -p /data /models && chown jevstiller:jevstiller /data && chmod 700 /data
 COPY --from=build /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 ENV JEVSTILLER_DATA_DIR=/data \

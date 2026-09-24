@@ -7,7 +7,7 @@ Every knob, where it lives, and its default. There are four layers:
 | Engine | `jevstiller.Config` | one task's loop: routing, training, calibration, drift |
 | Task manager | `jevstiller.TaskManager(...)` | many tasks in one process: loading, admission, memory |
 | Proxy | `jevstiller.server.ProxySettings` | the HTTP proxy: upstream, keys, tenancy |
-| CLI | `jevstiller serve` flags / `JEVSTILLER_*` env vars | builds the three above |
+| Server | `jevstiller serve`: TOML file, `JEVSTILLER_*` env vars, flags | builds the three above |
 
 A task's target is `Task.target_agreement` (default 0.98). The disagreement budget is `β = 1 − target_agreement`.
 
@@ -95,8 +95,12 @@ A task's target is `Task.target_agreement` (default 0.98). The disagreement budg
 | `max_loaded` | `64` | Loaded engines. Idle ones are unloaded least-recently-used. |
 | `max_memory_mb` | `None` | Also unload while the loaded students exceed this (heads + OOD references). |
 | `admission` | `Admission()` | `Admission(min_requests=50, window_s=86400, max_tracked=100_000)`: a question becomes a task only after this many requests in the window. Earlier requests go to the teacher unrecorded (`not_admitted`). |
-| `max_tasks_per_tenant` | `None` | Beyond this, new tasks of that tenant stay pass-through (`tenant_task_limit`). |
+| `max_tasks` | `10000` | Beyond this many tasks, new questions stay pass-through (`task_limit`). |
+| `max_tasks_per_tenant` | `None` | Beyond this, new tasks of that tenant stay pass-through (`tenant_task_limit`). (`jevstiller serve` defaults to 1,000.) |
 | `idle_ttl_s` | `None` | Delete tasks unused this long (off by default). |
+| `text_retention_s` | `None` | Securely blank stored request text older than this, in every task, about hourly. |
+| `hash_key` | `None` | Key for the per-row text hash (HMAC); `jevstiller serve` passes the deployment salt. |
+| `task_overrides` | `None` | `{task key: {"target_agreement": x, "mode": m}}` applied at startup; `set_target()` / `set_mode()` change them at runtime (persisted in `task.json`). |
 | `train_executor` | `None` | Shared executor for training jobs. `TrainScheduler(workers=2)` is fair across tenants and prioritises by teacher-call rate. `None` trains in each task's maintenance thread. |
 | `janitor_interval_s` | `5.0` | How often the janitor unloads, persists last-seen times, and cleans up. |
 | `blas_threads` | `1` | Caps BLAS threads process-wide for serving (2.4× throughput at 50 tasks). `None` leaves it alone. |
@@ -107,36 +111,100 @@ A task's target is `Task.target_agreement` (default 0.98). The disagreement budg
 
 ---
 
-## Proxy: `ProxySettings`
+## `jevstiller serve` settings
 
-| Field | Default | Meaning |
-|---|---|---|
-| `upstream` | `https://api.typesafe.ai` | Where forwarded requests go. |
-| `upstream_timeout_s` | `9.0` | Kept under the SDK's default 10 s client timeout. A timeout returns 504. |
-| `max_upstream_inflight` | `256` | Concurrent forwarded requests. Beyond this: 503 with `retry-after: 1` (the SDK retries). |
-| `tenancy` | `"shared"` | `shared`: one tenant, so every key shares trained tasks. `per_key`: tasks are separate per API key. |
-| `key_ttl_s` | `3600` | A key must have been accepted by Jev within this long before the proxy answers locally for it. |
-| `price_per_mtok` | `0.042` | For cost accounting of forwarded calls. |
+One source, three layers. Precedence, lowest to highest: built-in defaults < a TOML file (`--config`, or `JEVSTILLER_CONFIG`) < `JEVSTILLER_<NAME>` environment variables < command-line flags. Unknown keys and invalid values stop startup with an error. `jevstiller config` prints the effective settings (secrets redacted). A complete example is `deploy/jevstiller.toml`.
 
----
+```toml
+[server]
+port = 8080
+data_dir = "/data"
+log_format = "json"
+admin_token_file = "/run/secrets/admin-token"
 
-## CLI: `jevstiller serve`
+[proxy]
+tenancy = "per_key"
+allow_networks = ["10.0.0.0/8"]
 
-| Flag | Env var | Default |
-|---|---|---|
-| `--host` | `JEVSTILLER_HOST` | `0.0.0.0` |
-| `--port` | `JEVSTILLER_PORT` | `8080` |
-| `--data-dir` | `JEVSTILLER_DATA_DIR` | `./jevstiller-data` |
-| `--upstream` | `JEVSTILLER_UPSTREAM` | `https://api.typesafe.ai` |
-| `--upstream-timeout` | | `9.0` |
-| `--encoder` | `JEVSTILLER_ENCODER` | `small` (`small`/`base`/`large`, `hash`, `onnx:<repo>`, `torch:<model>`) |
-| `--backend` / `--device` | | `auto` |
-| `--target-agreement` | `JEVSTILLER_TARGET_AGREEMENT` | `0.98` |
-| `--tenancy` | `JEVSTILLER_TENANCY` | `shared` |
-| `--admit-after` | | `50` |
-| `--max-loaded` | | `64` |
-| `--max-tasks-per-tenant` | | none |
-| `--train-workers` | | `2` |
-| `--log-level` | `JEVSTILLER_LOG_LEVEL` | `info` |
+[manager]
+target_agreement = 0.98
+text_retention_days = 30
 
-The CLI uses `Config()` defaults for the engine; a config file is planned (DEPLOYMENT_PLAN P5.1).
+[encoder]
+spec = "small"
+
+[engine]                 # any `Config` field from the table above
+audit_rate = 0.03
+
+[tasks."<task key>"]     # per-task overrides (also settable at runtime via the admin API)
+target_agreement = 0.99
+mode = "teacher_only"
+```
+
+Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `JEVSTILLER_ADMIN_TOKEN_FILE`, `JEVSTILLER_STORE_TEXT=false`, …
+- Booleans accept `1/0/true/false/yes/no/on/off`.
+- Lists are comma-separated.
+- `none` unsets an optional value.
+- `[engine]`, `[tasks]` and `tenants` are file-only.
+
+### [server]
+
+| Key | Default | Flag | Meaning |
+|---|---|---|---|
+| `host` | `0.0.0.0` | `--host` | Listen address. |
+| `port` | `8080` | `--port` | |
+| `data_dir` | `./jevstiller-data` | `--data-dir` | Tasks, samples, models and `key-salt`. Created 0700; the server runs with umask 0077. |
+| `log_level` | `info` | `--log-level` | |
+| `log_format` | `text` | `--log-format` | `json`: one JSON object per line, including a per-request access log (`logger: jevstiller.access`) with source, reasons, status, latency, request id and task keys, and never keys or text. |
+| `ssl_certfile`, `ssl_keyfile` | none | `--ssl-certfile`, `--ssl-keyfile` | Built-in TLS (both or neither). |
+| `admin_token` / `admin_token_file` | none | `--admin-token-file` | Enables the admin API (`/jevstiller/v1/*`) and protects `/metrics`. Prefer the file or the env var: flags show in the process list. |
+| `metrics_public` | `false` | | Serve `/metrics` without the admin token. |
+
+### [proxy]
+
+| Key | Default | Flag | Meaning |
+|---|---|---|---|
+| `upstream` | `https://api.typesafe.ai` | `--upstream` | Where forwarded requests go. |
+| `upstream_timeout_s` | `9.0` | `--upstream-timeout` | Under the SDK's 10 s client timeout. Timeout → 504. |
+| `max_upstream_inflight` | `256` | | Concurrent forwarded requests; beyond → 503 `retry-after: 1`. |
+| `tenancy` | `shared` | `--tenancy` | `shared`: one tenant, every key shares tasks. `per_key`: tasks separate per API key. |
+| `tenants` / `tenants_file` | `{}` | `--tenants-file` | Key hash → tenant name (hashes from `jevstiller key-hash`; must be 32 lowercase hex). Unlisted keys follow `tenancy`. |
+| `key_ttl_s` | `3600` | | How long a key stays accepted after Jev last answered a systemone request with it. |
+| `access_token` / `access_token_file` | none | `--access-token`, `--access-token-file` | Callers must send `x-jevstiller-token`. Never forwarded. |
+| `allow_networks` | `[]` (all) | `--allow-network` (repeat) | Client CIDRs allowed to use the proxy. |
+| `trust_forwarded_for` | `[]` | `--trust-forwarded-for` (repeat) | Proxies whose `X-Forwarded-For` is trusted for `allow_networks`. Empty: the TCP peer is used. |
+| `max_body_mb` | `4.0` | `--max-body-mb` | Larger bodies get 413 (declared or streamed). |
+| `max_questions` | `32` | `--max-questions` | Distinct choice questions routed per request; more → forwarded unrouted. |
+| `price_per_mtok` | `0.042` | | For cost accounting. |
+
+### [manager]
+
+| Key | Default | Flag | Meaning |
+|---|---|---|---|
+| `target_agreement` | `0.98` | `--target-agreement` | For new tasks. |
+| `max_loaded` | `64` | `--max-loaded` | Tasks kept in memory (LRU). |
+| `max_memory_mb` | none | | Also unload while loaded students exceed this. |
+| `admit_after` / `admit_window_s` | `50` / `86400` | `--admit-after` | Requests (one per distinct question per request) within the window before a question becomes a task. |
+| `max_tasks` | `10000` | `--max-tasks` | Global task cap (`task_limit`). |
+| `max_tasks_per_tenant` | `1000` | `--max-tasks-per-tenant` | (`tenant_task_limit`) |
+| `idle_ttl_days` | none | | Delete tasks unused this long. |
+| `text_retention_days` | none | `--text-retention-days` | Securely blank stored request text older than this (hourly). |
+| `store_text` | `true` | `--no-store-text` | `false`: keep only an HMAC and the embedding of each request. |
+| `train_workers` | `2` | `--train-workers` | Training processes (low priority). Budget ≈ workers × `Config.train_threads` cores. |
+| `blas_threads` | `1` | | BLAS threads for serving (process-wide). |
+
+### [encoder]
+
+| Key | Default | Flag | Meaning |
+|---|---|---|---|
+| `spec` | `small` | `--encoder` | `small` / `base` / `large` (bge, ONNX or torch), `hash`, `onnx:<repo>`, `torch:<model>`. The Docker image bakes in `small`. |
+| `backend` | `auto` | `--backend` | `onnx` / `torch` |
+| `device` | `auto` | `--device` | `cpu` / `cuda` |
+
+### [engine] and [tasks]
+
+`[engine]` takes any `Config` field (first section of this page) and applies to every task. `[tasks."<key>"]` sets `target_agreement` and/or `mode` for one task at startup. Changes made through the admin API are saved in the task's `task.json`, and survive restarts.
+
+## Library: `ProxySettings` and `create_app`
+
+For embedding the proxy in your own ASGI stack: `jevstiller.server.create_app(manager, ProxySettings(...), KeyRegistry(salt, ttl), admin_token=..., metrics_public=..., ready=..., closers=[...])`. `ProxySettings` has the `[proxy]` fields above, with `tenant_map` in place of `tenants` and `max_body_bytes` in place of `max_body_mb`.

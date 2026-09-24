@@ -1,19 +1,11 @@
 # Security
 
-## What Jevstiller stores
+The threat model, what Jevstiller stores, how API keys are handled, how to restrict access to the proxy, and the results of the 2026-09-24 security audit are in [docs/security.md](docs/security.md).
 
-Every request it sees is stored in a local SQLite file per task, under `data_dir` (`<data_dir>/tasks/<key>/samples.sqlite` for the proxy). A row holds the text (or canonical JSON) of the state, its embedding, the teacher's answer and the student's. Treat that directory like a database of your traffic: restrict access and back it up deliberately. `Config(store_text=False)` keeps only a hash and the embedding. Retention controls and deletion are in progress (DEPLOYMENT_PLAN P4.6).
-
-## API keys
-
-- **Library:** the Jev key is read from `TYPESAFE_API_KEY` (or a `.env` you keep out of version control). It is never written to the store or to logs.
-- **Proxy:** callers use their own keys. The proxy forwards each caller's `Authorization` header to Jev and keeps only a salted SHA-256 of the key, in memory. The salt is a per-deployment secret at `<data_dir>/key-salt`, created with mode 0600. Keys never reach disk or logs.
-- The proxy answers locally only for a key Jev has accepted within the last `key_ttl_s` (1 h). A 401/403 from Jev revokes that at once. So the proxy can't be used to get answers with a key Jev would reject.
-- With `tenancy="shared"` (the default), every key's traffic trains shared tasks, which is intended when all callers belong to one organisation. Use `per_key` when callers must not share data or models.
-
-## Network
-
-The proxy has no authentication of its own yet (DEPLOYMENT_PLAN P4.4): anyone who can reach it can use it with a key Jev accepts. Run it on a private network, or behind a reverse proxy that enforces access and TLS (P4.7).
+In short:
+- Jevstiller stores your traffic (request text, embeddings, Jev's answers) under `data_dir`. Treat that directory like a database of your traffic. Use `store_text = false` or `text_retention_days` if text must not be kept.
+- API keys are never stored or logged; callers keep their own keys, and the proxy holds only salted hashes in memory.
+- By default anyone who can reach the proxy can use it with a Jev key that Jev accepts. Restrict it with `allow_networks`, an `access_token`, TLS, or a private network.
 
 ## Reporting a vulnerability
 

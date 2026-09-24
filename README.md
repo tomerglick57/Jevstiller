@@ -45,15 +45,21 @@ Python 3.10+. CPU works out of the box; a GPU only speeds up the encoder.
 Run Jevstiller next to your services and point the Jev SDK at it:
 
 ```bash
-pip install "jevstiller[server,onnx]"
-jevstiller serve --data-dir ./jevstiller-data --port 8080
+docker build -t jevstiller . && docker run -d -p 8080:8080 -v jevstiller-data:/data jevstiller
+# or: pip install "jevstiller[server,onnx]" && jevstiller serve --config deploy/jevstiller.toml
 ```
 
 ```bash
 export TYPESAFE_BASE_URL=http://jevstiller:8080     # in each calling service; nothing else changes
 ```
 
-Services keep their own `TYPESAFE_API_KEY`; Jevstiller forwards it and never stores it. Every `Choice` question becomes a task, keyed by its exact instructions, criteria and model, so services asking the same question share one local model. Requests are forwarded to Jev unchanged, and Jev's responses returned unchanged, until a task's student is trained and has passed its checks. From then on the proxy answers what it is sure about in Jev's exact response format (`x-jevstiller-source: local` tells you which). Non-`Choice` questions, other endpoints, unknown keys and anything it does not understand go straight to Jev. Status: in progress, see [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
+Services keep their own `TYPESAFE_API_KEY`; Jevstiller forwards it and never stores it.
+- **Tasks:** every `Choice` question becomes a task, keyed by its exact instructions, criteria and model, so services asking the same question share one local model.
+- **Until a student is ready:** requests are forwarded to Jev unchanged, and Jev's responses returned unchanged, until a task's student is trained and has passed its checks.
+- **After that:** the proxy answers what it is sure about in Jev's exact response format (`x-jevstiller-source: local` tells you which), but only for keys Jev has accepted.
+- **Always forwarded:** non-`Choice` questions, other endpoints, and anything it does not understand.
+
+Operations: a TOML config, an admin API and CLI (`jevstiller admin ...`), Prometheus `/metrics`, `/readyz`, JSON logs, `jevstiller backup`, and a Docker image and Kubernetes manifest. Docs: [deploy](docs/deploy.md), [operations](docs/operations.md), [the proxy](docs/proxy.md), [configuration](docs/configuration.md), [security](docs/security.md).
 
 ## Quickstart (library)
 
@@ -124,9 +130,16 @@ The full reasoning — including the five loop bugs the first real replay found 
 
 ## Status
 
-Alpha. Validated against live Jev (above). The drop-in proxy works end to end with the unmodified TypeSafe SDK; hardening and operations (config file, metrics, admin API, Docker) are in progress. See [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) for what is done and what is next.
+Alpha. Validated against live Jev (above).
+- **Proxy:** the drop-in proxy works end to end with the unmodified TypeSafe SDK.
+- **Security:** it passed a security audit (12 findings, all fixed: [docs/security.md](docs/security.md)).
+- **Deployment:** it runs as a hardened container.
 
-Documentation: [DESIGN.md](DESIGN.md) (why it works the way it does), [docs/proxy.md](docs/proxy.md), [docs/configuration.md](docs/configuration.md), [docs/benchmarks.md](docs/benchmarks.md), [SECURITY.md](SECURITY.md).
+See [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) for what is done and what is next.
+
+Documentation:
+- [DESIGN.md](DESIGN.md): why it works the way it does.
+- [docs/deploy.md](docs/deploy.md), [docs/operations.md](docs/operations.md), [docs/proxy.md](docs/proxy.md), [docs/configuration.md](docs/configuration.md), [docs/benchmarks.md](docs/benchmarks.md), [docs/security.md](docs/security.md).
 
 Not for: tasks with changing class lists (retrain from scratch), non-text input, or volumes too low to ever collect a few thousand examples.
 
