@@ -1,0 +1,17 @@
+/* Accent: a muted teal instead of Starlight's default purple. */
+:root {
+	--sl-color-accent-low: #0c2b2b;
+	--sl-color-accent: #1f8a86;
+	--sl-color-accent-high: #b6ebe7;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #cdeeec;
+	--sl-color-accent: #137572;
+	--sl-color-accent-high: #0a3634;
+}
+
+/* Keep ASCII diagrams from wrapping on narrow screens; let them scroll instead. */
+.sl-markdown-content pre {
+	overflow-x: auto;
+}
