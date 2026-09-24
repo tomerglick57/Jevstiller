@@ -15,7 +15,7 @@ your app ──► Jev                     your app ──► Jevstiller ──�
 
 Jev is fast, cheap and typed. It is also a ceiling: **1,200 requests per minute** per key, ~350 ms per answer, hosted only. Jevstiller is for the workload that outgrows that — bursts, backlogs, latency budgets in milliseconds, boxes with no egress, or simply not wanting every classification to depend on one external API.
 
-In a replay of Banking77 (77 intents), the local model took **71% of traffic at 99.5% agreement** with the teacher and ran at ~2,000 rows/s on one GPU — a hundred times Jev's rate limit.¹
+Against live Jev, in a replay of Banking77 (77 customer-support intents), the local model answered **70.6% of held-out messages at 99.4% agreement with Jev** (target 98%), from about 5,000 messages of traffic on, and kept Jev's accuracy (78.7% vs Jev's 78.55% on the dataset's labels). On CPU the student path ran at ~130 messages/s, 6.5× Jev's rate limit. On a GPU it runs at ~2,000/s.¹
 
 ## The contract
 
@@ -124,7 +124,9 @@ The full reasoning — including the five loop bugs the first real replay found 
 
 ## Status
 
-Alpha (0.1.0). The loop is tested end-to-end (`pytest`, CPU, no network) and validated on replays with a perfect "oracle" teacher. **The benchmark against live Jev is pending**; treat the numbers above as an upper bound until then. `Jevstiller` is thread-safe: teacher calls from concurrent callers overlap, samples are written behind the request, and training runs in a background thread (or a process pool via `train_executor=`), never on the request path. The drop-in Jev proxy is in progress — see [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
+Alpha. Validated against live Jev (above). The drop-in proxy works end to end with the unmodified TypeSafe SDK; hardening and operations (config file, metrics, admin API, Docker) are in progress. See [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) for what is done and what is next.
+
+Documentation: [DESIGN.md](DESIGN.md) (why it works the way it does), [docs/proxy.md](docs/proxy.md), [docs/configuration.md](docs/configuration.md), [docs/benchmarks.md](docs/benchmarks.md), [SECURITY.md](SECURITY.md).
 
 Not for: tasks with changing class lists (retrain from scratch), non-text input, or volumes too low to ever collect a few thousand examples.
 
@@ -146,4 +148,4 @@ Issues and PRs welcome — especially "I ran it on task X and here's the status 
 MIT. Jevstiller is an independent project and is not affiliated with, endorsed by, or supported by TypeSafe. "Jev" is their model; this tool only talks to its public API.
 
 ---
-¹ Oracle-teacher dry run on 11,083 replayed messages with 2,000 held out; `bge-base` on an RTX 3090. Details and caveats in `experiments/README.md`.
+¹ Live run 2026-09-24: 11,083 replayed messages with 2,000 held out, `bge-small` on CPU; the GPU figure is from an oracle-teacher run with `bge-base` on an RTX 3090. Every number, with its command: [docs/benchmarks.md](docs/benchmarks.md).

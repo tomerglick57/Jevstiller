@@ -57,6 +57,7 @@ include = ["jevstiller", "tests", "README.md", "LICENSE", "DESIGN.md", "CHANGELO
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["live: calls the real Jev API (run with JEVSTILLER_LIVE=1 and TYPESAFE_API_KEY set)"]
 
 [tool.ruff]
 line-length = 120

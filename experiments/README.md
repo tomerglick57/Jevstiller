@@ -8,7 +8,12 @@ Replays a labelled dataset through Jevstiller with the labels hidden (DESIGN.md 
 python3 experiments/run.py --dataset banking77 --teacher jev --encoder base        # the real thing (needs TYPESAFE_API_KEY in .env)
 python3 experiments/run.py --dataset banking77 --teacher oracle --encoder base     # dry run: hidden labels as a perfect teacher
 python3 experiments/run.py --dataset synthetic --teacher synthetic --encoder hash  # no downloads, no GPU, ~1 min
+python3 experiments/jev_profile.py                                                 # live Jev latency + wire fixtures
 ```
+
+More options: `--backend onnx --device cpu` (CPU-only), `--ood-max-ref N` (size of the OOD reference, default 5,000),
+`--limit`, `--target`, `--audit`, `--min-*`. Replays train `inline` so results don't depend on thread timing.
+All results with their dates are collected in [docs/benchmarks.md](../docs/benchmarks.md).
 
 Arms: `--encoder small|base|large|hash`, `--label-target probs|hard`, `--target 0.98`, `--backend torch|onnx`, `--device cpu|cuda`.
 
@@ -29,4 +34,4 @@ trickle; policies fitted exactly at the budget failing the re-test by constructi
 deferred (hard) slice; a fixed L2 that hid the encoder differences; exact importance weights collapsing the
 effective sample size.
 
-The real run against Jev is pending API credits.
+The live run against Jev (2026-09-24) is in [docs/benchmarks.md](../docs/benchmarks.md#banking77-against-live-jev) and DESIGN.md §15.5.

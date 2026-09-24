@@ -1,0 +1,84 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "json": {
+      "state": {
+        "subject": "Refund",
+        "body": "My invoice shows the wrong VAT number"
+      },
+      "model": "jev-latest",
+      "questions": {
+        "label": {
+          "type": "choice",
+          "instructions": "Which team should handle this customer message?",
+          "criteria": {
+            "billing": "Charges, invoices, refunds, payment methods",
+            "technical": "Bugs, errors, integrations, things not working",
+            "cancellation": "Wants to cancel, downgrade, or close the account",
+            "sales": "Pre-sales questions, plan comparison, quotes",
+            "other": "Anything that does not fit the categories above"
+          }
+        },
+        "urgent": {
+          "type": "noul",
+          "instructions": "Does the customer need an answer today?"
+        },
+        "tone": {
+          "type": "score",
+          "instructions": "How upset is the customer?",
+          "criteria": [
+            "calm",
+            "annoyed",
+            "angry"
+          ]
+        }
+      }
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0d378af6d7d9495e8cfa1ea21703c"
+  },
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "label": {
+        "type": "choice",
+        "choice": "billing",
+        "confidence": 1.0,
+        "probabilities": {
+          "sales": 0.0,
+          "technical": 0.0,
+          "cancellation": 0.0,
+          "billing": 1.0,
+          "other": 0.0
+        }
+      },
+      "urgent": {
+        "type": "noul",
+        "noul": 0.31
+      },
+      "tone": {
+        "type": "score",
+        "score": 0.06,
+        "confidence": 0.9,
+        "legend": {
+          "0": "calm",
+          "1": "annoyed",
+          "2": "angry"
+        },
+        "probabilities": {
+          "0": 0.94,
+          "1": 0.06,
+          "2": 0.0
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 468,
+      "output_tokens": 85
+    }
+  }
+}

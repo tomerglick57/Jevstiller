@@ -1,6 +1,10 @@
 # Jevstiller — Design
 
-> Status: draft v2 (2026-09-21). Supersedes the initial concept note.
+> Status: v3 (2026-09-24). v2 was the pre-implementation design. v3 records what was built, what the live
+> measurements changed, and what is still roadmap: §14 lists implementation status, and anything not built is
+> marked *(roadmap)* where it is described. The operational plan is in [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md),
+> the proxy in [docs/proxy.md](docs/proxy.md), every setting in [docs/configuration.md](docs/configuration.md),
+> and every measurement in [docs/benchmarks.md](docs/benchmarks.md).
 > Jevstiller = **Jev** + di**stiller**. Jev is the default teacher; the design is teacher-agnostic.
 
 ---
@@ -20,6 +24,11 @@ The closest analogy is a cache:
 | exact | **approximate, with a bounded disagreement rate** |
 
 The last row is the whole design problem. Everything below exists to make the bound real, measurable, and visible.
+
+### Two ways to run it
+
+- **Drop-in proxy** (`jevstiller serve`): an HTTP server that speaks Jev's API. Services set `TYPESAFE_BASE_URL` to it and change nothing else. They keep their own Jev keys, which the proxy forwards and never stores. Every `Choice` question in the traffic becomes a task automatically, and one process serves many tasks for many services (§7.14–§7.15, [docs/proxy.md](docs/proxy.md)). This is the primary deployment: self-hosted, one container.
+- **Library** (`Jevstiller(task, teacher, ...)`): the same loop embedded in a Python process, for batch jobs, workers and notebooks.
 
 ### The teacher
 
@@ -51,8 +60,8 @@ Be precise about what Jev costs, because it is not what the original concept ass
 
 | | Jev (`jev-1.13.0`, Sept 2026) | local student |
 |---|---|---|
-| price | $0.042 / M input tokens, output free → a 60-token message ≈ $0.0000025; **1M messages ≈ $3** | ~0 |
-| latency | 70–500 ms end-to-end; ~350 ms median measured independently | single-digit ms on CPU |
+| price | $0.042 / M input tokens, output free. Input tokens include the instructions and every criterion, not just the message: a short support message with a 5-class question measured **400 input tokens** (2026-09-24) → ≈ $0.000017; **1M messages ≈ $17**. Long criteria lists (77 classes) cost more. | ~0 |
+| latency | measured 2026-09-24: **p50 ~290 ms, p90 ~330 ms, p99 ~760 ms**, flat from 1 to 16 concurrent requests | single-digit ms on CPU |
 | throughput | **1,200 requests/min (20/s), 250k tokens/s**, one state per request; limits "adjust dynamically" | thousands/s on one CPU; more on GPU |
 | availability | hosted only; early access; `529 overloaded` exists; no self-hosting | runs wherever the process runs |
 
@@ -61,7 +70,7 @@ So the honest ranking of what Jevstiller buys you:
 1. **Throughput beyond the rate limit.** 20 req/s is a hard ceiling of ~1.7M classifications/day per key. A backlog of 100k messages takes 83 minutes through Jev; the student does it in under a minute. Any bursty or high-volume workload hits this wall long before it hits a cost wall.
 2. **Latency.** ~350 ms → ~5 ms p50 for the requests the student handles.
 3. **Availability and independence.** Keeps answering during Jev outages, 429/529 storms, and network egress restrictions (the audit/deferral stream queues and drains later). Hedges an early-access API whose limits and pricing are explicitly provisional.
-4. **Cost** — last. At current prices it only matters at very high volume, and TypeSafe says the price "may be subsidized", so it is a hedge rather than a saving.
+4. **Cost** — last. At current prices it only matters at very high volume (it is ~6× what v2 assumed, because the question's criteria are billed on every call), and TypeSafe says the price "may be subsidized", so it is a hedge rather than a saving.
 
 It is worth using when volume is high enough to hit (1) or (2), the class list is stable, and the input distribution changes slowly. The bootstrap costs nothing extra — requests were going to Jev anyway, and every Jev answer (with its probability distribution) is training data. The ongoing Jev cost is the audit channel plus deferrals.
 
@@ -75,7 +84,7 @@ Define a task once. Classes carry descriptions because Jev is a literal reader: 
 
 ```python
 from jevstiller import Task, Jevstiller
-from jevstiller.teachers import JevTeacher
+from jevstiller.teachers.jev import JevTeacher
 
 task = Task(
     name="support_router",
@@ -103,7 +112,9 @@ r.confidence  # 0.96
 r.source      # "teacher" at first, later "student:v3"
 ```
 
-Changing `instructions` or any class description changes the teacher's behaviour, so it bumps `task_version` and starts a new lineage (old samples are kept but marked; the student retrains from the new version's samples only).
+Changing `instructions` or any class description changes the teacher's behaviour, so it bumps `task_version` and starts a new lineage (old samples are kept but marked; the student retrains from the new version's samples only). Instructions and class descriptions may be any JSON value, as in Jev's `criteria`, and the state may be text or a JSON object/array. The version ignores the order of classes and of JSON keys.
+
+Through the proxy there is no `Task` to write: the question in each request *is* the task definition (§7.14).
 
 What the user sees over time (from `js.status()` or the CLI report):
 
@@ -165,9 +176,9 @@ The student's confidence never has to be a *true probability* for this to work. 
                      +---------------------+
                      |       Router        |
                      |  mode: teacher_only |
-                     |        shadow       |
                      |        cascade      |
-                     |        hedge        |
+                     |  (shadow: a stage,  |
+                     |   hedge: roadmap)   |
                      +---------------------+
                        |        |        |
         audit sample   |        |        |  confident
@@ -222,6 +233,21 @@ The student's confidence never has to be a *true probability* for this to work. 
                      retrain     fall back to Jev
 ```
 
+That loop runs once per task. The deployment around it (the proxy, §7.15) runs many of them in one process:
+
+```text
+ service A ─┐                          ┌──────────────── jevstiller serve (one process) ──────────────┐
+ service B ─┼─ TYPESAFE_BASE_URL ────► │ POST /v1/systemone        (everything else: passed through)  │
+ service C ─┘   + their own Jev key    │   key check: salted hash, accepted by Jev within the TTL?    │
+                                       │   each choice question → task key → TaskManager (§7.14)      │
+                                       │      └─ that task's loop: route → student | teacher          │
+                                       │   all local? → answer in Jev's shape                         │
+                                       │   else      → whole request to Jev (caller's key) → record   │
+                                       │ shared: BatchingEncoder · TrainScheduler (process pool)      │
+                                       │ per task: <data_dir>/tasks/<key>/  SQLite store + versions   │
+                                       └───────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 7. Components
@@ -232,7 +258,9 @@ A protocol, not a class hierarchy:
 
 ```python
 class Teacher(Protocol):
-    def classify(self, texts: list[str], task: Task) -> list[TeacherOutput]: ...
+    name: str
+    def classify(self, states: list[State], task: Task) -> list[TeacherOutput | Exception]: ...
+    # one entry per state; an Exception for an item that failed (raising fails the whole call)
 
 @dataclass
 class TeacherOutput:
@@ -244,35 +272,46 @@ class TeacherOutput:
     latency_ms: float
     request_id: str | None
     raw: Any                         # provider response, kept for audit
+    model: str | None                # the model that actually answered, e.g. "jev:jev-1.13.0" (§7.12)
 ```
 
 **`JevTeacher`** (the only real adapter in the MVP) wraps `typesafe-sdk`:
 
-- one request per text: `state=text` (or the user's JSON object, passed through), `questions={"label": Choice(instructions=task.instructions, criteria=task.classes)}`, `model` pinned to an explicit version (`jev-1.13.0`, not `jev-latest` — a silent model change is a teacher change);
-- `probs` ← `answers["label"].probabilities`, `label` ← `.choice`, `confidence` ← `.confidence`;
-- `cost_usd` ← `usage.input_tokens × price_per_token` from the task config, so savings reporting is exact;
-- concurrency via the SDK's async client with `max_concurrency` set just under the rate limit (1,200/min); exponential backoff on 429/529; a local token bucket so bootstrap replays do not thrash the limit;
-- state longer than the 32k-token budget is truncated with a logged warning (documented limitation: accuracy falls with large irrelevant state anyway).
+- one request per state: `state=text` (or the user's JSON object, passed through), `questions={"label": Choice(instructions=task.instructions, criteria=task.classes)}`. The default `model` is pinned (`jev-1.13.0`); with an alias, the resolved version is still tracked (§7.12);
+- `probs` ← `answers["label"].probabilities` (renormalised over the task's labels), `label` ← `.choice`, `confidence` ← `.confidence`, `model` ← `jev:` + the response's resolved `model`;
+- `cost_usd` ← `usage.input_tokens × price_per_mtok / 1e6`;
+- concurrency via a thread pool (`concurrency=8`) behind a local token bucket (`rpm=1100`, under Jev's 1,200/min); the SDK's own retry policy handles 429/5xx; `timeout=10` s per call;
+- one failed request fails only its own item;
+- *(roadmap)* truncating state beyond the 32k-token budget.
+
+In the proxy there is no `JevTeacher`: the proxy forwards the caller's own request and parses Jev's response into the same `TeacherOutput` for each choice question.
 
 **Soft labels are the main sample-efficiency lever and Jev gives them away on every call.** The student trains against `probs`, not `label`. Where Jev is uncertain the target is flat, so the student learns to be uncertain there too — which is exactly what the router needs. The adapter still records a `label_source` field (`probs` | `hard`) so the experiment (§15) can compare training on the distribution vs. the argmax.
 
-A `SyntheticTeacher` (deterministic rules + injectable noise + fake distributions) ships with the package for tests and demos; the end-to-end test suite never calls a real API. A `ReplayTeacher` serves cached Jev answers from the sample store, so experiments can be re-run offline and for free.
+A `SyntheticTeacher` (deterministic rules + injectable noise + fake distributions) ships with the package for tests and demos; the default test suite never calls a real API (live tests are opt-in: `JEVSTILLER_LIVE=1 pytest -m live`). A `ReplayTeacher` serves cached Jev answers from the sample store, and `CachedTeacher` persists live answers to JSONL, so experiments can be re-run offline and for free.
 
 ### 7.2 Sample store
 
-An append-only log of **every** request, whether served by student or teacher. Default backend: one SQLite file per task (portable, zero-ops, fine into the millions of rows). Backend is an interface; Postgres/object storage later.
+An append-only log of **every** request, whether served by student or teacher. Backend: one SQLite file per task (portable, zero-ops; tasks never share a writer; deleting a task is deleting its directory). The interface is the `Store` protocol; *(roadmap)* a Postgres backend for multiple replicas.
+
+Implementation notes:
+
+- **Write-behind.** `insert` queues records and returns. One writer thread per store commits them in batches, so no request waits on the disk; this took throughput from 19 to ~500 req/s with a 50 ms teacher. Every read through the store waits for earlier inserts first, and a crash loses at most the few milliseconds still queued.
+- **Connections.** One SQLite connection per thread (WAL), and writers queue on an in-process lock instead of SQLite's sleeping busy handler.
+- **Schema version.** `PRAGMA user_version` records it, so setup is skipped when current (reopening costs ~0.4 ms), and older stores are migrated in place (e.g. the `state_type` column).
 
 Per record:
 
 ```text
 id, ts, task_version
-text, text_hash
+text, text_hash, state_type            # state_type: text | json (text = canonical JSON of the object)
 embedding (blob, encoder_id)           # stored so retraining never re-encodes
 teacher_label, teacher_probs, teacher_confidence, teacher_model,
 teacher_input_tokens, teacher_cost_usd, teacher_request_id          # null if not sent to teacher
+                                                                    # teacher_model = the lineage key (§7.12)
 student_version, student_probs, student_confidence, ood_score           # null if no student ran
 served_by (teacher|student), routing_reason
-channel  (bootstrap | deferred | audit | shadow)
+channel  (bootstrap | fallback | audit | deferred | student)
 split    (train | calib)               # assigned at insert by hash(text_hash); fixed forever
 latency_ms, teacher_cost
 ```
@@ -280,7 +319,8 @@ latency_ms, teacher_cost
 Two rules that keep the guarantee valid:
 
 - **Split is assigned once, by hash, at insertion.** A text is always in the same split across every retrain. No leakage, no reshuffling drift.
-- **Only `channel ∈ {bootstrap, audit}` records are eligible for `calib`.** Deferred records are informative for *training* (they are exactly the hard cases) but are not IID and must never influence the threshold.
+- **Only `channel ∈ {bootstrap, audit, fallback}` records are eligible for `calib`** (all three are sent to the teacher regardless of the student). Deferred records are informative for *training* (they are exactly the hard cases) but are not IID and must never influence the threshold. That includes rows the proxy sends to Jev only because another question in the same request needed it (`co_deferred`).
+- **Training, calibration, shadow and audit statistics read one teacher lineage only** (§7.12).
 
 ### 7.3 Encoder (frozen)
 
@@ -315,11 +355,15 @@ Why frozen rather than fine-tuned, for v1:
 - The sample store's embeddings are reusable across every student version.
 - Failure modes are simpler to reason about.
 
-Swapping the encoder is a config change; it starts a new lineage (embeddings recomputed from stored text in the background, old students invalid for the new encoder). The store keeps text, so this is always possible.
+Swapping the encoder is a config change; it starts a new lineage (rows are keyed by `encoder_id`, and old students are invalid for the new encoder). *(roadmap)* Re-encoding stored text in the background, so the new lineage doesn't start from zero. The store keeps text unless `store_text=False`, so this is always possible.
+
+**One encoder per process.** The task manager shares one encoder across every task. `BatchingEncoder` wraps it so concurrent `encode` calls from many requests run as one batch: one worker thread, and calls that queue while it runs join the next batch. There is no added wait when idle, and batches grow under load, which a GPU needs. The CLI defaults to `small` (CPU-friendly); the library's `load_encoder()` defaults to `base`.
 
 ### 7.4 Student head
 
-Multinomial logistic regression on the embedding, trained with cross-entropy against the teacher's **soft** distribution. Implemented in numpy with a hand-written optimiser so there is no framework dependency on the inference path; an optional small MLP (one hidden layer) behind the same interface for tasks where linear is not enough.
+Multinomial logistic regression on the embedding, trained with cross-entropy against the teacher's **soft** distribution. Implemented in numpy with a hand-written optimiser (full-batch Adam) so there is no framework dependency on the inference path. *(roadmap)* An optional small MLP behind the same interface for tasks where linear is not enough.
+
+A saved student records its label order and is reordered to the task's order when loaded. This is needed because the task version ignores class order: a task declared with its classes in another order would otherwise misread a saved model (found and fixed in P1.6).
 
 Regularisation is by **early stopping on an internal validation slice** (10% of the training rows, seeded), not by a fixed L2. Measured on Banking77 embeddings: L2 = 1e-4 cost 15–40 points of coverage at the same budget versus L2 ≈ 0, and made larger encoders look *worse* than smaller ones. Fixed hyperparameters are fragile across encoder dimensions and dataset sizes; a validation-selected stopping point is not.
 
@@ -336,7 +380,8 @@ Class-imbalance handling and a validation split for early stopping / L2 selectio
 
 Softmax confidence is systematically *over*confident on inputs unlike the training data — precisely where deferral matters most. So OOD is a separate gate, not folded into the class probabilities:
 
-- Score = distance to the k nearest training embeddings (k ≈ 10, cosine), or Mahalanobis distance to the nearest class centroid. kNN is the default: no distributional assumption, trivially incremental.
+- Score = 1 − mean cosine similarity to the k nearest reference embeddings (k = 10). *(roadmap)* Mahalanobis distance to class centroids as an alternative.
+- The reference set is at most `ood_max_ref` (5,000) training embeddings, **stratified by class**: each class keeps up to an equal share, and the rest of the budget is filled at random. Memory and per-request cost scale with it (5,000 × 384 floats ≈ 7.7 MB per version). Measured against keeping every row: no change in held-out coverage or agreement on Banking77 (even at 1,000) or CLINC150.
 - Threshold = a high quantile (default 99th) of the same score computed on the calibration split.
 - Any input above the threshold is deferred to Jev regardless of class confidence, and logged with `routing_reason = ood`.
 
@@ -361,6 +406,8 @@ The policy is fitted at `(1 − fit_headroom) · β` (default 85% of the budget)
 
 The policy is versioned together with the model it was fitted for. A model without a policy cannot be routed to.
 
+**Rare classes.** With `rare_classes="defer"`, classes with fewer than `min_samples_per_class` training rows become the policy's `deferred_labels`. The student never answers a request it would label with one of them (`routing_reason="rare_class"`), and calibration only counts rows the student may answer, so the bound stays honest. The default, `wait`, holds back the first student until every class has enough samples, and `status()` names the classes it is waiting for.
+
 Roadmap: per-class thresholds, and a *class-weighted* budget ("a wrong `cancellation` costs five times a wrong `other`").
 
 ### 7.7 Router
@@ -370,13 +417,16 @@ Modes, per task, switchable at runtime:
 | mode | behaviour | when |
 |---|---|---|
 | `teacher_only` | everything to Jev, everything logged | bootstrap; emergency fallback |
-| `shadow` | everything to Jev; student also runs and its answer is logged, never returned | evaluating a candidate on live traffic at no quality risk |
 | `cascade` | student first; defer to Jev if below threshold or OOD | normal production |
-| `hedge` | student and Jev called concurrently; return student if confident, else wait for Jev | latency-sensitive tasks — no p99 penalty, but no Jev savings on deferred requests' latency |
+| `auto` (default) | `teacher_only` until a student is promoted, `cascade` after | |
+| *shadow (a stage, not a mode)* | a candidate runs on every request next to production; its answers are recorded, never returned | evaluating a candidate on live traffic at no quality risk |
+| *(roadmap)* `hedge` | student and Jev called concurrently; return student if confident, else wait for Jev | latency-sensitive tasks |
 
 In every mode except `teacher_only`, an **audit sample** (§7.8) is drawn first and sent to Jev unconditionally.
 
-Every decision writes a `routing_reason`: `bootstrap`, `audit`, `confident`, `low_confidence`, `ood`, `shadow`, `fallback`, `hedge_timeout`.
+Every decision writes a `routing_reason`: `bootstrap`, `fallback`, `audit`, `confident`, `low_confidence`, `ood`, `rare_class`. The proxy adds `co_deferred` (another question in the request needed Jev) and `key_unverified` (the caller's key hasn't been accepted by Jev yet); requests for tasks that don't exist yet carry `not_admitted` or `tenant_task_limit`.
+
+The router holds a lock only to snapshot the routing state (production and shadow versions, flags, the audit draw). Encoding, inference, the teacher call and the store write all run outside it, so concurrent callers' teacher calls overlap (§7.13).
 
 ### 7.8 Audit channel
 
@@ -413,7 +463,7 @@ recovered:   a candidate passes shadow  -> back to cascade
 
 The "broken" test uses the *upper* bound on purpose: it fires only when the data are confident the contract is violated, not merely when a small audit sample is noisy. "Suspicious" uses the point estimate: at n = 500 and a 98% target, the lower bound sits below target even at 1% disagreement, so gating retrains on it would keep the audit rate elevated permanently. Until `drift_min_samples` audit records exist the monitor stays silent. The status report shows the interval and one of `OK` / `inconclusive` / `BROKEN`.
 
-Not yet implemented (roadmap): the elevated audit rate while suspicious; embedding-centroid and class-mix drift signals feeding the same ladder.
+The check runs after every `drift_check_every` (20) new audit answers, not on every request. *(roadmap)* Embedding-centroid, class-mix, fallback-rate and OOD-rate signals feeding the same ladder; today only audit agreement does.
 
 ---
 
@@ -451,13 +501,66 @@ Simple thresholds, all configurable (§9):
 ```text
 always:           ≥ min_calib_samples in the calibration split
 first training:   ≥ min_train_samples  AND  ≥ min_samples_per_class  in the train split
+                  (rare_classes="defer": at least two classes with enough, the rest deferred, §7.6)
 retrain:          ≥ min_new_samples since last training
-             OR   drift monitor requested it
+             OR   drift monitor or a teacher change requested it
              OR   elapsed time ≥ retrain_interval   (roadmap)
-never:            while a candidate is already in shadow
+never:            while a candidate is already in shadow, or a training job is queued or running
 ```
 
-Training is idempotent and cheap (frozen encoder), so being trigger-happy is fine; the shadow gate is what prevents bad promotions.
+Training is idempotent and cheap (frozen encoder), so being trigger-happy is fine; the shadow gate is what prevents bad promotions. The cheap checks come first (new rows since the last training); the store is only re-counted every 100 new rows, because a maintenance pass runs about once a second per loaded task.
+
+### 7.12 Teacher lineage
+
+A task's student reproduces *one* teacher. `jev-latest` is an alias, so the model behind it can change without the task changing. Every teacher answer therefore records the model that actually produced it (`teacher_model`, e.g. `jev:jev-1.13.0`, from Jev's response), and the loop keeps a current **lineage**:
+
+- training, calibration, shadow judgement and the audit statistics read only rows of the current lineage;
+- a new model must answer `teacher_change_confirm` (20) times in a row before the lineage switches, so a gradual rollout behind the alias can't make it flap;
+- on a switch (`teacher_changed` event), any shadow candidate of the old lineage is rejected and a retrain is requested. `teacher_change="fallback"` (default) sends all traffic to the teacher until a student of the new model passes shadow, which is what the contract requires. `"audit"` keeps serving with a raised audit rate and lets the drift monitor decide, which is cheaper when a whole fleet's alias moves at once;
+- the lineage survives restarts (it is the model of the latest teacher-labelled row), and a production version records the lineage it was trained on.
+
+### 7.13 Training execution
+
+Training never runs on a caller's thread. `Config.training`:
+
+- `background` (default): after each batch, the task's maintenance worker is signalled. At most one pass per `maintenance_interval_s` judges the shadow, starts training if due, and checks drift.
+- `inline`: maintenance runs inside `classify_batch`. It is deterministic, which replays and tests need, because a replay pushes weeks of traffic through in seconds.
+- `manual`: only `maintain()` / `train_now()`.
+
+A training job (`training.run_fit_job`) is self-contained. It reads the task's samples from a read-only connection, fits the head, the OOD reference and the policy, scores production on the same calibration rows, and writes the version files into a staging directory. The registry then `adopt`s that directory atomically. Only small objects cross a process boundary, so with a `train_executor` (a process pool) the serving process does no heavy work for a fit.
+
+With an executor, training is **asynchronous**: maintenance submits the job and keeps judging shadows and checking drift while the job waits for a worker, and a later pass adopts the result. A failed job is recorded (`train_failed`) and retried on a later pass. It never fails a request.
+
+Measured (docs/benchmarks.md): the fit is BLAS-bound, and BLAS uses every core by default, so an uncapped fit slows serving whether it runs in a thread or another process (serving p99 ×5–12 with 5 tasks training). What works is capping training's CPU: `train_threads` (BLAS threads per fit, default 2) and a small, low-priority shared pool (`training.train_pool(workers=2)`). With that, 5 tasks training at once cost serving about ×1.12 at p99, and the fits finish faster than with 5 workers fighting each other.
+
+**`TrainScheduler`** is the shared executor for many tasks. It is round-robin across tenants, so one tenant's hundred tasks can't starve another's one. Within a tenant, the task with the highest recent rate of teacher calls goes first, because training it saves the most. Failed jobs are retried with backoff, a crashed worker pool is replaced, and queued jobs can be cancelled.
+
+### 7.14 Many tasks: the task manager
+
+`TaskManager` owns every task of a process. A task is identified by what the teacher is asked, never by a caller-chosen name:
+
+```text
+key = sha256(tenant, question type, Task.version [, requested model])[:20]     Task.version = hash(instructions, criteria)
+```
+
+Matching is exact on purpose: Jev reads its criteria literally, so a "similar" question is not the same question. *(roadmap)* Warm-starting a new task from a close one, for training speed only; never serving with it.
+
+- **Admission.** A new key becomes a task only after `min_requests` (50) requests within `window_s` (24 h). Before that, its requests go to the teacher unrecorded. Services that build questions per request would otherwise create an unbounded number of one-off tasks. `max_tasks_per_tenant` caps the rest.
+- **Loading.** Engines load on demand (~4 ms to reopen from disk) and sit in an LRU bounded by `max_loaded` and `max_memory_mb`. The janitor unloads idle engines only: no request in flight, no maintenance running, no training queued.
+- **Layout.** `<data_dir>/tasks/<key>/` holds `task.json` (spec, tenant, model, created, last seen), `samples.sqlite` and `versions/`. `idle_ttl_s` (off by default) deletes unused tasks; `delete(key)` removes one.
+- **Process-level settings** the manager applies, each found by measurement:
+  - BLAS is capped at 1 thread for serving: small matrix products from many threads otherwise oversubscribe the CPU (2.4× throughput, p99 80 → 13 ms at 50 tasks).
+  - glibc is told to return freed memory: arrays freed by unloaded tasks otherwise stay resident, and RSS climbed to 1.7 GB with 0.2 GB live.
+
+### 7.15 The proxy
+
+`jevstiller serve` (Starlette + uvicorn + httpx, one process) implements Jev's `POST /v1/systemone` and forwards every other path. Behaviour, headers, key handling and errors are specified in [docs/proxy.md](docs/proxy.md). The design decisions:
+
+- **All or nothing per request.** A request is answered entirely locally or entirely by Jev, and Jev's response is returned unchanged. That keeps the proxy exactly as correct as Jev whenever it forwards, and it never has to guess whether Jev answers questions independently. *(roadmap)* Forwarding only the questions the students can't answer.
+- **Keys must be proven.** Local answers only for a key Jev accepted within the TTL; a 401/403 revokes at once. Keys are held as salted hashes in memory only.
+- **The requested model is part of the task key**, and the local response reports the concrete model version the student was trained against.
+- **Fail open to Jev.** Any error in the proxy's own logic forwards the request instead.
+- **Split engine API.** `Jevstiller.route()` decides, the proxy makes the upstream call itself (asynchronously), and `complete()` records. `classify_batch` is `route` + teacher + `complete`.
 
 ---
 
@@ -481,40 +584,9 @@ Training is idempotent and cheap (frozen encoder), so being trigger-happy is fin
 
 ## 9. Configuration
 
-Everything below is a parameter with a default; nothing is hard-coded.
+Everything is a parameter with a default; nothing is hard-coded. The complete, current list (engine `Config`, `TaskManager`, `ProxySettings`, CLI flags and environment variables) is in [docs/configuration.md](docs/configuration.md).
 
-| parameter | default | meaning |
-|---|---|---|
-| `target_agreement` | 0.98 | the contract; budget β = 1 − this |
-| `confidence` | 0.95 | 1 − δ for all bounds |
-| `audit_rate` | 0.02 | fraction of all traffic sent to Jev unconditionally |
-| `audit_rate_shadow` | 0.10 | audit rate while a candidate is in shadow |
-| `audit_rate_elevated` | 0.10 | audit rate while drift is suspected |
-| `calib_fraction` | 0.20 | share of eligible (bootstrap/audit) samples hashed into `calib` |
-| `min_train_samples` | 1000 | first training gate |
-| `min_samples_per_class` | 50 | first training gate |
-| `min_calib_samples` | 500 | do not fit a policy on less |
-| `min_new_samples` | 2000 | retrain trigger |
-| `retrain_interval` | 7d | retrain trigger |
-| `shadow_min_samples` | 1000 | requests a candidate runs in shadow before it is judged |
-| `ood_quantile` | 0.99 | OOD threshold on calib distances |
-| `ood_k` | 10 | kNN size |
-| `drift_fallback_multiplier` | 2.0 | fallback-rate alarm relative to baseline |
-| `drift_margin` | 0.0 | hard fallback when `ub(A) < A* − margin` |
-| `drift_window` | 500 | audit records in the rolling check |
-| `drift_min_samples` | 200 | monitor is silent below this |
-| `encoder` | `base` (`bge-base-en-v1.5`) | pinned by hash; `small` for CPU-only deployments |
-| `encoder_backend` | `onnx` | or `torch` |
-| `student_arch` | `linear` | or `mlp` |
-| `label_target` | `probs` | train on the teacher's distribution, or `hard` (argmax) |
-| `importance_weighting` | true | audit rows weigh `1/audit_rate` in training |
-| `fit_headroom` | 0.15 | fit policies at 85% of budget; judge at 100% |
-| `teacher_model` | `jev-1.13.0` | pinned; never an alias |
-| `teacher_rpm` | 1100 | local rate limiter, under Jev's 1,200/min |
-| `teacher_price_per_mtok` | 0.042 | for savings reporting |
-| `mode` | `auto` | or force `teacher_only` \| `shadow` \| `cascade` \| `hedge` |
-| `store_text` | true | false keeps only the text hash + embedding in the store |
-| `device` | `auto` | `cpu` \| `cuda` \| ... |
+Parameters that v2 proposed but that do not exist yet, all *(roadmap)*: `retrain_interval` (time-based retrain), `drift_fallback_multiplier` (a fallback-rate alarm), `student_arch` (the MLP head), `hedge` mode. The teacher's `model`, `rpm` and `price_per_mtok` are `JevTeacher` constructor arguments, not `Config` fields; the encoder tier, backend and device are `load_encoder` arguments or CLI flags.
 
 ---
 
@@ -549,6 +621,8 @@ Training samples        48,203     calibration samples  9,640
 Last promotion          student:v3 -> student:v4   (12 days ago)
 ```
 
+*That report is the target.* Today `status().report()` shows the mode, the production and shadow versions, the student/teacher shares and channels, teacher calls avoided and their cost, the audit agreement with its interval and OK / inconclusive / BROKEN, labelled counts and teacher lineage, what a first student is waiting for, the routing policy, and the last events. The proxy's `GET /healthz` has request counters. *(Phase 5)* Prometheus metrics and structured request logs.
+
 Always shown next to the agreement number, verbatim: *"Agreement with Jev is not accuracy. If Jev is wrong, the student is wrong the same way."*
 
 The one chart that matters is Jev usage over time — it should go down, and every bump should be explainable by a drift event:
@@ -575,7 +649,7 @@ Also: agreement bound over time with the target as a horizontal line; per-versio
 
 ## 11. Latency
 
-`cascade` improves p50 dramatically (student inference is single-digit ms on CPU) but a deferred request costs student + Jev — **worse than Jev alone at p99**. State this in the docs and the dashboard. For latency-SLO tasks use `hedge`: fire both, answer from the student if it clears the threshold, otherwise wait for Jev. Hedge gives up nothing on quality and nothing on p99, at the cost of Jev calls on deferred requests only (which were going to Jev anyway) plus wasted Jev calls when the student turns out to be confident — configurable by cancelling the Jev request when the student answers.
+`cascade` improves p50 dramatically (student inference is single-digit ms on CPU) but a deferred request costs student + Jev — **worse than Jev alone at p99**. Measured: the proxy adds ~3 ms to a forwarded request (the encoder's per-text cost comes on top with a real encoder), against Jev's ~290 ms p50 / ~760 ms p99. State this in the docs and the dashboard. For latency-SLO tasks, *(roadmap)* `hedge`: fire both, answer from the student if it clears the threshold, otherwise wait for Jev. Hedge gives up nothing on quality and nothing on p99, at the cost of Jev calls on deferred requests only (which were going to Jev anyway) plus wasted Jev calls when the student turns out to be confident — configurable by cancelling the Jev request when the student answers.
 
 ---
 
@@ -583,66 +657,66 @@ Also: agreement bound over time with the target as a horizontal line; per-versio
 
 - **Python ≥ 3.10**, typed, one package: `jevstiller`.
 - **CPU is the default target; GPU is a first-class option, not an afterthought.** The only heavy compute is the encoder. On CPU it runs through ONNX Runtime; on NVIDIA through `onnxruntime-gpu` or the torch backend — selected by `device: auto|cpu|cuda`. The head (train and infer) is numpy on CPU and is fast enough there; a torch head on GPU is only used for the optional MLP. Both paths are exercised in CI (CPU always; GPU when a runner has one).
-- **Minimal required dependencies:** `numpy`, `onnxruntime`, `tokenizers`, stdlib `sqlite3`. Extras: `[jev]` (`typesafe-sdk`), `[gpu]` (`onnxruntime-gpu`), `[torch]` (torch + transformers, for the torch encoder backend, MLP head, and ONNX export), `[server]` (FastAPI), `[dev]`.
+- **Minimal required dependencies:** `numpy` and `threadpoolctl` (to cap BLAS threads), plus stdlib `sqlite3`. Extras: `[jev]` (`typesafe-sdk`), `[onnx]` / `[gpu]` (ONNX Runtime encoders), `[torch]` (torch + transformers encoders), `[server]` (Starlette, uvicorn, httpx: the proxy), `[dev]` (tests, lint, and `jev` + `server` for the contract tests).
 - **Deterministic.** Seeded training, hash-based splits, pinned encoder by content hash, pinned teacher model version, immutable student versions. Same store + same config ⇒ same student.
-- **Offline-capable.** Once a student is promoted, the task keeps working with no network except for audit/deferral — and those queue if Jev is unreachable (the student answers; the audit record is marked `pending` and drained later). This matches the intended deployment: a server whose only egress is the Jev API.
-- **Single directory per task** (`<data_dir>/<task>/`) containing the SQLite store, encoder, versions, and config. Copy the directory and the task moves with it; `js.export(version)` produces a standalone inference bundle (encoder + head + policy) with no store.
-- **Library first, service second.** The Python API is the product; the HTTP server is a thin wrapper so the core can be embedded in a worker, a batch job, or a notebook. The CLI report (§10) is the MVP's "dashboard"; a web UI comes later, if at all.
-- **Tests never call a real teacher.** `SyntheticTeacher` drives the full loop — bootstrap, train, calibrate, shadow, promote, drift, fall back — in seconds, on CPU. `ReplayTeacher` re-runs recorded Jev answers for reproducible experiments.
-- **Secrets.** The Jev key is read from `TYPESAFE_API_KEY` (or a gitignored `.env`); it is never stored in the task directory, never logged, never in a sample-store row.
+- **Offline-capable.** Once a student is promoted, the task keeps answering confident requests with no network. Audit and deferred requests need Jev: today the library raises `TeacherError` for them and the proxy returns 502/504. *(roadmap)* Queueing audit calls while Jev is unreachable (the student answers; the audit record is drained later), and an optional degraded mode that serves the student below threshold, flagged, when Jev is down.
+- **Single directory per task**: `<data_dir>/<task>/` in the library, `<data_dir>/tasks/<key>/` under the task manager. It holds the SQLite store, the versions and (manager) `task.json`. Copy the directory and the task moves with it; `js.export(version)` produces a standalone inference bundle (head + OOD reference + policy + task and encoder identity) with no store.
+- **Library and service share one core.** The proxy is a thin layer over the task manager, which is a thin layer over the per-task loop, so the loop can still be embedded in a worker, a batch job or a notebook.
+- **Crash-safe state.** Registry writes are atomic (temp file, fsync, rename); a version directory is staged and moved in whole; leftovers of an interrupted save are removed on the next open. A test kills a writer with SIGKILL mid-save and checks that every listed version loads.
+- **Tests never call a real teacher by default.** `SyntheticTeacher` drives the full loop (bootstrap, train, calibrate, shadow, promote, drift, fall back) in seconds, on CPU. Proxy contract tests drive the unmodified `typesafe-sdk` over HTTP against a fake Jev and against responses recorded from live Jev. Live tests are opt-in (`JEVSTILLER_LIVE=1 pytest -m live`).
+- **Secrets.** In the library the Jev key is read from `TYPESAFE_API_KEY` (or a gitignored `.env`). In the proxy it is the caller's, forwarded per request and held only as a salted hash. It is never stored in a task directory, never logged, never in a sample-store row.
 
 ---
 
 ## 13. API
 
-### Python
+### Python: one task
 
 ```python
-js = Jevstiller(task, teacher, data_dir=...)
+js = Jevstiller(task, teacher, data_dir=..., encoder=None, config=Config(), train_executor=None)
 
-js.classify(text) -> Result(label, confidence, source, routing_reason, latency_ms)
-js.classify_batch(texts) -> list[Result]
-js.status() -> Status(...)              # everything in §10
-js.set_mode("teacher_only" | "cascade" | "auto")   # "shadow" and "hedge" are not implemented yet
-js.train_now() ; js.promote("student:v3") ; js.rollback()
-js.maintain() ; js.drain() ; js.close()           # maintenance runs per Config.training (background|inline|manual)
-js.versions() -> list[VersionInfo]
-js.export(version) -> path             # a self-contained inference bundle
+js.classify(state, teacher=None) -> Result(label, probs, confidence, source, routing_reason, latency_ms, error)
+js.classify_batch(states, errors="raise" | "return", teacher=None) -> list[Result]   # TeacherError on failures
+routed = js.route(states); js.defer(routed, i, reason); js.complete(routed, teacher_outputs)
+js.status() -> Status  ;  js.status().report()
+js.set_mode("teacher_only" | "cascade" | "auto")
+js.train_now() ; js.maintain() ; js.drain() ; js.promote("student:v3") ; js.rollback()
+js.versions() ; js.export(path, version=None) ; js.evaluate(states, teacher_labels)
+js.training_priority() ; js.busy() ; js.footprint_bytes() ; js.close()
 ```
 
-### HTTP (optional)
+### Python: many tasks
 
-```http
-POST /tasks                           create
-POST /tasks/{id}/classify             {"text": "..."} -> {"label","confidence","source","routing_reason"}
-GET  /tasks/{id}                      status (§10)
-GET  /tasks/{id}/versions
-POST /tasks/{id}/mode                 {"mode": "teacher_only"}
-POST /tasks/{id}/rollback
-GET  /tasks/{id}/metrics?window=30d
+```python
+m = TaskManager(data_dir, teacher, BatchingEncoder(load_encoder("small")), Config(),
+                train_executor=TrainScheduler(workers=2))
+m.classify(tenant, instructions, classes, states, model=None, teacher=None) -> list[Result]
+routing = m.route(tenant, instructions, classes, states, model); m.complete(routing, teacher_outputs)
+m.resolve(tenant, instructions, classes, model) -> (key, Task) ; m.tasks(tenant=None) ; m.engine(key)
+m.delete(key) ; m.sweep() ; m.close()
 ```
 
-The response shape is identical whether the answer came from Jev or the student; `source` is the only difference.
+### HTTP: the proxy
+
+Jev's own API: `POST /v1/systemone` (answered locally or forwarded) and every other path (forwarded). Plus `GET /healthz`. See [docs/proxy.md](docs/proxy.md). *(Phase 5)* An admin API under its own prefix: tasks, status, versions, mode, rollback, delete, metrics.
 
 ---
 
-## 14. MVP scope
+## 14. Implementation status (2026-09-24)
 
-Build, in this order, and nothing else until the loop is proven:
+v2's MVP list was built in full, except the `shadow` *mode* (shadow exists as a lifecycle stage). Beyond it, and in the order of [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md):
 
-1. `Task`, `Teacher` protocol, `SyntheticTeacher`, `ReplayTeacher`, `JevTeacher` over `typesafe-sdk`.
-2. Sample store (SQLite) with hash splits and channels.
-3. Encoder via ONNX Runtime, embedding stored on insert.
-4. Linear soft-label student in numpy.
-5. kNN OOD scorer.
-6. Calibrator with Clopper–Pearson thresholding.
-7. Router: `teacher_only`, `shadow`, `cascade`, audit channel.
-8. Registry with shadow → production and rollback.
-9. Drift monitor with the three-step ladder.
-10. `status()` and a text/CLI report; per-request structured logs.
-11. The experiment in §15, as a runnable script with a report.
-
-Explicitly out of scope for the MVP: `hedge` mode, HTTP server, dashboard UI, MLP head, per-class thresholds, multilabel, non-text input, multiple teachers, class-list changes, distributed anything.
+| Area | Status |
+|---|---|
+| Concurrency: routing lock only around state snapshots, write-behind store, crash-safe registry, per-item teacher failures | done (P1) |
+| Training off the request path; async with a shared, low-priority process pool; BLAS cap | done (P1.2–P1.3) |
+| JSON tasks and states; label-order safety; teacher lineage; rare classes | done (P1.6–P1.9) |
+| Task manager, admission, LRU/memory limits, scheduler, shared batching encoder, OOD cap | done (P2) |
+| Drop-in proxy, key verification, tenancy (shared / per key), contract tests with the real SDK | done (P3, P4.1–P4.2, P6.1) |
+| Live Jev validation | done: see §15.5 (P0) |
+| Security hardening, data retention, admin auth, TLS | Phase 4 |
+| Config file, metrics, logs, admin API, Docker, health/readiness | Phase 5 |
+| `hedge` mode, MLP head, per-class thresholds, class-list changes, multilabel, `noul`/`score` distillation, multiple teachers, Postgres | roadmap (§16) |
 
 ---
 
@@ -712,6 +786,17 @@ plus the three curves of §15.1, the encoder-tier comparison table (coverage and
 
 ---
 
+### 15.5 Result against live Jev (2026-09-24)
+
+Banking77, 11,083 messages replayed through the real Jev (`jev-1.13.0`), bge-small on CPU, target 98%. Full table in [docs/benchmarks.md](docs/benchmarks.md#banking77-against-live-jev).
+
+- **The guarantee held.** Held-out system agreement 99.40% against a 98% target; the live audit channel measured 99.27% with a 95% interval of [98.13%, 99.80%].
+- **The student took over most traffic.** It answered 70.6% of held-out messages, and ~65% of live traffic from message 5,000 on. Jev was called 5,270 times for 11,083 messages.
+- **Accuracy was preserved.** Against the dataset's true labels, Jev scores 78.55% and the combined system 78.7%. That answers §15.4's research question for this task: the distilled system lands where Jev does, and agreement with Jev remains the only thing the product claims.
+- **Cost of the teacher.** Jev billed ~1,700 input tokens per call for this 77-class question (the class descriptions are sent every time), so the $3-per-million estimate of v2 is off by more than 20× for large taxonomies (§3).
+
+Questions still open from §15.4: `probs` vs `hard` targets, encoder tiers and the OOD check (CLINC150), all against live Jev rather than the oracle.
+
 ## 16. Roadmap and open questions
 
 - **Class-list changes.** Real taxonomies change within months. Adding a class invalidates the student, the calibration, and the baselines. Plan: new class starts at 100% Jev (per-class teacher-only override), existing head warm-starts with a new output row, calibration refits once the new class has `min_samples_per_class`. Removing/merging classes is a relabel-by-mapping in the store.
@@ -720,6 +805,12 @@ plus the three curves of §15.1, the encoder-tier comparison table (coverage and
 - **Multiple teachers**, a cheaper teacher as an intermediate tier, or Jev as a *second* opinion on the student's near-threshold cases only.
 - **Beyond classification.** The loop generalises to any repeated task with a checkable output (extraction, scoring, short structured generation); only the student and the agreement metric change. That is the long-term direction — automatic specialisation of repeated general-model workloads — and it is deliberately not in scope now.
 - **Name.** The product is teacher-agnostic; the name is teacher-specific. Fine for now; worth revisiting before anything public.
+- **Partial forwarding.** Send Jev only the questions the students can't answer. It's cheaper, but needs evidence that Jev answers each question independently (Appendix A: "no structural invariants").
+- **`noul` and `score` questions.** Yes/no is a two-class task; score is ordinal. Only the student and the agreement metric change.
+- **Offline queueing and degraded mode** (§12).
+- **Re-encoding on encoder change** (§7.3).
+- **Warm-starting a new task from a close one**, for training speed only (§7.14).
+- **Postgres store and several replicas** (§7.2).
 
 ---
 
@@ -734,21 +825,23 @@ plus the three curves of §15.1, the encoder-tier comparison table (coverage and
 - **Audit channel** — the fixed random slice always sent to the teacher; the only unbiased view of production.
 - **Routing policy** — the thresholds (confidence, OOD) fitted for a specific student version.
 - **Shadow** — a candidate running on live traffic without its answers being returned.
+- **Lineage** — the teacher model a task's rows, calibration and students belong to (§7.12).
+- **Task key** — the hash identifying a task from the outside: tenant, question type, `Task.version`, requested model (§7.14).
+- **Admission** — the point where a question seen often enough becomes a task (§7.14).
+- **Tenant** — who a task belongs to: the whole deployment (`shared`) or one API key (`per_key`).
 
 ---
 
-## Appendix A. Jev reference (as of 2026-09-21)
+## Appendix A. Jev reference (verified 2026-09-24)
 
-Facts the design depends on, from `docs.typesafe.ai` and independent write-ups. Re-verify before relying on any number.
+Facts the design depends on. Checked against `typesafe-sdk` 0.7.1's source and the live API on 2026-09-24, except where marked. Recorded responses are in `tests/fixtures/jev/`.
 
-**API.** `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer <key>`, JSON body `{state, model, questions}`. `state` is a string, object, or array of text. `questions` is a map of typed questions; Jevstiller uses one `Choice`: `{"type":"choice","instructions":"...","criteria":{"<class>":"<description>", ...}}`, max 255 options. Response: `{"model", "answers": {"<id>": {"type":"choice","choice","probabilities":{...},"confidence"}}, "usage": {"input_tokens","output_tokens"}}`. Errors: 401, 422, 429 (rate limit), 529 (overloaded) — back off exponentially.
+**API.** `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer <key>`, JSON body `{state, model, questions}`. `state` is a string, object or array. `questions` is a map of typed questions: `choice` (`instructions`, `criteria`: name → description, max 255), `noul` (yes/no), `score` (ordinal `criteria` list). `instructions` and descriptions may be text, objects or arrays. Response: `{"model", "answers": {"<id>": {"type":"choice","choice","confidence","probabilities":{...}}}, "usage": {"input_tokens","output_tokens"}}`, with header `x-typesafe-request-id` (`req_…`). `model` is the resolved version (`jev-latest` → `jev-1.13.0`). Errors are `{"detail": ...}`: 401 (bad key), 422 (validation, `detail` is a list), 429 (rate limit, `retry-after`), 5xx/529 (overloaded). `GET /v1/models` lists `jev-latest` and `jev-preview`.
 
-**SDK.** `pip install typesafe-sdk` (Python ≥ 3.10). `TypeSafeClient` / `AsyncTypeSafeClient(api_key=None, base_url=..., model="jev-latest", timeout=None, retry=RetryPolicy(), max_concurrency=None)`. `client.system_one(state, questions)`; `result.choices["label"].choice / .probabilities / .confidence`; `result.request_id`; `TypeSafeAPIError(status, request_id)`. Env: `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`.
+**SDK.** `pip install typesafe-sdk` (0.7.1, Python ≥ 3.10, built on `httpx2`). `TypeSafeClient` / `AsyncTypeSafeClient(api_key=None, model=None, retry=None, timeout=None, headers=None, transport=None, http_client=None, base_url=None)`. The base URL comes from `base_url=` or `TYPESAFE_BASE_URL` (default `https://api.typesafe.ai`); this is what makes the proxy drop-in. Default timeout 10 s. Retries 408, 429 and 5xx (default 2 retries), honouring `retry-after` / `retry-after-ms`. `result.request_id` *raises* if the header is missing. Errors map to `TypeSafeAuthenticationError`, `TypeSafeRateLimitError`, `TypeSafeUnprocessableEntityError`, … (`TypeSafeAPIError` with `.status`). Env: `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`, `TYPESAFE_LOG_LEVEL`.
 
-**Model.** `jev-1.13.0` (`jev-latest` and `jev-preview` alias it). 64k tokens/request, 32k for state. Text only; English best. "Not trained on customer requests or responses." Confidence is a statistic of the distribution's peakedness (for 3 options: `(3·max − 1)/2`).
+**Model.** `jev-1.13.0`, which `jev-latest` resolves to. 64k tokens/request, 32k for state (docs, not verified). Text only; English best. Confidence is the peakedness of the distribution, `(K·max − 1)/(K − 1)`. Distributions can be fully peaked: probabilities of exactly 1.0 and 0.0 were observed.
 
-**Price and limits.** $0.042 / M input tokens; output free. 250k tokens/s and 1,200 requests/min per key; limits "adjust dynamically" and may change without notice; pricing "may be subsidized". Hosted only, early access. Latency 70–500 ms claimed; ~0.35 s median measured independently.
+**Price and limits.** $0.042 / M input tokens; output free (docs). Measured: a 5-class question with a one-sentence message used **400 input tokens**, because instructions and criteria are billed on every call. Measured latency: p50 ~290 ms, p90 ~330 ms, p99 ~760 ms, flat from 1 to 16 concurrent requests; 16 concurrent reached 50 req/s with no 429 in a short burst. Documented limit: 1,200 requests/min and 250k tokens/s per key, "adjust dynamically" (not provoked).
 
-**Documented failure modes** relevant here: literal reading of instructions/criteria (the descriptions are the spec); accuracy falls with large irrelevant state; adversarial content is not treated as hostile; no structural invariants (equivalent questions may not give equivalent answers). Vendor-reported accuracy on its own customer-service eval: 76% — a reminder that agreement with Jev is not accuracy.
-
-**Overlap with Jevstiller.** TypeSafe's "confidence-gated routing" pattern uses *Jev's* confidence to decide whether to act on *Jev's* answer. Jevstiller uses the *student's* confidence to decide whether to ask Jev at all. They compose: a user can still gate on the returned confidence (student or Jev) downstream.
+**Documented failure modes** relevant here (docs): literal reading of instructions/criteria (the descriptions are the spec); accuracy falls with large irrelevant state; adversarial content is not treated as hostile; no structural invariants (equivalent questions may not give equivalent answers). Vendor-reported accuracy on its own customer-service eval: 76% — a reminder that agreement with Jev is not accuracy.

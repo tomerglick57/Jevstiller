@@ -1,0 +1,49 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "json": {
+      "state": "I was charged twice this month",
+      "model": "jev-latest",
+      "questions": {
+        "label": {
+          "type": "choice",
+          "instructions": "Which team should handle this customer message?",
+          "criteria": {
+            "billing": "Charges, invoices, refunds, payment methods",
+            "technical": "Bugs, errors, integrations, things not working",
+            "cancellation": "Wants to cancel, downgrade, or close the account",
+            "sales": "Pre-sales questions, plan comparison, quotes",
+            "other": "Anything that does not fit the categories above"
+          }
+        }
+      }
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-typesafe-request-id": "req_01a0d378ae2f758a86c81f52a1024d08"
+  },
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "label": {
+        "type": "choice",
+        "choice": "billing",
+        "confidence": 1.0,
+        "probabilities": {
+          "technical": 0.0,
+          "sales": 0.0,
+          "cancellation": 0.0,
+          "other": 0.0,
+          "billing": 1.0
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 396,
+      "output_tokens": 55
+    }
+  }
+}
