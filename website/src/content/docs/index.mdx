@@ -1,0 +1,66 @@
+---
+title: Distill Jev into a local model
+description: Distill a repeated Jev classification task into a local model, on the fly. Same answers, your hardware.
+template: splash
+hero:
+  title: Jev, distilled on the fly.
+  tagline: Put Jevstiller in front of a repeated Jev classification call. It learns from Jev's own answers, proves it agrees with Jev within a budget you set, and then answers most requests itself.
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/tomerglick57/Jevstiller
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+
+```text
+before   your app ──► Jev
+
+after    your app ──► Jevstiller ─┬─► local model   most requests
+                                  └─► Jev           unsure, novel, or 2% audit
+```
+
+<CardGrid>
+	<Card title="Same call, same answers" icon="approve-check">
+		You set one number, `target_agreement`. Jevstiller returns the label Jev would have returned on
+		at least that share of requests, and keeps checking it on live traffic.
+	</Card>
+	<Card title="Past the rate limit" icon="rocket">
+		Jev caps out at 1,200 requests a minute. The local model runs at thousands per second on one GPU, with
+		single-digit millisecond latency.
+	</Card>
+	<Card title="A bound, not a vibe" icon="document">
+		Routing thresholds are chosen against a Clopper–Pearson upper bound on held-out data, then
+		re-verified forever on a random audit slice.
+	</Card>
+	<Card title="Falls back on its own" icon="warning">
+		If the audit shows the contract is broken, every request goes back to Jev until a new model passes.
+	</Card>
+</CardGrid>
+
+## Why
+
+Jev is fast, cheap and typed. It is also a ceiling: **1,200 requests per minute** per key, ~350 ms per answer,
+hosted only. Jevstiller is for the workload that outgrows that: bursts, backlogs, latency budgets in
+milliseconds, boxes with no egress, or not wanting every classification to depend on one external API.
+
+In an offline replay of Banking77 (77 intents), the local model took **71% of traffic at 99.5% agreement**
+with the teacher, at ~2,000 rows/s on one GPU. [How that was measured →](/project/benchmarks/)
+
+<Aside type="caution" title="Agreement with Jev is not accuracy">
+If Jev is wrong, the student is wrong the same way. Every number Jevstiller reports is agreement with the
+teacher, and the status report says so next to it.
+</Aside>
+
+## Status
+
+**Alpha (0.1.0).** The loop is tested end-to-end and validated on replays with a perfect "oracle" teacher. The
+benchmark against live Jev is pending. The next milestone is a
+[drop-in HTTP proxy](/project/roadmap/): point `TYPESAFE_BASE_URL` at it and change no code.
+
+Jevstiller is an independent open-source project (MIT). It is not affiliated with, endorsed by, or supported by
+TypeSafe.
