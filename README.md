@@ -35,11 +35,27 @@ The routing threshold is chosen against a finite-sample upper bound (Clopper–P
 pip install jevstiller                 # core: numpy only
 pip install "jevstiller[jev,onnx]"     # Jev adapter + ONNX Runtime encoders (CPU)
 pip install "jevstiller[jev,torch]"    # PyTorch encoders (CUDA if available)
+pip install "jevstiller[server,onnx]"  # the drop-in proxy (`jevstiller serve`)
 ```
 
 Python 3.10+. CPU works out of the box; a GPU only speeds up the encoder.
 
-## Quickstart
+## Drop-in proxy: no code changes
+
+Run Jevstiller next to your services and point the Jev SDK at it:
+
+```bash
+pip install "jevstiller[server,onnx]"
+jevstiller serve --data-dir ./jevstiller-data --port 8080
+```
+
+```bash
+export TYPESAFE_BASE_URL=http://jevstiller:8080     # in each calling service; nothing else changes
+```
+
+Services keep their own `TYPESAFE_API_KEY`; Jevstiller forwards it and never stores it. Every `Choice` question becomes a task, keyed by its exact instructions, criteria and model, so services asking the same question share one local model. Requests are forwarded to Jev unchanged, and Jev's responses returned unchanged, until a task's student is trained and has passed its checks. From then on the proxy answers what it is sure about in Jev's exact response format (`x-jevstiller-source: local` tells you which). Non-`Choice` questions, other endpoints, unknown keys and anything it does not understand go straight to Jev. Status: in progress, see [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
+
+## Quickstart (library)
 
 No API key needed — a synthetic teacher stands in for Jev:
 

@@ -123,24 +123,26 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 
 ## Phase 3 — The proxy server
 
-- [ ] **P3.1** ASGI app (Starlette or FastAPI + uvicorn), async upstream client (httpx), `jevstiller serve` entry point. One process by default (in-memory models + SQLite). Document why.
-- [ ] **P3.2** `POST /v1/systemone`:
+- [x] **P3.1** ASGI app (Starlette or FastAPI + uvicorn), async upstream client (httpx), `jevstiller serve` entry point. One process by default (in-memory models + SQLite). Document why.
+- [x] **P3.2** `POST /v1/systemone`:
   - Parse and validate the body. On invalid input, forward it to Jev unchanged and let Jev return its own 422, so validation matches exactly.
   - For each `choice` question, route through its task's Engine.
   - If **every** question can be answered locally, respond locally. Otherwise **forward the full original request** upstream, return Jev's response as-is, and record each Choice answer as a training row (v1: simple and exact. Forwarding only the unanswered questions is a later optimisation, see Backlog).
   - `noul` / `score` questions: forwarded (and recorded for later) in v1.
-- [ ] **P3.3** Local response shape: exact Jev schema. `model` = the resolved Jev model name of the lineage (callers may compare it). `usage` = `{"input_tokens": 0, "output_tokens": 0}` (no Jev tokens were used). A generated `x-typesafe-request-id` (`jvs_…`). Extra headers: `x-jevstiller-source: student:v7|teacher`, `x-jevstiller-task: <key>`, `x-jevstiller-reason`.
-- [ ] **P3.4** Upstream pass-through fidelity. Forward the caller's headers (minus hop-by-hop), body, and query. Relay the status, body, and `retry-after*` / `x-typesafe-request-id` headers. The SDK's own retries then behave exactly as against Jev.
-- [ ] **P3.5** `GET /v1/models` and any unknown path: transparent pass-through.
-- [ ] **P3.6** Per-key upstream rate limiter (shared across all tasks using that key). Learn from `429` + `retry-after`. When a key is throttled and a request can't be answered locally, return Jev-style `429` with `retry-after` rather than queueing past the SDK's 10 s timeout.
-- [ ] **P3.7** Timeouts and backpressure. Upstream timeout < the client's (default 10 s). Bounded in-flight queue. Return `503` + `retry-after` when overloaded.
+- [x] **P3.3** Local response shape: exact Jev schema. `model` = the resolved Jev model name of the lineage (callers may compare it). `usage` = `{"input_tokens": 0, "output_tokens": 0}` (no Jev tokens were used). A generated `x-typesafe-request-id` (`jvs_…`). Extra headers: `x-jevstiller-source: student:v7|teacher`, `x-jevstiller-task: <key>`, `x-jevstiller-reason`.
+- [x] **P3.4** Upstream pass-through fidelity. Forward the caller's headers (minus hop-by-hop), body, and query. Relay the status, body, and `retry-after*` / `x-typesafe-request-id` headers. The SDK's own retries then behave exactly as against Jev.
+- [x] **P3.5** `GET /v1/models` and any unknown path: transparent pass-through.
+- [x] **P3.6** Per-key upstream rate limiter (shared across all tasks using that key). Learn from `429` + `retry-after`. When a key is throttled and a request can't be answered locally, return Jev-style `429` with `retry-after` rather than queueing past the SDK's 10 s timeout.
+- [x] **P3.7** Timeouts and backpressure. Upstream timeout < the client's (default 10 s). Bounded in-flight queue. Return `503` + `retry-after` when overloaded.
+  *Phase 3 result:* `jevstiller/server.py` (Starlette + httpx) and `jevstiller serve`. Nine contract tests drive the real `typesafe-sdk` (sync and async) over HTTP against a fake Jev. They cover forwarding, training behind the proxy, local answers the SDK parses, 401 relaying and revocation, mixed choice + noul requests, 429 back-off, pass-through paths and invalid bodies, upstream down, and per-key tenancy. The proxy adds ~3 ms to a forwarded request. In the CLI end-to-end run (real process pool), 1,631 of 6,000 requests were answered locally within 21 s. Found on the way: the training pool wasn't shut down on SIGTERM (orphaned workers), now fixed. The requested `model` is part of the task key: callers asking `jev-preview` and `jev-1.13.0` are asking different teachers. P3.6 is back-off from 429 only: there's no pre-emptive per-key rate limit yet (Jev enforces its own, and a pre-limit needs P0.4's numbers).
 - [ ] **P3.8** A Python in-process option, for teams that can't run a service: `jevstiller.TypeSafeClient` wrapper over the same Engine. Optional and small, once the proxy is done.
 
 ## Phase 4 — Security, tenancy, privacy
 
-- [ ] **P4.1** **Key verification before local answers.** Without it, anyone reaching the proxy with a made-up key would get student answers without ever touching Jev. Keep a cache `hash(key) → verified_at`. An unknown key's first request is always forwarded, and a 2xx marks it verified. A 401/403 from upstream (including on audit traffic) evicts it immediately. Re-verify after a TTL.
-- [ ] **P4.2** Never persist or log raw keys. Salted hash only (salt per deployment). Redact `Authorization` in all logs and errors (the SDK's `SECRET_HEADERS` list is a good reference).
-- [ ] **P4.3** Tenancy modes: `shared` (default: one tenant per deployment) and `per_key`. Plus an optional mapping file `key-hash → tenant` for grouping. The tenant is part of `task_key`, and no query crosses tenants.
+- [x] **P4.1** **Key verification before local answers.** Without it, anyone reaching the proxy with a made-up key would get student answers without ever touching Jev. Keep a cache `hash(key) → verified_at`. An unknown key's first request is always forwarded, and a 2xx marks it verified. A 401/403 from upstream (including on audit traffic) evicts it immediately. Re-verify after a TTL.
+- [x] **P4.2** Never persist or log raw keys. Salted hash only (salt per deployment). Redact `Authorization` in all logs and errors (the SDK's `SECRET_HEADERS` list is a good reference).
+- [~] **P4.3** Tenancy modes: `shared` (default: one tenant per deployment) and `per_key`. Plus an optional mapping file `key-hash → tenant` for grouping. The tenant is part of `task_key`, and no query crosses tenants.
+  *Status:* `shared` / `per_key` are done (`ProxySettings.tenancy`, `--tenancy`). The key-hash → tenant mapping file isn't done yet.
 - [ ] **P4.4** Optional proxy-level auth (e.g. an extra header or mTLS) for deployments that want to restrict who may use the proxy at all.
 - [ ] **P4.5** Admin API auth: a separate admin token. The admin API is off unless configured.
 - [ ] **P4.6** Data retention. `store_text` per deployment/task (off keeps only hash + embedding). Retention TTL for raw text. `DELETE` of a task or tenant (store + versions). Document what is stored and where.
@@ -163,7 +165,7 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 
 ## Phase 6 — Testing
 
-- [ ] **P6.1** Proxy contract tests with the **real `typesafe-sdk`** (sync + async) against the proxy, as in the 2026-09-24 check. Cover local answers, forwarded answers, 401/422/429/5xx pass-through, `request_id` present, multi-question requests, object `state`, non-Choice questions. Run in CI against the pinned SDK and the latest SDK.
+- [x] **P6.1** Proxy contract tests with the **real `typesafe-sdk`** (sync + async) against the proxy, as in the 2026-09-24 check. Cover local answers, forwarded answers, 401/422/429/5xx pass-through, `request_id` present, multi-question requests, object `state`, non-Choice questions. Run in CI against the pinned SDK and the latest SDK.
 - [ ] **P6.2** Golden fixtures from P0.3 replayed through the proxy. The response bodies must parse identically to direct Jev.
 - [ ] **P6.3** Concurrency tests: many tasks × many threads/async callers. The audit rate stays at its target ±CI. No lost or double-written rows.
 - [ ] **P6.4** Load test (locust or k6): throughput and p50/p99 for local-only, forward-only, and mixed traffic. Targets go in the README.

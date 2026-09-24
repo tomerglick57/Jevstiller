@@ -20,7 +20,7 @@ from .encoders import Encoder, HashEncoder
 from .registry import Bundle, Registry
 from .store import Record, SampleStore, text_hash
 from .task import MODES, Config, State, Task, state_text
-from .teachers import Teacher
+from .teachers import Teacher, TeacherOutput
 from .training import FitJob, run_fit_job
 
 log = logging.getLogger("jevstiller")
@@ -51,6 +51,22 @@ class DecayingRate:
 
     def value(self) -> float:
         return self._v * math.exp(-(time.monotonic() - self._t) / self.tau) * 60 / self.tau
+
+
+@dataclass
+class Routed:
+    """The outcome of `Jevstiller.route` for a batch: prepared records, the student's answers, and which
+    items (indices) still need the teacher."""
+
+    recs: list[Record]
+    results: list[Result | None]
+    to_teacher: list[int]
+    t0: float
+
+    @property
+    def local(self) -> bool:
+        """The student answers every item."""
+        return not self.to_teacher
 
 
 class TeacherError(RuntimeError):
@@ -301,10 +317,32 @@ class Jevstiller:
         JSON; the teacher receives them unchanged. If some teacher calls fail, `errors="raise"` (default)
         raises TeacherError after recording the rest; `errors="return"` returns Results with `error` set and
         `label=None`. `teacher` overrides the task's teacher for this call (e.g. the caller's own API key);
-        its answers join the same lineage as long as they report the same model."""
+        its answers join the same lineage as long as they report the same model.
+
+        Equivalent to `route` -> the teacher on `routed.to_teacher` -> `complete`."""
         if errors not in ("raise", "return"):
             raise ValueError("errors must be 'raise' or 'return'")
         teacher = teacher or self.teacher
+        routed = self.route(texts)
+        outs: list[TeacherOutput | Exception] = []
+        if routed.to_teacher:                               # no lock held: callers' teacher calls overlap
+            try:
+                outs = list(teacher.classify([texts[i] for i in routed.to_teacher], self.task))
+                if len(outs) != len(routed.to_teacher):
+                    raise RuntimeError(f"teacher returned {len(outs)} answers for {len(routed.to_teacher)} texts")
+            except Exception as e:
+                outs = [e] * len(routed.to_teacher)
+        results = self.complete(routed, outs, teacher_name=teacher.name)
+        failed = {i: r.error for i, r in enumerate(results) if r.error is not None}
+        if failed and errors == "raise":
+            partial = [None if r.error is not None else r for r in results]
+            raise TeacherError(failed, partial) from next(iter(failed.values()))
+        return results
+
+    def route(self, texts: Sequence[State]) -> Routed:
+        """Decide, for each state, whether the student answers it or the teacher must. Encodes and runs the
+        models; no network, no store writes. Finish with `complete` (always, even if the teacher call fails),
+        after asking the teacher about `routed.to_teacher`."""
         t0 = time.perf_counter()
         n = len(texts)
         stexts = [state_text(t) for t in texts]
@@ -362,26 +400,40 @@ class Jevstiller:
                                         else "rare_class" if rare else "low_confidence")
                     to_teacher.append(i)
             recs.append(r)
+        return Routed(recs, results, to_teacher, t0)
 
+    def defer(self, routed: Routed, i: int, reason: str) -> None:
+        """Send item `i`, which the student would have answered, to the teacher anyway (e.g. the whole request
+        goes to the teacher for another reason). Recorded as a deferred row: training data, never calibration."""
+        if i in routed.to_teacher:
+            return
+        r = routed.recs[i]
+        r.served_by, r.channel, r.routing_reason = "teacher", "deferred", reason
+        routed.results[i] = None
+        routed.to_teacher.append(i)
+
+    def complete(self, routed: Routed, outs: Sequence[TeacherOutput | Exception],
+                 teacher_name: str | None = None) -> list[Result]:
+        """Finish a `route`: `outs` are the teacher's answers for `routed.to_teacher`, in that order (an
+        Exception for an item the teacher did not answer). Records every answered item and returns one Result
+        per state; failed items get `label=None` and `error` set and are not recorded."""
+        recs, results, to_teacher = routed.recs, routed.results, routed.to_teacher
+        if len(outs) != len(to_teacher):
+            raise ValueError(f"{len(outs)} teacher answers for {len(to_teacher)} items")
+        teacher_name = teacher_name or self.teacher.name
         failed: dict[int, Exception] = {}
-        if to_teacher:                                      # no lock held: callers' teacher calls overlap
-            try:
-                outs = list(teacher.classify([texts[i] for i in to_teacher], self.task))
-                if len(outs) != len(to_teacher):
-                    raise RuntimeError(f"teacher returned {len(outs)} answers for {len(to_teacher)} texts")
-            except Exception as e:
-                outs = [e] * len(to_teacher)
-            for i, o in zip(to_teacher, outs, strict=True):
-                if isinstance(o, Exception):
-                    failed[i] = o
-                    continue
-                r = recs[i]
-                r.teacher_label, r.teacher_probs, r.teacher_confidence = o.label, o.probs, o.confidence
-                r.teacher_model, r.teacher_input_tokens = o.model or teacher.name, o.input_tokens
-                r.teacher_cost_usd, r.teacher_request_id, r.teacher_latency_ms = o.cost_usd, o.request_id, o.latency_ms
-                results[i] = Result(o.label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
+        for i, o in zip(to_teacher, outs, strict=True):
+            if isinstance(o, Exception):
+                failed[i] = o
+                continue
+            r = recs[i]
+            r.teacher_label, r.teacher_probs, r.teacher_confidence = o.label, o.probs, o.confidence
+            r.teacher_model, r.teacher_input_tokens = o.model or teacher_name, o.input_tokens
+            r.teacher_cost_usd, r.teacher_request_id, r.teacher_latency_ms = o.cost_usd, o.request_id, o.latency_ms
+            results[i] = Result(o.label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
 
-        dt = (time.perf_counter() - t0) * 1000 / max(n, 1)
+        n = len(recs)
+        dt = (time.perf_counter() - routed.t0) * 1000 / max(n, 1)
         for i, r in enumerate(recs):
             r.latency_ms = dt
             if results[i] is not None:
@@ -402,8 +454,6 @@ class Jevstiller:
                 self._teacher_errors += len(failed)
             log.warning("task %s: %d of %d teacher calls failed: %r", self.task.name, len(failed), n,
                         next(iter(failed.values())))
-            if errors == "raise":
-                raise TeacherError(failed, results) from next(iter(failed.values()))
             for i, e in failed.items():
                 results[i] = Result(None, {}, 0.0, "error", recs[i].routing_reason, dt, e)
         return results  # type: ignore[return-value]

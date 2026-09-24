@@ -30,12 +30,12 @@ from typing import Any
 
 from threadpoolctl import threadpool_limits
 
-from .core import Jevstiller, Result, TeacherError
+from .core import Jevstiller, Result, Routed, TeacherError
 from .encoders import Encoder
 from .registry import atomic_write_text
 from .scheduler import TaskExecutor, TrainScheduler
 from .task import Config, State, Task, canonical_json
-from .teachers import Teacher
+from .teachers import Teacher, TeacherOutput
 
 log = logging.getLogger("jevstiller")
 
@@ -69,10 +69,29 @@ def _release_free_memory() -> None:
         _LIBC.malloc_trim(0)
 
 
-def task_key(tenant: str, task: Task, question_type: str = "choice") -> str:
-    """Stable id of (tenant, question). Hex, so it is also a safe directory name."""
-    blob = canonical_json({"tenant": tenant, "type": question_type, "version": task.version}).encode()
-    return hashlib.sha256(blob).hexdigest()[:20]
+def task_key(tenant: str, task: Task, question_type: str = "choice", model: str | None = None) -> str:
+    """Stable id of (tenant, question, requested teacher model). Hex, so it is also a safe directory name.
+    `model` is the model the caller asked for (e.g. "jev-latest"): callers asking different models are asking
+    different teachers and must not share a student."""
+    ident = {"tenant": tenant, "type": question_type, "version": task.version}
+    if model:
+        ident["model"] = model
+    return hashlib.sha256(canonical_json(ident).encode()).hexdigest()[:20]
+
+
+@dataclass
+class Routing:
+    """One question of one request, between `TaskManager.route` and `TaskManager.complete`."""
+
+    key: str
+    task: Task
+    engine: Jevstiller | None       # None: not admitted (or over the tenant cap); pass through
+    routed: Routed | None
+    reason: str | None              # why it passes through
+
+    @property
+    def local(self) -> bool:
+        return self.routed is not None and self.routed.local
 
 
 @dataclass
@@ -84,6 +103,7 @@ class TaskInfo:
     target_agreement: float
     created: float
     last_seen: float
+    model: str | None = None            # the teacher model requested by callers, part of the key
 
     def task(self) -> Task:
         return Task(self.key, self.instructions, self.classes, self.target_agreement)
@@ -186,10 +206,12 @@ class TaskManager:
         self._janitor.start()
 
     # ---- lookup -----------------------------------------------------------------
-    def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str]) -> tuple[str, Task]:
-        """The key and Task for a question, without creating anything."""
+    def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
+                model: str | None = None) -> tuple[str, Task]:
+        """The key and Task for a question, without creating anything. Raises ValueError for a question
+        that cannot be a task (fewer than 2 or more than 255 classes, non-JSON values)."""
         spec = Task("_", instructions, classes, self.target_agreement)
-        key = task_key(tenant, spec)
+        key = task_key(tenant, spec, model=model)
         info = self._index.get(key)
         if info is not None:
             return key, info.task()
@@ -205,12 +227,13 @@ class TaskManager:
 
     # ---- serving ----------------------------------------------------------------
     def classify(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
-                 states: Sequence[State], *, teacher: Teacher | None = None, errors: str = "raise") -> list[Result]:
+                 states: Sequence[State], *, teacher: Teacher | None = None, errors: str = "raise",
+                 model: str | None = None) -> list[Result]:
         """Classify `states` for the question (`instructions`, `classes`) asked by `tenant`."""
-        key, task = self.resolve(tenant, instructions, classes)
+        key, task = self.resolve(tenant, instructions, classes, model)
         teacher = teacher or self.teacher
         if key not in self._index:
-            reason = self._admit(key, tenant, task, len(states))
+            reason = self._admit(key, tenant, task, len(states), model)
             if reason:
                 return self._pass_through(task, states, teacher, reason, errors)
         engine = self._acquire(key)
@@ -219,13 +242,42 @@ class TaskManager:
         finally:
             self._release(key)
 
+    def route(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
+              states: Sequence[State], model: str | None = None) -> Routing:
+        """First half of a request whose teacher call the caller makes itself (the proxy): find or admit the
+        task and let its engine decide. Always follow with `complete` (it releases the engine). A task that
+        is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher."""
+        key, task = self.resolve(tenant, instructions, classes, model)
+        if key not in self._index:
+            reason = self._admit(key, tenant, task, len(states), model)
+            if reason:
+                return Routing(key, task, None, None, reason)
+        engine = self._acquire(key)
+        try:
+            routed = engine.route(states)
+        except BaseException:
+            self._release(key)
+            raise
+        return Routing(key, task, engine, routed, None)
+
+    def complete(self, routing: Routing, outs: Sequence[TeacherOutput | Exception],
+                 teacher_name: str | None = None) -> list[Result] | None:
+        """Second half: hand the teacher's answers for `routing.routed.to_teacher` to the engine (records and
+        returns Results), and release it. None for a pass-through routing."""
+        if routing.engine is None:
+            return None
+        try:
+            return routing.engine.complete(routing.routed, outs, teacher_name)
+        finally:
+            self._release(routing.key)
+
     def engine(self, key: str) -> Jevstiller:
         """The loaded engine for `key` (loading it if needed). For admin use: the manager may unload it later."""
         e = self._acquire(key)
         self._release(key)
         return e
 
-    def _admit(self, key: str, tenant: str, task: Task, n: int) -> str | None:
+    def _admit(self, key: str, tenant: str, task: Task, n: int, model: str | None = None) -> str | None:
         """None when `key` is (now) a registered task, else why its requests are passed through."""
         if not self.admission.observe(key, n):
             return "not_admitted"
@@ -239,7 +291,8 @@ class TaskManager:
                                 tenant, self.max_tasks_per_tenant)
                 return "tenant_task_limit"
             now = time.time()
-            info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now)
+            info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now,
+                            model)
             (self.root / key).mkdir(parents=True, exist_ok=True)
             self._write_info(info)
             self._index[key] = info

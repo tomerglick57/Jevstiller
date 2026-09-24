@@ -28,11 +28,15 @@ dependencies = [
 
 [project.optional-dependencies]
 jev = ["typesafe-sdk"]
+server = ["starlette>=0.37", "uvicorn>=0.29", "httpx>=0.27"]
 onnx = ["onnxruntime>=1.16", "tokenizers>=0.15", "huggingface_hub>=0.20"]
 gpu = ["onnxruntime-gpu>=1.16", "tokenizers>=0.15", "huggingface_hub>=0.20"]
 torch = ["torch>=2.1", "transformers>=4.36"]
-all = ["jevstiller[jev,onnx,torch]"]
-dev = ["pytest>=7", "ruff>=0.4"]
+all = ["jevstiller[jev,server,onnx,torch]"]
+dev = ["pytest>=7", "ruff>=0.4", "jevstiller[jev,server]"]
+
+[project.scripts]
+jevstiller = "jevstiller.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/tomerglick57/Jevstiller"
