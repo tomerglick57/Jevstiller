@@ -1,0 +1,94 @@
+# Jevstiller on Kubernetes: one replica (state is local SQLite files on a volume), Recreate on update.
+#   kubectl create secret generic jevstiller --from-literal=admin-token=$(openssl rand -hex 32)
+#   kubectl apply -f deploy/kubernetes/jevstiller.yaml
+# Callers: TYPESAFE_BASE_URL=http://jevstiller.<namespace>.svc:8080
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jevstiller
+data:
+  jevstiller.toml: |
+    [server]
+    data_dir = "/data"
+    log_format = "json"
+    admin_token_file = "/run/secrets/jevstiller/admin-token"
+    [proxy]
+    tenancy = "shared"
+    [manager]
+    target_agreement = 0.98
+    train_workers = 2
+    [encoder]
+    spec = "small"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jevstiller-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jevstiller
+  labels: {app: jevstiller}
+spec:
+  replicas: 1                       # more than one is not supported (P2.3: one SQLite file per task)
+  strategy: {type: Recreate}        # never two processes on the same data volume
+  selector:
+    matchLabels: {app: jevstiller}
+  template:
+    metadata:
+      labels: {app: jevstiller}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: jevstiller
+          image: jevstiller:latest
+          args: ["serve", "--config", "/etc/jevstiller/jevstiller.toml"]
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: {cpu: "2", memory: 2Gi}
+            limits: {memory: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /etc/jevstiller, readOnly: true}
+            - {name: secrets, mountPath: /run/secrets/jevstiller, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: jevstiller-data}
+        - name: config
+          configMap: {name: jevstiller}
+        - name: secrets
+          secret: {secretName: jevstiller}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jevstiller
+spec:
+  selector: {app: jevstiller}
+  ports:
+    - {name: http, port: 8080, targetPort: http}

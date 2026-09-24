@@ -1,0 +1,234 @@
+"""Settings for `jevstiller serve`: one TOML file, `JEVSTILLER_*` environment variables, and CLI flags.
+
+Precedence, lowest to highest: built-in defaults < config file < environment < command-line flags.
+
+```toml
+[server]
+port = 8080
+data_dir = "/data"
+admin_token_file = "/run/secrets/admin-token"
+
+[proxy]
+tenancy = "per_key"
+allow_networks = ["10.0.0.0/8"]
+
+[manager]
+target_agreement = 0.98
+text_retention_days = 30
+
+[encoder]
+spec = "small"
+
+[engine]                 # any jevstiller.Config field
+audit_rate = 0.03
+
+[tasks."3f1c...e2"]      # per-task overrides, by task key
+target_agreement = 0.99
+mode = "teacher_only"
+```
+
+Unknown keys are errors (a typo must not silently do nothing). Secrets (`admin_token`, `access_token`) can be
+given directly or as `*_file` paths; they are redacted when settings are printed.
+"""
+from __future__ import annotations
+
+import dataclasses
+import os
+import sys
+from dataclasses import dataclass, field, fields
+from pathlib import Path
+from typing import Any
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover
+    import tomli as tomllib
+
+SECRETS = ("admin_token", "access_token")
+
+
+@dataclass
+class ServeSettings:
+    # [server]
+    host: str = "0.0.0.0"
+    port: int = 8080
+    data_dir: str = "./jevstiller-data"
+    log_level: str = "info"
+    log_format: str = "text"                    # text | json
+    ssl_certfile: str | None = None
+    ssl_keyfile: str | None = None
+    admin_token: str | None = None              # enables the admin API (/jevstiller/v1/*) and protects /metrics
+    admin_token_file: str | None = None
+    metrics_public: bool = False                # serve /metrics without the admin token
+    # [proxy]
+    upstream: str = "https://api.typesafe.ai"
+    upstream_timeout_s: float = 9.0
+    max_upstream_inflight: int = 256
+    tenancy: str = "shared"                     # shared | per_key
+    key_ttl_s: float = 3600.0
+    access_token: str | None = None
+    access_token_file: str | None = None
+    allow_networks: list[str] = field(default_factory=list)
+    trust_forwarded_for: list[str] = field(default_factory=list)   # proxies allowed to set X-Forwarded-For
+    max_body_mb: float = 4.0
+    max_questions: int = 32                     # per request; more are forwarded without routing
+    tenants: dict[str, str] = field(default_factory=dict)          # key hash -> tenant
+    tenants_file: str | None = None             # JSON {"<key hash>": "<tenant>"}, merged over `tenants`
+    price_per_mtok: float = 0.042
+    # [manager]
+    target_agreement: float = 0.98
+    max_loaded: int = 64
+    max_memory_mb: float | None = None
+    admit_after: int = 50
+    admit_window_s: float = 86400.0
+    max_tasks: int | None = 10000
+    max_tasks_per_tenant: int | None = 1000
+    idle_ttl_days: float | None = None
+    text_retention_days: float | None = None
+    store_text: bool = True
+    train_workers: int = 2
+    blas_threads: int | None = 1
+    # [encoder]
+    encoder: str = "small"                      # small | base | large | hash | onnx:<repo> | torch:<model>
+    backend: str = "auto"
+    device: str = "auto"
+    # [engine], [tasks]
+    engine: dict[str, Any] = field(default_factory=dict)
+    tasks: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def validate(self) -> ServeSettings:
+        from .task import Config
+        if self.tenancy not in ("shared", "per_key"):
+            raise ValueError(f"tenancy must be 'shared' or 'per_key', got {self.tenancy!r}")
+        if self.log_format not in ("text", "json"):
+            raise ValueError(f"log_format must be 'text' or 'json', got {self.log_format!r}")
+        if not 0.5 <= self.target_agreement < 1:
+            raise ValueError("target_agreement must be in [0.5, 1)")
+        if bool(self.ssl_certfile) != bool(self.ssl_keyfile):
+            raise ValueError("ssl_certfile and ssl_keyfile go together")
+        try:
+            Config(**self.engine)
+        except TypeError as e:
+            raise ValueError(f"[engine]: {e}") from None
+        for key, o in self.tasks.items():
+            unknown = set(o) - {"target_agreement", "mode"}
+            if unknown:
+                raise ValueError(f"[tasks.{key!r}]: unknown keys {sorted(unknown)}")
+        for name in ("max_loaded", "admit_after", "train_workers", "max_questions", "port"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be >= 0")
+        import ipaddress
+        import re
+        for net in [*self.allow_networks, *self.trust_forwarded_for]:
+            try:
+                ipaddress.ip_network(net, strict=False)
+            except ValueError:
+                raise ValueError(f"not a network address: {net!r}") from None
+        bad = [k for k in self.tenants if not re.fullmatch(r"[0-9a-f]{32}", k)]
+        if bad:
+            raise ValueError(f"tenants: {len(bad)} keys are not key hashes from `jevstiller key-hash` "
+                             f"(32 lowercase hex), e.g. {bad[0][:40]!r}")
+        return self
+
+    def resolve_secrets(self) -> ServeSettings:
+        """Read `*_file` secrets and the tenants file into the settings."""
+        for name in SECRETS:
+            path = getattr(self, f"{name}_file")
+            if path and not getattr(self, name):
+                setattr(self, name, Path(path).read_text().strip() or None)
+        if self.tenants_file:
+            import json
+            data = json.loads(Path(self.tenants_file).read_text())
+            if not (isinstance(data, dict) and all(isinstance(k, str) and isinstance(v, str) and v
+                                                   for k, v in data.items())):
+                raise ValueError(f"{self.tenants_file}: expected a JSON object of key hash -> tenant name")
+            self.tenants = {**self.tenants, **data}
+        return self
+
+    def redacted(self) -> dict[str, Any]:
+        d = dataclasses.asdict(self)
+        for name in SECRETS:
+            if d.get(name):
+                d[name] = "***"
+        return d
+
+
+SECTIONS = {
+    "server": ("host", "port", "data_dir", "log_level", "log_format", "ssl_certfile", "ssl_keyfile", "admin_token",
+               "admin_token_file", "metrics_public"),
+    "proxy": ("upstream", "upstream_timeout_s", "max_upstream_inflight", "tenancy", "key_ttl_s", "access_token",
+              "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_questions", "tenants",
+              "tenants_file", "price_per_mtok"),
+    "manager": ("target_agreement", "max_loaded", "max_memory_mb", "admit_after", "admit_window_s", "max_tasks",
+                "max_tasks_per_tenant", "idle_ttl_days", "text_retention_days", "store_text", "train_workers",
+                "blas_threads"),
+    "encoder": ("spec", "backend", "device"),
+}
+_FIELDS = {f.name: f for f in fields(ServeSettings)}
+
+
+def _coerce(name: str, raw: str) -> Any:
+    """Parse an environment string into the type of settings field `name`."""
+    t = str(_FIELDS[name].type)
+    if raw.strip().lower() in ("", "none", "null") and "None" in t:
+        return None
+    if t.startswith("bool"):
+        if raw.strip().lower() in ("1", "true", "yes", "on"):
+            return True
+        if raw.strip().lower() in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"JEVSTILLER_{name.upper()}: expected a boolean, got {raw!r}")
+    if t.startswith("int"):
+        return int(raw)
+    if t.startswith("float"):
+        return float(raw)
+    if t.startswith("list"):
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    return raw
+
+
+def from_file(path: str | Path) -> dict[str, Any]:
+    """Flat {field: value} from a TOML file; unknown sections or keys raise ValueError."""
+    data = tomllib.loads(Path(path).read_text())
+    out: dict[str, Any] = {}
+    for section, values in data.items():
+        if section in ("engine", "tasks"):
+            if not isinstance(values, dict):
+                raise ValueError(f"{path}: [{section}] must be a table")
+            out[section] = values
+            continue
+        if section not in SECTIONS:
+            raise ValueError(f"{path}: unknown section [{section}] (known: {sorted([*SECTIONS, 'engine', 'tasks'])})")
+        for key, value in values.items():
+            if key not in SECTIONS[section]:
+                raise ValueError(f"{path}: unknown key {key!r} in [{section}] (known: {sorted(SECTIONS[section])})")
+            out["encoder" if (section, key) == ("encoder", "spec") else key] = value
+    return out
+
+
+def from_env(environ: dict[str, str] | None = None) -> dict[str, Any]:
+    env = os.environ if environ is None else environ
+    out = {}
+    for name in _FIELDS:
+        if name in ("engine", "tasks", "tenants"):
+            continue
+        var = f"JEVSTILLER_{name.upper()}"
+        if var in env:
+            out[name] = _coerce(name, env[var])
+    return out
+
+
+def load(config_path: str | Path | None = None, cli: dict[str, Any] | None = None,
+         environ: dict[str, str] | None = None) -> ServeSettings:
+    """Defaults < file (`config_path`, or JEVSTILLER_CONFIG) < environment < `cli` (None values ignored)."""
+    env = os.environ if environ is None else environ
+    merged: dict[str, Any] = {}
+    path = config_path or env.get("JEVSTILLER_CONFIG")
+    if path:
+        merged.update(from_file(path))
+    merged.update(from_env(env))
+    merged.update({k: v for k, v in (cli or {}).items() if v is not None})
+    unknown = set(merged) - set(_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown settings: {sorted(unknown)}")
+    return ServeSettings(**merged).resolve_secrets().validate()

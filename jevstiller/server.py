@@ -12,6 +12,15 @@ API keys. For `POST /v1/systemone`:
 Anything else (other paths, `GET /v1/models`, requests the proxy does not understand) is forwarded as is.
 A failure inside the proxy's own logic falls back to forwarding: Jevstiller never makes a request fail that Jev
 would have answered.
+
+Security properties (security audit run 1, 2026-09-24; see SECURITY.md):
+- a key counts as accepted only after Jev answered a /v1/systemone request with it (2xx, parseable), and
+  requests with an unaccepted key are forwarded first and only recorded afterwards, so callers without a
+  working Jev key can neither get local answers nor create tasks;
+- /healthz, /readyz, /metrics and /jevstiller/* are served locally and never forwarded;
+- the access token, network allowlist, body limit (enforced while streaming), a single Authorization
+  header and dot-free paths are checked before anything else;
+- the upstream client stores no cookies, so nothing leaks between callers.
 """
 from __future__ import annotations
 
@@ -27,6 +36,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from pathlib import Path
 from typing import Any
 
@@ -37,10 +47,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from .admin import Admin
 from .manager import Routing, TaskManager
+from .metrics import Registry as MetricsRegistry
+from .task import canonical_json, state_text
 from .teachers import TeacherOutput
 
 log = logging.getLogger("jevstiller.server")
+access_log = logging.getLogger("jevstiller.access")
 
 SYSTEM_ONE = "/v1/systemone"
 REQUEST_ID = "x-typesafe-request-id"
@@ -50,6 +64,10 @@ RESPONSE_DROP = HOP_BY_HOP | {"content-encoding"}         # httpx hands us the d
 PROXY_TOKEN_HEADER = "x-jevstiller-token"
 FORWARD_DROP = HOP_BY_HOP | {PROXY_TOKEN_HEADER}          # the proxy's own credential never reaches Jev
 KNOWN_FIELDS = {"state", "model", "questions"}
+LOCAL_PATHS = ("/healthz", "/readyz", "/metrics")          # served by the proxy itself, never forwarded
+PROBE_PATHS = ("/healthz", "/readyz")                     # GET/HEAD need no access token (load balancers)
+ALL_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+MAX_DETAIL_QUESTIONS = 64                                 # beyond this, x-jevstiller-detail is a summary
 
 
 @dataclass
@@ -62,8 +80,10 @@ class ProxySettings:
     price_per_mtok: float = 0.042
     tenant_map: dict[str, str] = field(default_factory=dict)   # key hash -> tenant (overrides `tenancy`)
     access_token: str | None = None                        # if set, callers must send x-jevstiller-token
-    allow_networks: list[str] = field(default_factory=list)    # if set, only these client CIDRs (direct peer)
+    allow_networks: list[str] = field(default_factory=list)    # if set, only these client CIDRs (the peer as
+                                                           # uvicorn reports it; see trust_forwarded_for in cli)
     max_body_bytes: int = 4 * 2**20                        # larger requests get 413 (Jev's own limit is ~64k tokens)
+    max_questions: int = 32                                # distinct choice questions routed per request
 
     def tenant_for(self, kh: str | None) -> str:
         if kh and kh in self.tenant_map:
@@ -74,9 +94,9 @@ class ProxySettings:
 class KeyRegistry:
     """Which API keys Jev has accepted, by salted hash only; raw keys are never stored or logged.
 
-    A key must have been accepted by Jev (a 2xx on a forwarded request) within `ttl_s` before the proxy
-    answers anything for it locally; a 401/403 from Jev revokes it at once. Also remembers per-key upstream
-    back-off from 429 `retry-after`.
+    A key must have been accepted by Jev (a successful /v1/systemone answer) within `ttl_s` before the proxy
+    answers anything for it locally; a 401/403 from Jev on any path revokes it at once. Also remembers per-key
+    upstream back-off from 429 `retry-after`.
     """
 
     def __init__(self, salt: bytes, ttl_s: float):
@@ -112,15 +132,21 @@ class KeyRegistry:
             return max(0.0, self._blocked_until.get(kh, 0) - time.monotonic()) if kh else 0.0
 
 
-def load_salt(data_dir: str | Path) -> bytes:
-    """A per-deployment secret for hashing API keys, created on first start (mode 0600)."""
+def load_salt(data_dir: str | Path, create: bool = True) -> bytes:
+    """A per-deployment secret for hashing API keys, created on first start (mode 0600). With
+    `create=False`, a missing salt is an error (e.g. `jevstiller key-hash` pointed at the wrong directory)."""
     p = Path(data_dir) / "key-salt"
     if not p.exists():
-        p.parent.mkdir(parents=True, exist_ok=True)
+        if not create:
+            raise FileNotFoundError(f"no key-salt in {Path(data_dir).resolve()}: is this the server's data dir?")
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as f:
             f.write(secrets.token_bytes(32))
-    return p.read_bytes()
+    salt = p.read_bytes()
+    if len(salt) < 16:
+        raise ValueError(f"{p} is shorter than 16 bytes; refusing to use it as a salt")
+    return salt
 
 
 def _retry_after_s(headers: Mapping[str, str]) -> float:
@@ -149,43 +175,86 @@ def _peakedness(probs: Mapping[str, float]) -> float:
     return 1.0 if k < 2 else max(0.0, (k * max(probs.values()) - 1.0) / (k - 1.0))
 
 
+def _no_cookies() -> CookieJar:
+    """A cookie jar that stores nothing: the proxy must not carry one caller's upstream cookies into another
+    caller's request. (httpx keeps a raw CookieJar as is; wrapping it in httpx.Cookies would copy it into a
+    default jar and lose the policy.)"""
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
+
+
+def _systemone_answer(resp: httpx.Response | Response | None) -> dict | None:
+    """Jev's parsed answer when `resp` is a successful, well-formed /v1/systemone response, else None."""
+    if not isinstance(resp, httpx.Response) or not resp.is_success:
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    if isinstance(data, dict) and isinstance(data.get("answers"), dict) and isinstance(data.get("model"), str):
+        return data
+    return None
+
+
+class ProxyMetrics:
+    def __init__(self, registry: MetricsRegistry):
+        self.registry = registry
+        self.requests = registry.counter("jevstiller_requests_total", "Requests handled, by route and outcome",
+                                         ["route", "source"])
+        self.latency = registry.histogram("jevstiller_request_duration_seconds",
+                                          "Time to answer a /v1/systemone request", ["source"])
+        self.questions = registry.counter("jevstiller_questions_total", "Choice questions, by what answered them",
+                                          ["outcome"])
+        self.upstream = registry.counter("jevstiller_upstream_responses_total", "Upstream responses by status class",
+                                         ["status"])
+        self.upstream_latency = registry.histogram("jevstiller_upstream_duration_seconds", "Upstream call time")
+        self.rejected = registry.counter("jevstiller_rejected_total", "Requests refused by the proxy itself",
+                                         ["reason"])
+
+
 class Proxy:
     def __init__(self, manager: TaskManager, settings: ProxySettings, keys: KeyRegistry,
-                 client: httpx.AsyncClient | None = None):
+                 client: httpx.AsyncClient | None = None, metrics: ProxyMetrics | None = None):
         self.manager, self.settings, self.keys = manager, settings, keys
         self.client = client or httpx.AsyncClient(base_url=settings.upstream.rstrip("/"),
-                                                  timeout=settings.upstream_timeout_s)
+                                                  timeout=settings.upstream_timeout_s, cookies=_no_cookies())
+        self.metrics = metrics or ProxyMetrics(MetricsRegistry())
         self._upstream_slots = settings.max_upstream_inflight   # event-loop only: no lock needed
         self.stats = {"local": 0, "forwarded": 0, "passthrough": 0, "errors": 0}
 
     # ---- upstream -----------------------------------------------------------------
     async def forward(self, request: Request, body: bytes, kh: str | None) -> httpx.Response | Response:
         """Send the caller's request to Jev unchanged. Returns Jev's response, or a Jev-style error response
-        of our own (back-off, overload, timeout, unreachable)."""
+        of our own (back-off, overload, timeout, unreachable). Never marks a key as accepted: only a parsed
+        /v1/systemone answer does (system_one)."""
         wait = self.keys.blocked_for(kh)
         if wait > 0:
+            self.metrics.upstream.inc("backoff")
             return _error(429, "rate limited by the upstream API; retry later (jevstiller)", wait)
         if self._upstream_slots <= 0:
+            self.metrics.upstream.inc("overload")
             return _error(503, "jevstiller is overloaded; retry shortly", 1)
         self._upstream_slots -= 1
+        t0 = time.perf_counter()
         try:
             headers = {k: v for k, v in request.headers.items() if k.lower() not in FORWARD_DROP}
             req = self.client.build_request(request.method, request.url.path, params=request.query_params,
                                             headers=headers, content=body)
             resp = await self.client.send(req)
         except httpx.TimeoutException:
+            self.metrics.upstream.inc("timeout")
             return _error(504, "upstream API timed out (jevstiller)")
         except httpx.HTTPError as e:
             log.warning("upstream unreachable: %s", type(e).__name__)
+            self.metrics.upstream.inc("unreachable")
             return _error(502, "upstream API unreachable (jevstiller)")
         finally:
             self._upstream_slots += 1
+        self.metrics.upstream_latency.observe(time.perf_counter() - t0)
+        self.metrics.upstream.inc(f"{resp.status_code // 100}xx")
         if resp.status_code == 429:
             self.keys.block(kh, _retry_after_s(resp.headers))
         elif resp.status_code in (401, 403):
             self.keys.revoke(kh)
-        elif resp.is_success:
-            self.keys.accept(kh)
         return resp
 
     @staticmethod
@@ -200,7 +269,7 @@ class Proxy:
 
     # ---- handlers -----------------------------------------------------------------
     async def _body(self, request: Request) -> bytes:
-        body = await request.body()
+        body = await request.body()                     # bounded while streaming by AccessMiddleware
         if len(body) > self.settings.max_body_bytes:
             raise _TooLarge()
         return body
@@ -209,71 +278,158 @@ class Proxy:
         body = await self._body(request)
         kh = self.keys.hash(_bearer(request))
         self.stats["passthrough"] += 1
+        self.metrics.requests.inc("passthrough", "upstream")
         return self.relay(await self.forward(request, body, kh))
 
     async def system_one(self, request: Request) -> Response:
+        t0 = time.perf_counter()
         body = await self._body(request)
         key = _bearer(request)
         kh = self.keys.hash(key)
+        log_rec: dict[str, Any] = {"path": SYSTEM_ONE}
         try:
             req = json.loads(body)
-        except ValueError:
+        except Exception:                               # includes RecursionError on absurd nesting
             req = None
         if not (isinstance(req, dict) and set(req) <= KNOWN_FIELDS and isinstance(req.get("questions"), dict)
                 and req["questions"] and isinstance(req.get("model"), str) and "state" in req and key):
-            self.stats["passthrough"] += 1
-            return self.relay(await self.forward(request, body, kh))   # let Jev judge what we don't understand
+            return await self._plain_forward(request, body, kh, "not_understood", t0, log_rec)
 
-        tenant = self.settings.tenant_for(kh)
-        routings: dict[str, Routing] = {}
+        # one routing per distinct choice question; duplicates under other names share it
+        groups: dict[str, list[str]] = {}
+        specs: dict[str, dict] = {}
         others: list[str] = []
-        try:
-            for name, q in req["questions"].items():
-                if not (isinstance(q, dict) and q.get("type") == "choice" and isinstance(q.get("criteria"), dict)):
-                    others.append(name)
-                    continue
-                try:
-                    routings[name] = await anyio.to_thread.run_sync(
-                        self.manager.route, tenant, q.get("instructions"), q["criteria"], [req["state"]],
-                        req["model"])
-                except ValueError:
-                    others.append(name)                 # not a valid task (e.g. one class): Jev decides
-        except Exception:
-            log.exception("routing failed; forwarding")
-            self._defer_all(routings, "proxy_error")
-            await self._finish(routings, None, None, 0.0)       # releases; failed items are not recorded
-            self.stats["errors"] += 1
-            return self.relay(await self.forward(request, body, kh))
-
-        verified = self.keys.verified(kh)
-        if not others and verified and routings and all(r.local for r in routings.values()):
+        for name, q in req["questions"].items():
+            if not (isinstance(q, dict) and q.get("type") == "choice" and isinstance(q.get("criteria"), dict)):
+                others.append(name)
+                continue
             try:
-                resp = await self._local_response(req, routings)
-                self.stats["local"] += 1
-                return resp
+                spec = canonical_json([q.get("instructions"), q["criteria"]])
+            except Exception:
+                others.append(name)
+                continue
+            groups.setdefault(spec, []).append(name)
+            specs[spec] = q
+        log_rec["questions"] = len(req["questions"])
+        if not groups or len(groups) > self.settings.max_questions:
+            return await self._plain_forward(request, body, kh, "too_many_questions" if groups else "no_choice",
+                                             t0, log_rec)
+        try:
+            tenant = self.settings.tenant_for(kh)
+        except Exception:
+            log.exception("tenant lookup failed; forwarding")
+            return await self._plain_forward(request, body, kh, "proxy_error", t0, log_rec)
+        log_rec["tenant"] = tenant
+
+        if not self.keys.verified(kh):
+            # Never route, admit or answer for a key Jev hasn't accepted: forward first, learn afterwards.
+            resp = await self.forward(request, body, kh)
+            answer = _systemone_answer(resp)
+            if answer is not None:
+                self.keys.accept(kh)
+                routings, _ = await self._route(groups, specs, tenant, req)
+                self._defer_all(routings, "key_unverified")
+                await self._finish(routings, groups, answer, resp, (time.perf_counter() - t0) * 1000)
+                log_rec["tasks"] = [r.key for r in routings.values()][:8]
+            return self._upstream_reply(resp, {n: "key_unverified" for g in groups.values() for n in g}, t0,
+                                        log_rec)
+
+        routings, unsupported = await self._route(groups, specs, tenant, req)
+        if routings is None:                            # routing itself failed: fail open
+            return await self._plain_forward(request, body, kh, "proxy_error", t0, log_rec)
+        log_rec["tasks"] = [r.key for r in routings.values()][:8]
+        if not others and not unsupported and all(r.local for r in routings.values()):
+            try:
+                resp = await self._local_response(req, groups, routings)
             except Exception:
                 log.exception("local answer failed; forwarding")
                 self.stats["errors"] += 1
-                # engines were released by _local_response's cleanup; route again is not worth it
-                return self.relay(await self.forward(request, body, kh))
+                return await self._plain_forward(request, body, kh, "proxy_error", t0, log_rec)
+            self.stats["local"] += 1
+            self.metrics.requests.inc("systemone", "local")
+            self.metrics.questions.inc("local", by=sum(len(v) for v in groups.values()))
+            self.metrics.latency.observe(time.perf_counter() - t0, "local")
+            self._log(log_rec, "local", 200, t0, resp.headers.get(REQUEST_ID))
+            return resp
 
         # to the teacher: the whole request, with the caller's key
-        reason = "co_deferred" if verified else "key_unverified"
-        self._defer_all(routings, reason)
-        t0 = time.perf_counter()
+        self._defer_all(routings, "co_deferred")
+        t_up = time.perf_counter()
         resp = await self.forward(request, body, kh)
-        latency_ms = (time.perf_counter() - t0) * 1000
-        answers = None
-        if isinstance(resp, httpx.Response) and resp.is_success:
-            try:
-                answers = resp.json()
-            except ValueError:
-                answers = None
-        await self._finish(routings, answers, resp, latency_ms)
+        answer = _systemone_answer(resp)
+        if answer is not None:
+            self.keys.accept(kh)                        # refresh
+        await self._finish(routings, groups, answer, resp, (time.perf_counter() - t_up) * 1000)
+        reasons = {}
+        for spec, names in groups.items():
+            r = routings.get(spec)
+            for n in names:
+                reasons[n] = (r.reason or "co_deferred") if r is not None else "unsupported"
+        for n in others:
+            reasons[n] = "unsupported"
+        return self._upstream_reply(resp, reasons, t0, log_rec)
+
+    async def _plain_forward(self, request: Request, body: bytes, kh: str | None, reason: str, t0: float,
+                             log_rec: dict) -> Response:
+        """Forward without routing or recording anything."""
+        self.stats["passthrough"] += 1
+        resp = await self.forward(request, body, kh)
+        log_rec["reason"] = reason
+        return self._upstream_reply(resp, None, t0, log_rec)
+
+    def _upstream_reply(self, resp: httpx.Response | Response, reasons: dict[str, str] | None, t0: float,
+                        log_rec: dict) -> Response:
         self.stats["forwarded"] += 1
-        sources = {n: (r.reason or reason) for n, r in routings.items()}
-        return self.relay(resp, {"x-jevstiller-source": "upstream",
-                                 "x-jevstiller-detail": json.dumps(sources, separators=(",", ":"))})
+        self.metrics.requests.inc("systemone", "upstream")
+        self.metrics.latency.observe(time.perf_counter() - t0, "upstream")
+        extra = {"x-jevstiller-source": "upstream"}
+        if reasons:
+            for r in reasons.values():
+                self.metrics.questions.inc(r)
+            detail: Any = reasons if len(reasons) <= MAX_DETAIL_QUESTIONS else {"questions": len(reasons)}
+            extra["x-jevstiller-detail"] = json.dumps(detail, separators=(",", ":"))
+        out = self.relay(resp, extra)
+        self._log(log_rec, "upstream", out.status_code, t0, out.headers.get(REQUEST_ID), reasons)
+        return out
+
+    def _log(self, rec: dict, source: str, status: int, t0: float, request_id: str | None,
+             reasons: dict[str, str] | None = None) -> None:
+        if not access_log.isEnabledFor(logging.INFO):
+            return
+        rec.update(source=source, status=status, request_id=request_id,
+                   latency_ms=round((time.perf_counter() - t0) * 1000, 2))
+        if reasons:
+            counts: dict[str, int] = {}
+            for r in reasons.values():
+                counts[r] = counts.get(r, 0) + 1
+            rec["reasons"] = counts
+        access_log.info(json.dumps(rec, separators=(",", ":")))
+
+    async def _route(self, groups: Mapping[str, list[str]], specs: Mapping[str, dict], tenant: str,
+                     req: dict) -> tuple[dict[str, Routing] | None, list[str]]:
+        """Route each distinct question once. Returns (routings by spec, specs that can't be tasks), or
+        (None, []) if routing failed unexpectedly (everything routed so far is released)."""
+        routings: dict[str, Routing] = {}
+        unsupported: list[str] = []
+        try:
+            # the state is the same for every question: canonical text and embedding once per request
+            stexts = [state_text(req["state"])]
+            X = await anyio.to_thread.run_sync(self.manager.encoder.encode, stexts)
+            for spec in groups:
+                q = specs[spec]
+                try:
+                    routings[spec] = await anyio.to_thread.run_sync(
+                        lambda q=q: self.manager.route(tenant, q.get("instructions"), q["criteria"], [req["state"]],
+                                                       req["model"], stexts=stexts, X=X))
+                except ValueError:
+                    unsupported.append(spec)            # not a valid task (e.g. one class): Jev decides
+        except Exception:
+            log.exception("routing failed; forwarding")
+            self._defer_all(routings, "proxy_error")
+            await self._finish(routings, groups, None, None, 0.0)   # releases; nothing is recorded
+            self.stats["errors"] += 1
+            return None, []
+        return routings, unsupported
 
     @staticmethod
     def _defer_all(routings: Mapping[str, Routing], reason: str) -> None:
@@ -283,60 +439,73 @@ class Proxy:
                 for i in range(len(r.routed.recs)):
                     r.engine.defer(r.routed, i, reason)
 
-    async def _finish(self, routings: Mapping[str, Routing], answers: dict | None,
+    def _teacher_output(self, a: Any, labels: Sequence[str], tokens: int, latency_ms: float, rid: str | None,
+                        model: Any) -> TeacherOutput | Exception:
+        try:
+            if not (isinstance(a, dict) and a.get("type") == "choice" and isinstance(a.get("probabilities"), dict)):
+                raise ValueError("no choice answer")
+            probs = {c: float(a["probabilities"].get(c, 0.0)) for c in labels}
+            z = sum(probs.values()) or 1.0
+            return TeacherOutput(label=str(a.get("choice")), probs={c: p / z for c, p in probs.items()},
+                                 confidence=float(a.get("confidence", 0.0)), input_tokens=tokens,
+                                 cost_usd=tokens * self.settings.price_per_mtok / 1e6, latency_ms=latency_ms,
+                                 request_id=rid, model=f"jev:{model}" if isinstance(model, str) and model else None)
+        except Exception as e:
+            return RuntimeError(f"no usable teacher answer: {e}")
+
+    async def _finish(self, routings: Mapping[str, Routing], groups: Mapping[str, list[str]], answer: dict | None,
                       resp: httpx.Response | Response | None, latency_ms: float) -> None:
-        """Complete every routing with Jev's answer to its question, or an error (not recorded)."""
-        n_choice = max(1, len(routings))
-        usage = (answers or {}).get("usage") or {}
-        tokens = int(usage.get("input_tokens") or 0) // n_choice
-        model = (answers or {}).get("model")
+        """Complete every routing (always: it releases the engine) with Jev's answer to its question, or an
+        error, which is not recorded."""
+        try:
+            tokens = int((answer or {}).get("usage", {}).get("input_tokens") or 0) // max(1, len(routings))
+        except Exception:
+            tokens = 0
+        model = (answer or {}).get("model")
         rid = resp.headers.get(REQUEST_ID) if resp is not None else None
-        for name, r in routings.items():
+        answers = (answer or {}).get("answers") or {}
+        for spec, r in routings.items():
             if r.engine is None:
                 continue
-            out: TeacherOutput | Exception
-            a = ((answers or {}).get("answers") or {}).get(name)
-            if isinstance(a, dict) and a.get("type") == "choice" and isinstance(a.get("probabilities"), dict):
-                probs = {c: float(a["probabilities"].get(c, 0.0)) for c in r.task.labels}
-                z = sum(probs.values()) or 1.0
-                out = TeacherOutput(label=str(a.get("choice")), probs={c: p / z for c, p in probs.items()},
-                                    confidence=float(a.get("confidence", 0.0)), input_tokens=tokens,
-                                    cost_usd=tokens * self.settings.price_per_mtok / 1e6, latency_ms=latency_ms,
-                                    request_id=rid, model=f"jev:{model}" if model else None)
-            else:
-                status = getattr(resp, "status_code", None)
-                out = RuntimeError(f"no teacher answer (upstream status {status})")
-            outs = [out] * len(r.routed.to_teacher)
+            first = groups[spec][0]
+            out = self._teacher_output(answers.get(first), r.task.labels, tokens, latency_ms, rid, model)
             try:
-                await anyio.to_thread.run_sync(self.manager.complete, r, outs, "jev")
+                await anyio.to_thread.run_sync(self.manager.complete, r, [out] * len(r.routed.to_teacher), "jev")
             except Exception:
                 log.exception("recording task %s failed", r.key)
 
-    async def _local_response(self, req: dict, routings: Mapping[str, Routing]) -> Response:
+    async def _local_response(self, req: dict, groups: Mapping[str, list[str]],
+                              routings: Mapping[str, Routing]) -> Response:
         answers: dict[str, Any] = {}
         detail: dict[str, str] = {}
         model = None
         released: set[str] = set()
         try:
-            for name in req["questions"]:
-                r = routings[name]
-                released.add(name)                       # complete() releases the engine even if it raises
+            for spec, names in groups.items():
+                r = routings[spec]
+                released.add(spec)                       # complete() releases the engine even if it raises
                 [res] = await anyio.to_thread.run_sync(self.manager.complete, r, [], "jev")
-                answers[name] = {"type": "choice", "choice": res.label, "confidence": _peakedness(res.probs),
-                                 "probabilities": res.probs}
-                detail[name] = res.source
+                for name in names:
+                    answers[name] = {"type": "choice", "choice": res.label,
+                                     "confidence": _peakedness(res.probs), "probabilities": res.probs}
+                    detail[name] = res.source
                 lineage = r.engine._teacher_model or ""
                 model = model or (lineage[4:] if lineage.startswith("jev:") else None)
         finally:
-            for name, r in routings.items():             # a failure part-way: release the rest unrecorded
-                if name not in released and r.engine is not None:
+            for spec, r in routings.items():             # a failure part-way: release the rest unrecorded
+                if spec not in released and r.engine is not None:
                     self.manager._release(r.key)
+        answers = {name: answers[name] for name in req["questions"] if name in answers}   # request order
         body = {"model": model or req["model"], "answers": answers, "usage": {"input_tokens": 0, "output_tokens": 0}}
+        d: Any = detail if len(detail) <= MAX_DETAIL_QUESTIONS else {"questions": len(detail)}
         return JSONResponse(body, headers={REQUEST_ID: f"jvs_{uuid.uuid4().hex}", "x-jevstiller-source": "local",
-                                           "x-jevstiller-detail": json.dumps(detail, separators=(",", ":"))})
+                                           "x-jevstiller-detail": json.dumps(d, separators=(",", ":"))})
 
+    # ---- local endpoints ------------------------------------------------------------
     async def healthz(self, request: Request) -> Response:
         """Liveness: the process answers. No counters here (it is usually unauthenticated)."""
+        if request.method not in ("GET", "HEAD"):
+            return _error(405, "method not allowed")
         return JSONResponse({"ok": True})
 
 
@@ -345,12 +514,17 @@ class _TooLarge(Exception):
 
 
 class AccessMiddleware:
-    """Who may use the proxy at all, checked before anything else: client network, shared token, body size.
-    `/healthz` is exempt from the network and token checks (load-balancer probes)."""
+    """Who may use the proxy at all, checked before anything else.
 
-    def __init__(self, app, settings: ProxySettings):
+    GET/HEAD /healthz and /readyz (probes) skip the network and token checks; every other request must pass:
+    client network (`allow_networks`, against the peer uvicorn reports), the shared token, a single
+    Authorization header, no `.`/`..` path segments, and the body limit, enforced on the declared
+    Content-Length and again while the body streams in (chunked bodies included).
+    """
+
+    def __init__(self, app, settings: ProxySettings, metrics: ProxyMetrics | None = None):
         import ipaddress
-        self.app, self.settings = app, settings
+        self.app, self.settings, self.metrics = app, settings, metrics
         self.networks = [ipaddress.ip_network(n, strict=False) for n in settings.allow_networks]
 
     def _client_allowed(self, scope) -> bool:
@@ -364,34 +538,97 @@ class AccessMiddleware:
             return False
         return any(ip in n for n in self.networks)
 
+    async def _refuse(self, reason: str, status: int, detail: str, scope, receive, send) -> None:
+        if self.metrics is not None:
+            self.metrics.rejected.inc(reason)
+        await _error(status, f"{detail} (jevstiller)")(scope, receive, send)
+
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") in ("/healthz", "/readyz"):
+        if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        path, method = scope.get("path", ""), scope.get("method", "")
+        if path in PROBE_PATHS and method in ("GET", "HEAD"):
+            return await self.app(scope, receive, send)
+        raw = scope.get("headers", [])
         if not self._client_allowed(scope):
-            return await _error(403, "client network not allowed (jevstiller)")(scope, receive, send)
+            return await self._refuse("network", 403, "client network not allowed", scope, receive, send)
         token = self.settings.access_token
-        if token and not hmac.compare_digest(headers.get(PROXY_TOKEN_HEADER, "").encode(), token.encode()):
-            return await _error(401, "missing or invalid x-jevstiller-token (jevstiller)")(scope, receive, send)
+        if token:
+            given = [v for k, v in raw if k.lower() == PROXY_TOKEN_HEADER.encode()]
+            if len(given) != 1 or not hmac.compare_digest(given[0], token.encode()):
+                return await self._refuse("token", 401, "missing or invalid x-jevstiller-token",
+                                          scope, receive, send)
+        if sum(1 for k, _ in raw if k.lower() == b"authorization") > 1:
+            return await self._refuse("duplicate_auth", 400, "more than one Authorization header",
+                                      scope, receive, send)
+        if any(seg in (".", "..") for seg in path.split("/")):
+            return await self._refuse("path", 400, "invalid path", scope, receive, send)
+        limit = self.settings.max_body_bytes
+        lengths = [v for k, v in raw if k.lower() == b"content-length"]
         try:
-            if int(headers.get("content-length", "0")) > self.settings.max_body_bytes:
-                return await _error(413, "request body too large (jevstiller)")(scope, receive, send)
+            if lengths and int(lengths[-1]) > limit:
+                return await self._refuse("body", 413, "request body too large", scope, receive, send)
         except ValueError:
-            return await _error(400, "invalid content-length (jevstiller)")(scope, receive, send)
+            return await self._refuse("body", 400, "invalid content-length", scope, receive, send)
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise _TooLarge()
+            return message
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, limited_receive, send)
         except _TooLarge:
-            await _error(413, "request body too large (jevstiller)")(scope, receive, send)
+            await self._refuse("body", 413, "request body too large", scope, receive, send)
 
 
 def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys: KeyRegistry | None = None,
-               client: httpx.AsyncClient | None = None, closers: Sequence[Callable[[], Any]] = ()) -> Starlette:
-    """The proxy as an ASGI app. On shutdown it closes the upstream client and the manager, then calls
-    `closers` (e.g. the training scheduler's shutdown), in order."""
+               client: httpx.AsyncClient | None = None, closers: Sequence[Callable[[], Any]] = (),
+               admin_token: str | None = None, metrics_public: bool = False,
+               ready: Callable[[], dict[str, bool]] | None = None) -> Starlette:
+    """The proxy as an ASGI app.
+
+    - `admin_token` enables the admin API under /jevstiller/v1 and protects GET /metrics (unless
+      `metrics_public`). Neither is ever forwarded upstream.
+    - `ready()` returns named readiness checks for GET /readyz (all must be True); default: manager open.
+    - On shutdown: close the upstream client and the manager, then call `closers` in order.
+    """
     settings = settings or ProxySettings()
     keys = keys or KeyRegistry(secrets.token_bytes(32), settings.key_ttl_s)
-    proxy = Proxy(manager, settings, keys, client)
-    methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    registry = MetricsRegistry()
+    metrics = ProxyMetrics(registry)
+    proxy = Proxy(manager, settings, keys, client, metrics)
+    admin = Admin(manager, admin_token, stats=lambda: {"proxy": dict(proxy.stats)})
+    _task_gauges(registry, manager, keys)
+
+    def _ready() -> dict[str, bool]:
+        checks = {"manager": not manager._stop.is_set()}
+        if ready is not None:
+            checks.update(ready())
+        return checks
+
+    async def readyz(request: Request) -> Response:
+        if request.method not in ("GET", "HEAD"):
+            return _error(405, "method not allowed")
+        checks = await anyio.to_thread.run_sync(_ready)
+        ok = all(checks.values())
+        return JSONResponse({"ready": ok, "checks": checks}, status_code=200 if ok else 503)
+
+    async def metrics_endpoint(request: Request) -> Response:
+        if not metrics_public:
+            if (denied := admin.authorized(request)) is not None:
+                return denied
+        if request.method != "GET":
+            return _error(405, "method not allowed")
+        return Response(await anyio.to_thread.run_sync(registry.render),
+                        media_type="text/plain; version=0.0.4; charset=utf-8")
+
+    async def local_not_found(request: Request) -> Response:
+        return _error(404, "not found")
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -403,9 +640,54 @@ def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys
 
     app = Starlette(routes=[
         Route(SYSTEM_ONE, proxy.system_one, methods=["POST"]),
-        Route("/healthz", proxy.healthz, methods=["GET"]),
-        Route("/{path:path}", proxy.passthrough, methods=methods),
+        Route("/healthz", proxy.healthz, methods=ALL_METHODS),
+        Route("/readyz", readyz, methods=ALL_METHODS),
+        Route("/metrics", metrics_endpoint, methods=ALL_METHODS),
+        *admin.routes(),
+        Route("/jevstiller/{rest:path}", local_not_found, methods=ALL_METHODS),   # never forwarded
+        Route("/{path:path}", proxy.passthrough, methods=ALL_METHODS),
     ], lifespan=lifespan)
     app.state.proxy = proxy
-    app.add_middleware(AccessMiddleware, settings=settings)
+    app.state.metrics = registry
+    app.add_middleware(AccessMiddleware, settings=settings, metrics=metrics)
     return app
+
+
+def _task_gauges(registry: MetricsRegistry, manager: TaskManager, keys: KeyRegistry) -> None:
+    def tasks():
+        return [((), len(manager.tasks()))]
+
+    def loaded():
+        return [((), len(manager.loaded()))]
+
+    def memory():
+        return [((), manager.memory_mb() * 2**20)]
+
+    def training():
+        stats = getattr(manager.train_executor, "stats", None)
+        if not callable(stats):
+            return []
+        s = stats()
+        return [(("running",), s["running"]), (("queued",), s["queued"])]
+
+    def verified_keys():
+        now = time.monotonic()
+        with keys._lock:
+            return [((), sum(1 for t in keys._verified.values() if now - t < keys.ttl_s))]
+
+    def per_task():
+        out = []
+        for key in manager.loaded():
+            with manager._lock:
+                e = manager._engines.get(key)
+            if e is not None:
+                out.append(((key, e._prod.name if e._prod else "-", e.mode), e.training_priority()))
+        return out
+
+    registry.gauge("jevstiller_tasks", "Registered tasks", fn=tasks)
+    registry.gauge("jevstiller_tasks_loaded", "Tasks loaded in memory", fn=loaded)
+    registry.gauge("jevstiller_student_memory_bytes", "Memory held by loaded students", fn=memory)
+    registry.gauge("jevstiller_training_jobs", "Training jobs by state", ["state"], fn=training)
+    registry.gauge("jevstiller_verified_keys", "API keys accepted by Jev within the TTL", fn=verified_keys)
+    registry.gauge("jevstiller_task_teacher_calls_per_minute", "Recent teacher-call rate per loaded task",
+                   ["task", "production", "mode"], fn=per_task)

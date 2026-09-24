@@ -187,12 +187,13 @@ class Jevstiller:
 
     def __init__(self, task: Task, teacher: Teacher, data_dir: str | Path,
                  encoder: Encoder | None = None, config: Config | None = None,
-                 train_executor: Executor | None = None):
+                 train_executor: Executor | None = None, hash_key: bytes | None = None):
         self.task = task
         self.teacher = teacher
         self.cfg = config or Config()
         self.encoder = encoder or HashEncoder()
         self.train_executor = train_executor
+        self.hash_key = hash_key                # keys the per-row text hash (HMAC) when given
         self.dir = Path(data_dir) / task.name
         self.dir.mkdir(parents=True, exist_ok=True)
         self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction)
@@ -339,14 +340,16 @@ class Jevstiller:
             raise TeacherError(failed, partial) from next(iter(failed.values()))
         return results
 
-    def route(self, texts: Sequence[State]) -> Routed:
+    def route(self, texts: Sequence[State], stexts: Sequence[str] | None = None,
+              X: np.ndarray | None = None) -> Routed:
         """Decide, for each state, whether the student answers it or the teacher must. Encodes and runs the
         models; no network, no store writes. Finish with `complete` (always, even if the teacher call fails),
-        after asking the teacher about `routed.to_teacher`."""
+        after asking the teacher about `routed.to_teacher`. `stexts` / `X` (the states' canonical text and
+        embeddings from this task's encoder) may be passed in when several tasks route the same states."""
         t0 = time.perf_counter()
         n = len(texts)
-        stexts = [state_text(t) for t in texts]
-        X = self.encoder.encode(stexts)
+        stexts = [state_text(t) for t in texts] if stexts is None else list(stexts)
+        X = self.encoder.encode(stexts) if X is None else X
         with self._state:                                   # one consistent snapshot of the routing state
             mode, prod, shadow, audit_rate = self.mode, self._prod, self._shadow, self.audit_rate
             draws = self.rng.random(n)
@@ -361,7 +364,7 @@ class Jevstiller:
         results: list[Result | None] = [None] * n
         to_teacher: list[int] = []
         for i in range(n):
-            r = Record(text=stexts[i] if self.cfg.store_text else "", text_hash=text_hash(stexts[i]),
+            r = Record(text=stexts[i] if self.cfg.store_text else "", text_hash=text_hash(stexts[i], self.hash_key),
                        task_version=self.task.version, encoder_id=self.encoder.id,
                        embedding=X[i], served_by="teacher", routing_reason="", channel="",
                        state_type="text" if isinstance(texts[i], str) else "json")

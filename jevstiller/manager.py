@@ -18,6 +18,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import shutil
 import threading
 import time
@@ -73,8 +74,9 @@ def _release_free_memory() -> None:
 def task_key(tenant: str, task: Task, question_type: str = "choice", model: str | None = None) -> str:
     """Stable id of (tenant, question, requested teacher model). Hex, so it is also a safe directory name.
     `model` is the model the caller asked for (e.g. "jev-latest"): callers asking different models are asking
-    different teachers and must not share a student."""
-    ident = {"tenant": tenant, "type": question_type, "version": task.version}
+    different teachers and must not share a student. The question is identified by its full 256-bit
+    fingerprint, never the 48-bit `Task.version` (security audit run 1)."""
+    ident = {"tenant": tenant, "type": question_type, "question": task.fingerprint}
     if model:
         ident["model"] = model
     return hashlib.sha256(canonical_json(ident).encode()).hexdigest()[:20]
@@ -105,6 +107,7 @@ class TaskInfo:
     created: float
     last_seen: float
     model: str | None = None            # the teacher model requested by callers, part of the key
+    mode: str | None = None             # operator override of Config.mode (admin API / config file)
 
     def task(self) -> Task:
         return Task(self.key, self.instructions, self.classes, self.target_agreement)
@@ -157,6 +160,11 @@ class TaskManager:
     - `blas_threads`: caps BLAS threads for the whole process (serving); None leaves it alone.
     - `text_retention_s`: blank the raw text of samples older than this, in every task, about hourly (hash,
       embedding and teacher answers are kept, so they still train). None keeps text (see Config.store_text).
+    - `max_tasks`: new questions beyond this many tasks stay pass-through (`task_limit`).
+    - `hash_key`: key for the per-row text hash (HMAC), e.g. the deployment salt, so `store_text=False` keeps
+      no plain hash of the text.
+    - `task_overrides`: {task key: {"target_agreement": x, "mode": m}} written into those tasks at startup.
+    Directories are created with mode 0700.
 
     One `encoder` (wrap it in `BatchingEncoder` to merge concurrent calls) and one `train_executor` are shared
     by every task; with a `TrainScheduler`, training is fair across tenants and prioritised by each task's
@@ -168,7 +176,8 @@ class TaskManager:
                  admission: Admission | None = None, max_tasks_per_tenant: int | None = None,
                  idle_ttl_s: float | None = None, train_executor: Executor | None = None,
                  janitor_interval_s: float = 5.0, blas_threads: int | None = 1,
-                 text_retention_s: float | None = None):
+                 text_retention_s: float | None = None, max_tasks: int | None = 10_000,
+                 hash_key: bytes | None = None, task_overrides: Mapping[str, Mapping[str, Any]] | None = None):
         if blas_threads:
             # Serving runs many small matrix products from many threads; BLAS's default of one thread per
             # core for each of them oversubscribes the CPU (1 thread: 2.4x throughput, 4x lower p99 in
@@ -177,7 +186,8 @@ class TaskManager:
             threadpool_limits(limits=blas_threads, user_api="blas")
         _allocator_setup()
         self.root = Path(data_dir) / "tasks"
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.max_tasks, self.hash_key = max_tasks, hash_key
         self.teacher, self.encoder = teacher, encoder
         self.cfg = config or Config()
         self.target_agreement = target_agreement
@@ -200,16 +210,65 @@ class TaskManager:
         for f in self.root.glob("*/task.json"):
             try:
                 info = TaskInfo(**json.loads(f.read_text()))
+                info = self._migrate_key(info, f.parent)
             except (OSError, ValueError, TypeError):
                 log.exception("skipping unreadable task file %s", f)
                 continue
             self._index[info.key] = info
             self._per_tenant[info.tenant] = self._per_tenant.get(info.tenant, 0) + 1
+        for key, o in (task_overrides or {}).items():
+            if key in self._index:
+                if "target_agreement" in o:
+                    self.set_target(key, float(o["target_agreement"]))
+                if "mode" in o:
+                    self.set_mode(key, o["mode"])
+            else:
+                log.warning("config overrides for unknown task %s ignored", key)
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._janitor = threading.Thread(target=self._janitor_loop, args=(janitor_interval_s,), daemon=True,
                                          name="jevstiller-janitor")
         self._janitor.start()
+
+    def _migrate_key(self, info: TaskInfo, directory: Path) -> TaskInfo:
+        """Tasks stored under an older key scheme are re-keyed (directory renamed) to the current one."""
+        expected = task_key(info.tenant, info.task(), model=info.model)
+        if info.key == expected and directory.name == expected:
+            return info
+        target = self.root / expected
+        if target.exists():
+            raise ValueError(f"cannot re-key task {directory.name} to {expected}: target exists")
+        os.replace(directory, target)
+        info = dataclasses.replace(info, key=expected)
+        self._write_info(info)
+        log.info("re-keyed task %s -> %s (question fingerprint)", directory.name, expected)
+        return info
+
+    # ---- operator controls -------------------------------------------------------
+    def set_target(self, key: str, target_agreement: float) -> None:
+        """Change a task's target agreement (persisted; applied to the loaded engine at once)."""
+        if not 0.5 <= target_agreement < 1.0:
+            raise ValueError("target_agreement must be in [0.5, 1)")
+        with self._lock:
+            info = self._index[key]
+            info.target_agreement = target_agreement
+            e = self._engines.get(key)
+        self._write_info(info)
+        if e is not None:
+            e.task = dataclasses.replace(e.task, target_agreement=target_agreement)
+
+    def set_mode(self, key: str, mode: str | None) -> None:
+        """Pin a task's mode ("auto", "teacher_only", "cascade"; None = config default). Persisted."""
+        from .task import MODES
+        if mode is not None and mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES} or null")
+        with self._lock:
+            info = self._index[key]
+            info.mode = mode
+            e = self._engines.get(key)
+        self._write_info(info)
+        if e is not None:
+            e.set_mode(mode or self.cfg.mode)
 
     # ---- lookup -----------------------------------------------------------------
     def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
@@ -249,7 +308,8 @@ class TaskManager:
             self._release(key)
 
     def route(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
-              states: Sequence[State], model: str | None = None) -> Routing:
+              states: Sequence[State], model: str | None = None, stexts: Sequence[str] | None = None,
+              X: Any = None) -> Routing:
         """First half of a request whose teacher call the caller makes itself (the proxy): find or admit the
         task and let its engine decide. Always follow with `complete` (it releases the engine). A task that
         is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher."""
@@ -260,7 +320,7 @@ class TaskManager:
                 return Routing(key, task, None, None, reason)
         engine = self._acquire(key)
         try:
-            routed = engine.route(states)
+            routed = engine.route(states, stexts, X)
         except BaseException:
             self._release(key)
             raise
@@ -290,6 +350,8 @@ class TaskManager:
         with self._lock:
             if key in self._index:
                 return None
+            if self.max_tasks is not None and len(self._index) >= self.max_tasks:
+                return "task_limit"
             if self.max_tasks_per_tenant is not None and self._per_tenant.get(tenant, 0) >= self.max_tasks_per_tenant:
                 if tenant not in self._limit_logged:
                     self._limit_logged.add(tenant)
@@ -299,7 +361,7 @@ class TaskManager:
             now = time.time()
             info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now,
                             model)
-            (self.root / key).mkdir(parents=True, exist_ok=True)
+            (self.root / key).mkdir(parents=True, exist_ok=True, mode=0o700)
             self._write_info(info)
             self._index[key] = info
             self._per_tenant[tenant] = self._per_tenant.get(tenant, 0) + 1
@@ -353,8 +415,9 @@ class TaskManager:
             ex = self.train_executor
             if isinstance(ex, TrainScheduler):              # jobs carry the task's tenant and priority
                 ex = ex.for_task(key, info.tenant)
-            e = Jevstiller(info.task(), self.teacher, self.root, encoder=self.encoder,
-                           config=dataclasses.replace(self.cfg), train_executor=ex)
+            cfg = dataclasses.replace(self.cfg, mode=info.mode or self.cfg.mode)
+            e = Jevstiller(info.task(), self.teacher, self.root, encoder=self.encoder, config=cfg,
+                           train_executor=ex, hash_key=self.hash_key)
             if isinstance(ex, TaskExecutor):
                 ex.priority = e.training_priority
             with self._lock:

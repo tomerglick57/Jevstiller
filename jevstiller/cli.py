@@ -1,8 +1,14 @@
-"""`jevstiller serve`: run the drop-in Jev proxy.
+"""`jevstiller` command line.
 
-    pip install "jevstiller[server,onnx]"
-    jevstiller serve --data-dir ./jevstiller-data --port 8080
-    export TYPESAFE_BASE_URL=http://localhost:8080          # in the calling services; nothing else changes
+    jevstiller serve [--config jevstiller.toml] [flags]      run the drop-in Jev proxy
+    jevstiller config [--config ...]                         print the effective settings (secrets redacted)
+    jevstiller key-hash --data-dir DIR  < key                salted hash of an API key, for the tenants map
+    jevstiller backup --data-dir DIR --out BACKUP            consistent copy, safe while serving
+    jevstiller restore --from BACKUP --data-dir DIR          into an empty data dir (server stopped)
+    jevstiller admin [--url URL] [--token T] <command>       the admin API: tasks, status, mode, target, ...
+
+Settings: built-in defaults < config file (--config or JEVSTILLER_CONFIG) < JEVSTILLER_* environment < flags.
+See docs/configuration.md.
 """
 from __future__ import annotations
 
@@ -10,9 +16,43 @@ import argparse
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 
-from .task import Config
+
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line. Access-log records (already JSON) are merged in as fields."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        out = {"ts": round(record.created, 3), "level": record.levelname.lower(), "logger": record.name}
+        msg = record.getMessage()
+        if record.name == "jevstiller.access":
+            try:
+                out.update(json.loads(msg))
+            except ValueError:
+                out["msg"] = msg
+        else:
+            out["msg"] = msg
+        if record.exc_info:
+            out["exc"] = self.formatException(record.exc_info)
+        return json.dumps(out, ensure_ascii=False)
+
+
+def _logging(level: str, fmt: str) -> None:
+    handler = logging.StreamHandler()
+    if fmt == "json":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(level.upper())
+
+
+def _settings(a: argparse.Namespace):
+    from .settings import load
+    cli = {k: v for k, v in vars(a).items() if k not in ("cmd", "config", "func") and v is not None}
+    return load(a.config, cli)
 
 
 def _serve(a: argparse.Namespace) -> None:
@@ -22,87 +62,216 @@ def _serve(a: argparse.Namespace) -> None:
     from .manager import Admission, TaskManager
     from .scheduler import TrainScheduler
     from .server import KeyRegistry, ProxySettings, create_app, load_salt
+    from .task import Config
 
-    logging.basicConfig(level=a.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    encoder = BatchingEncoder(load_encoder(a.encoder, backend=a.backend, device=a.device))
-    scheduler = TrainScheduler(workers=a.train_workers)
+    s = _settings(a)
+    os.umask(0o077)                                     # task data is traffic: owner-only files and dirs
+    _logging(s.log_level, s.log_format)
+    log = logging.getLogger("jevstiller")
+    data = Path(s.data_dir)
+    data.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if data.stat().st_mode & 0o077:
+        log.warning("data dir %s is readable by other users (mode %o); it holds request text",
+                    data, data.stat().st_mode & 0o777)
+    if s.access_token and len(s.access_token) < 16:
+        log.warning("the access token is shorter than 16 characters")
+    if s.tenants:
+        log.info("tenants map: %d keys -> %d tenants; other keys use tenancy=%s",
+                 len(s.tenants), len(set(s.tenants.values())), s.tenancy)
+    salt = load_salt(data)
+    encoder = BatchingEncoder(load_encoder(s.encoder, backend=s.backend, device=s.device))
+    encoder.encode(["warm up"])
+    scheduler = TrainScheduler(workers=s.train_workers)
 
-    class _NoTeacher:                                       # the proxy makes every teacher call itself
+    class _NoTeacher:                                   # the proxy makes every teacher call itself
         name = "jev"
 
         def classify(self, texts, task):
             raise RuntimeError("the proxy calls the teacher itself")
 
-    retention = a.text_retention_days * 86400 if a.text_retention_days else None
-    manager = TaskManager(a.data_dir, _NoTeacher(), encoder, Config(store_text=not a.no_store_text),
-                          target_agreement=a.target_agreement, max_loaded=a.max_loaded,
-                          admission=Admission(min_requests=a.admit_after), max_tasks_per_tenant=a.max_tasks_per_tenant,
-                          train_executor=scheduler, text_retention_s=retention)
-    tenant_map = json.loads(Path(a.tenants_file).read_text()) if a.tenants_file else {}
-    settings = ProxySettings(upstream=a.upstream, upstream_timeout_s=a.upstream_timeout, tenancy=a.tenancy,
-                             tenant_map=tenant_map, access_token=a.access_token or None,
-                             allow_networks=[n for n in a.allow_network for n in n.split(",") if n],
-                             max_body_bytes=int(a.max_body_mb * 2**20))
-    app = create_app(manager, settings, KeyRegistry(load_salt(a.data_dir), settings.key_ttl_s),
+    manager = TaskManager(
+        data, _NoTeacher(), encoder, Config(**{**s.engine, "store_text": s.store_text}),
+        target_agreement=s.target_agreement, max_loaded=s.max_loaded, max_memory_mb=s.max_memory_mb,
+        admission=Admission(min_requests=s.admit_after, window_s=s.admit_window_s),
+        max_tasks_per_tenant=s.max_tasks_per_tenant, max_tasks=s.max_tasks,
+        idle_ttl_s=s.idle_ttl_days * 86400 if s.idle_ttl_days else None,
+        text_retention_s=s.text_retention_days * 86400 if s.text_retention_days else None,
+        train_executor=scheduler, blas_threads=s.blas_threads, hash_key=salt, task_overrides=s.tasks)
+    settings = ProxySettings(upstream=s.upstream, upstream_timeout_s=s.upstream_timeout_s,
+                             max_upstream_inflight=s.max_upstream_inflight, tenancy=s.tenancy,
+                             key_ttl_s=s.key_ttl_s, price_per_mtok=s.price_per_mtok, tenant_map=s.tenants,
+                             access_token=s.access_token, allow_networks=s.allow_networks,
+                             max_body_bytes=int(s.max_body_mb * 2**20), max_questions=s.max_questions)
+
+    def ready() -> dict[str, bool]:
+        probe = data / ".ready-probe"
+        try:
+            probe.write_bytes(b"ok")
+            probe.unlink()
+            writable = True
+        except OSError:
+            writable = False
+        return {"data_dir_writable": writable, "encoder": encoder.dim > 0}
+
+    app = create_app(manager, settings, KeyRegistry(salt, s.key_ttl_s), admin_token=s.admin_token,
+                     metrics_public=s.metrics_public, ready=ready,
                      closers=[lambda: scheduler.shutdown(wait=True, cancel_futures=True), encoder.close])
-    uvicorn.run(app, host=a.host, port=a.port, workers=1, log_level=a.log_level.lower(), access_log=False,
-                ssl_certfile=a.ssl_certfile, ssl_keyfile=a.ssl_keyfile)
+    log.info("jevstiller serving on %s:%d, upstream %s, tenancy %s, admin API %s", s.host, s.port, s.upstream,
+             s.tenancy, "on" if s.admin_token else "off")
+    # X-Forwarded-For is honoured only from proxies the operator lists (it decides allow_networks).
+    uvicorn.run(app, host=s.host, port=s.port, workers=1, log_level=s.log_level.lower(), access_log=False,
+                ssl_certfile=s.ssl_certfile, ssl_keyfile=s.ssl_keyfile, log_config=None,
+                proxy_headers=bool(s.trust_forwarded_for),
+                forwarded_allow_ips=",".join(s.trust_forwarded_for) if s.trust_forwarded_for else None)
+
+
+def _config(a: argparse.Namespace) -> None:
+    print(json.dumps(_settings(a).redacted(), indent=2))
 
 
 def _key_hash(a: argparse.Namespace) -> None:
-    """Print the deployment's salted hash of an API key read from stdin (for the tenants file)."""
+    """Print the deployment's salted hash of an API key read from stdin (for the tenants map). Refuses to
+    create a salt: a hash made with a different salt would never match the server's."""
     import getpass
-    import sys
 
     from .server import KeyRegistry, load_salt
+    try:
+        salt = load_salt(a.data_dir, create=False)
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e)) from None
     key = sys.stdin.readline().strip() if not sys.stdin.isatty() else getpass.getpass("API key: ").strip()
     if not key:
         raise SystemExit("no key given")
-    print(KeyRegistry(load_salt(a.data_dir), 0).hash(key))
+    print(KeyRegistry(salt, 0).hash(key))
+
+
+def _backup(a: argparse.Namespace) -> None:
+    from .backup import backup
+    print(json.dumps(backup(a.data_dir, a.out), indent=2))
+
+
+def _restore(a: argparse.Namespace) -> None:
+    from .backup import restore
+    print(json.dumps(restore(getattr(a, "from"), a.data_dir, force=a.force), indent=2))
+
+
+def _admin(a: argparse.Namespace) -> None:
+    import httpx
+    token = a.token or os.environ.get("JEVSTILLER_ADMIN_TOKEN")
+    if not token and a.token_file:
+        token = Path(a.token_file).read_text().strip()
+    if not token:
+        raise SystemExit("an admin token is required (--token, --token-file or JEVSTILLER_ADMIN_TOKEN)")
+    base = a.url.rstrip("/") + "/jevstiller/v1"
+    calls = {
+        "tasks": ("GET", "/tasks", None),
+        "status": ("GET", f"/tasks/{a.key}", None),
+        "versions": ("GET", f"/tasks/{a.key}/versions", None),
+        "mode": ("POST", f"/tasks/{a.key}/mode", {"mode": a.value}),
+        "target": ("POST", f"/tasks/{a.key}/target", {"target_agreement": _num(a.value)}),
+        "train": ("POST", f"/tasks/{a.key}/train", None),
+        "promote": ("POST", f"/tasks/{a.key}/promote", {"version": a.value}),
+        "rollback": ("POST", f"/tasks/{a.key}/rollback", None),
+        "delete": ("DELETE", f"/tasks/{a.key}", None),
+        "delete-tenant": ("DELETE", f"/tenants/{a.key}", None),
+        "stats": ("GET", "/stats", None),
+    }
+    method, path, body = calls[a.action]
+    params = {"tenant": a.key} if a.action == "tasks" and a.key else None
+    r = httpx.request(method, base + path, json=body, params=params, timeout=600,
+                      headers={"Authorization": f"Bearer {token}"})
+    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
+    if a.action == "status" and r.is_success and isinstance(data, dict) and not a.json:
+        print(data.get("report", ""))
+    else:
+        print(json.dumps(data, indent=2) if not isinstance(data, str) else data)
+    if not r.is_success:
+        raise SystemExit(1)
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return v
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="jevstiller")
+    ap = argparse.ArgumentParser(prog="jevstiller", description="Jev, distilled on the fly.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("serve", help="run the drop-in Jev proxy")
-    env = os.environ.get
-    s.add_argument("--host", default=env("JEVSTILLER_HOST", "0.0.0.0"))
-    s.add_argument("--port", type=int, default=int(env("JEVSTILLER_PORT", "8080")))
-    s.add_argument("--data-dir", default=env("JEVSTILLER_DATA_DIR", "./jevstiller-data"))
-    s.add_argument("--upstream", default=env("JEVSTILLER_UPSTREAM", "https://api.typesafe.ai"))
-    s.add_argument("--upstream-timeout", type=float, default=9.0)
-    s.add_argument("--encoder", default=env("JEVSTILLER_ENCODER", "small"), help="small | base | large | hash | ...")
-    s.add_argument("--backend", default="auto")
-    s.add_argument("--device", default="auto")
-    s.add_argument("--target-agreement", type=float, default=float(env("JEVSTILLER_TARGET_AGREEMENT", "0.98")))
-    s.add_argument("--tenancy", choices=["shared", "per_key"], default=env("JEVSTILLER_TENANCY", "shared"))
-    s.add_argument("--admit-after", type=int, default=50, help="requests before a new question becomes a task")
-    s.add_argument("--max-loaded", type=int, default=64)
-    s.add_argument("--max-tasks-per-tenant", type=int, default=None)
-    s.add_argument("--train-workers", type=int, default=2)
-    s.add_argument("--log-level", default=env("JEVSTILLER_LOG_LEVEL", "info"))
-    # security and data
-    s.add_argument("--tenants-file", default=env("JEVSTILLER_TENANTS_FILE"),
-                   help='JSON {"<key hash>": "<tenant>"}; hashes from `jevstiller key-hash`')
-    s.add_argument("--access-token", default=env("JEVSTILLER_ACCESS_TOKEN"),
-                   help="require callers to send this in x-jevstiller-token")
-    s.add_argument("--allow-network", action="append", default=[n for n in [env("JEVSTILLER_ALLOW_NETWORKS")] if n],
-                   help="client CIDR allowed to use the proxy (repeat, or comma-separated)")
-    s.add_argument("--max-body-mb", type=float, default=4.0)
-    s.add_argument("--no-store-text", action="store_true", default=env("JEVSTILLER_STORE_TEXT", "1") == "0",
-                   help="keep only hashes and embeddings of requests, never their text")
-    s.add_argument("--text-retention-days", type=float, default=float(env("JEVSTILLER_TEXT_RETENTION_DAYS", "0")),
-                   help="blank stored request text older than this (0 = keep)")
-    s.add_argument("--ssl-certfile", default=env("JEVSTILLER_SSL_CERTFILE"))
-    s.add_argument("--ssl-keyfile", default=env("JEVSTILLER_SSL_KEYFILE"))
 
-    k = sub.add_parser("key-hash", help="print the salted hash of an API key (read from stdin), for --tenants-file")
-    k.add_argument("--data-dir", default=env("JEVSTILLER_DATA_DIR", "./jevstiller-data"))
+    def settings_args(p: argparse.ArgumentParser) -> None:
+        """Flags override the config file and environment; unset flags (None) don't."""
+        p.add_argument("--config", help="TOML settings file (default: $JEVSTILLER_CONFIG)")
+        p.add_argument("--host")
+        p.add_argument("--port", type=int)
+        p.add_argument("--data-dir")
+        p.add_argument("--upstream")
+        p.add_argument("--upstream-timeout", dest="upstream_timeout_s", type=float)
+        p.add_argument("--encoder", help="small | base | large | hash | onnx:<repo> | torch:<model>")
+        p.add_argument("--backend")
+        p.add_argument("--device")
+        p.add_argument("--target-agreement", type=float)
+        p.add_argument("--tenancy", choices=["shared", "per_key"])
+        p.add_argument("--admit-after", type=int, help="requests before a new question becomes a task")
+        p.add_argument("--max-loaded", type=int)
+        p.add_argument("--max-tasks", type=int)
+        p.add_argument("--max-tasks-per-tenant", type=int)
+        p.add_argument("--max-questions", type=int, help="distinct choice questions routed per request")
+        p.add_argument("--train-workers", type=int)
+        p.add_argument("--log-level")
+        p.add_argument("--log-format", choices=["text", "json"])
+        p.add_argument("--tenants-file", help='JSON {"<key hash>": "<tenant>"}; hashes from `jevstiller key-hash`')
+        p.add_argument("--access-token", help="require callers to send this in x-jevstiller-token "
+                                              "(prefer JEVSTILLER_ACCESS_TOKEN or access_token_file: flags are "
+                                              "visible in the process list)")
+        p.add_argument("--access-token-file")
+        p.add_argument("--admin-token-file", help="enables the admin API and protects /metrics")
+        p.add_argument("--allow-network", dest="allow_networks", action="append",
+                       help="client CIDR allowed to use the proxy (repeatable)")
+        p.add_argument("--trust-forwarded-for", action="append",
+                       help="proxy address whose X-Forwarded-For is trusted (repeatable)")
+        p.add_argument("--max-body-mb", type=float)
+        p.add_argument("--no-store-text", dest="store_text", action="store_const", const=False,
+                       help="keep only hashes and embeddings of requests, never their text")
+        p.add_argument("--text-retention-days", type=float, help="blank stored request text older than this")
+        p.add_argument("--ssl-certfile")
+        p.add_argument("--ssl-keyfile")
+
+    s = sub.add_parser("serve", help="run the drop-in Jev proxy")
+    settings_args(s)
+    s.set_defaults(func=_serve)
+    c = sub.add_parser("config", help="print the effective settings (secrets redacted)")
+    settings_args(c)
+    c.set_defaults(func=_config)
+
+    k = sub.add_parser("key-hash", help="print the salted hash of an API key (read from stdin)")
+    k.add_argument("--data-dir", default=os.environ.get("JEVSTILLER_DATA_DIR", "./jevstiller-data"))
+    k.set_defaults(func=_key_hash)
+
+    b = sub.add_parser("backup", help="consistent copy of a data dir, safe while serving")
+    b.add_argument("--data-dir", default=os.environ.get("JEVSTILLER_DATA_DIR", "./jevstiller-data"))
+    b.add_argument("--out", required=True)
+    b.set_defaults(func=_backup)
+    r = sub.add_parser("restore", help="restore a backup into an empty data dir (server stopped)")
+    r.add_argument("--from", required=True)
+    r.add_argument("--data-dir", default=os.environ.get("JEVSTILLER_DATA_DIR", "./jevstiller-data"))
+    r.add_argument("--force", action="store_true")
+    r.set_defaults(func=_restore)
+
+    ad = sub.add_parser("admin", help="call the admin API")
+    ad.add_argument("--url", default=os.environ.get("JEVSTILLER_ADMIN_URL", "http://127.0.0.1:8080"))
+    ad.add_argument("--token")
+    ad.add_argument("--token-file")
+    ad.add_argument("--json", action="store_true", help="raw JSON for `status`")
+    ad.add_argument("action", choices=["tasks", "status", "versions", "mode", "target", "train", "promote",
+                                       "rollback", "delete", "delete-tenant", "stats"])
+    ad.add_argument("key", nargs="?", help="task key (tenant for `tasks` / `delete-tenant`)")
+    ad.add_argument("value", nargs="?", help="mode, target agreement or version")
+    ad.set_defaults(func=_admin)
+
     a = ap.parse_args(argv)
-    if a.cmd == "serve":
-        _serve(a)
-    elif a.cmd == "key-hash":
-        _key_hash(a)
+    a.func(a)
 
 
 if __name__ == "__main__":

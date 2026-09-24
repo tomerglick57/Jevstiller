@@ -341,6 +341,7 @@ all = [
     { name = "onnxruntime", version = "1.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "starlette" },
     { name = "tokenizers" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "torch" },
     { name = "transformers" },
     { name = "typesafe-sdk" },
@@ -351,6 +352,7 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
     { name = "starlette" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "typesafe-sdk" },
     { name = "uvicorn" },
 ]
@@ -372,6 +374,7 @@ onnx = [
 server = [
     { name = "httpx" },
     { name = "starlette" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "uvicorn" },
 ]
 torch = [
@@ -395,6 +398,7 @@ requires-dist = [
     { name = "threadpoolctl", specifier = ">=3.1" },
     { name = "tokenizers", marker = "extra == 'gpu'", specifier = ">=0.15" },
     { name = "tokenizers", marker = "extra == 'onnx'", specifier = ">=0.15" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'server'", specifier = ">=2" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.1" },
     { name = "transformers", marker = "extra == 'torch'", specifier = ">=4.36" },
     { name = "typesafe-sdk", marker = "extra == 'jev'" },

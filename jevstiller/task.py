@@ -72,10 +72,16 @@ class Task:
 
     @property
     def version(self) -> str:
-        """Hash of what the teacher is asked. Independent of class order (a loaded student is reordered to
-        the task's labels), and unchanged from 0.1.0 for text instructions/descriptions."""
+        """Short hash of what the teacher is asked, used to tag stored rows. Independent of class order (a
+        loaded student is reordered to the task's labels), and unchanged from 0.1.0 for text tasks."""
+        return self.fingerprint[:12]
+
+    @property
+    def fingerprint(self) -> str:
+        """Full SHA-256 of what the teacher is asked (the identity the task manager keys tasks on: 48 bits
+        of `version` are within reach of a second-preimage search)."""
         blob = json.dumps({"i": self.instructions, "c": self.classes}, sort_keys=True).encode()
-        return hashlib.sha256(blob).hexdigest()[:12]
+        return hashlib.sha256(blob).hexdigest()
 
 
 MODES = ("auto", "teacher_only", "cascade")

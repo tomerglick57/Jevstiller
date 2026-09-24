@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import sqlite3
@@ -21,7 +22,11 @@ IID_CHANNELS = ("bootstrap", "audit", "fallback")   # only these may feed calibr
 TEACHER_CHANNELS = IID_CHANNELS + ("deferred",)
 
 
-def text_hash(text: str) -> str:
+def text_hash(text: str, key: bytes | None = None) -> str:
+    """64-bit id of a text: fixes its calibration split and keys replays. With `key` (the deployment salt)
+    it is an HMAC, so a store kept with store_text=False holds no plain hash of the text."""
+    if key:
+        return hmac.new(key, text.encode(), hashlib.sha256).hexdigest()[:16]
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
@@ -110,16 +115,7 @@ class Store(Protocol):
     def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None): ...
     def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int,
                      teacher_model: str | None = None): ...
-    def redact_text(self, older_than_ts: float) -> int:
-        """Blank the stored text of rows older than `older_than_ts` (hash, embedding and answers stay, so
-        they still train and calibrate). Returns the number of rows changed."""
-        self.flush()
-        conn = self._conn()
-        with self._write_lock, conn:
-            cur = conn.execute("UPDATE samples SET text='' WHERE ts < ? AND text IS NOT NULL AND text != ''",
-                               (older_than_ts,))
-        return cur.rowcount
-
+    def redact_text(self, older_than_ts: float) -> int: ...
     def latest_teacher_model(self, task_version: str) -> str | None: ...
     def max_id(self) -> int: ...
     def events(self, limit: int = 20) -> list[dict]: ...
@@ -183,6 +179,7 @@ class SampleStore:
                 else:
                     conn = sqlite3.connect(self.path, timeout=self.busy_timeout_s, check_same_thread=False)
                     conn.execute("PRAGMA synchronous=NORMAL")  # durable across crashes in WAL mode
+                    conn.execute("PRAGMA secure_delete=ON")    # overwritten text is zeroed, not left in pages
                 self._conns.append(conn)
             self._local.conn = conn
         return conn
@@ -358,12 +355,24 @@ class SampleStore:
 
     def redact_text(self, older_than_ts: float) -> int:
         """Blank the stored text of rows older than `older_than_ts` (hash, embedding and answers stay, so
-        they still train and calibrate). Returns the number of rows changed."""
+        they still train and calibrate), and make sure the old text is gone from the files: secure_delete
+        zeroes freed page content, and a TRUNCATE checkpoint empties the WAL (retried while readers hold
+        it). Returns the number of rows changed."""
         self.flush()
         conn = self._conn()
         with self._write_lock, conn:
             cur = conn.execute("UPDATE samples SET text='' WHERE ts < ? AND text IS NOT NULL AND text != ''",
                                (older_than_ts,))
+        if cur.rowcount:
+            with self._write_lock:
+                for _ in range(20):
+                    busy, _, _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                    if not busy:
+                        break
+                    time.sleep(0.05)
+                else:
+                    log.warning("sample store %s: WAL still in use; redacted text leaves the WAL at the next "
+                                "checkpoint", self.path)
         return cur.rowcount
 
     def latest_teacher_model(self, task_version: str) -> str | None:

@@ -1,0 +1,23 @@
+# Example configuration for `jevstiller serve` (see docs/configuration.md for every key).
+[server]
+port = 8080
+data_dir = "/data"
+log_format = "json"
+
+[proxy]
+upstream = "https://api.typesafe.ai"
+tenancy = "shared"            # "per_key": callers' tasks and data are kept apart
+# allow_networks = ["10.0.0.0/8"]
+
+[manager]
+target_agreement = 0.98
+admit_after = 50
+max_loaded = 64
+train_workers = 2
+# text_retention_days = 30
+
+[encoder]
+spec = "small"
+
+[engine]
+audit_rate = 0.02

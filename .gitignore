@@ -221,3 +221,7 @@ __marimo__/
 experiments/results/
 experiments/data/
 experiments/cache/
+
+# Jevstiller deployment secrets
+deploy/admin-token.txt
+jevstiller-data/

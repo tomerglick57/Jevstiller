@@ -1,0 +1,22 @@
+# docker compose up -d        then, in the calling services:  TYPESAFE_BASE_URL=http://jevstiller:8080
+services:
+  jevstiller:
+    build: .
+    image: jevstiller:latest
+    ports: ["8080:8080"]
+    volumes:
+      - jevstiller-data:/data
+      - ./deploy/jevstiller.toml:/etc/jevstiller.toml:ro
+    environment:
+      JEVSTILLER_CONFIG: /etc/jevstiller.toml
+      JEVSTILLER_ADMIN_TOKEN_FILE: /run/secrets/jevstiller_admin_token
+    secrets: [jevstiller_admin_token]
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+secrets:
+  jevstiller_admin_token:
+    file: ./deploy/admin-token.txt      # create it: openssl rand -hex 32 > deploy/admin-token.txt
+
+volumes:
+  jevstiller-data:
