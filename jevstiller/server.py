@@ -68,6 +68,7 @@ LOCAL_PATHS = ("/healthz", "/readyz", "/metrics")          # served by the proxy
 PROBE_PATHS = ("/healthz", "/readyz")                     # GET/HEAD need no access token (load balancers)
 ALL_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 MAX_DETAIL_QUESTIONS = 64                                 # beyond this, x-jevstiller-detail is a summary
+UPSTREAM_POOL = 16                                        # connections per upstream client (see Proxy)
 
 
 @dataclass
@@ -84,6 +85,7 @@ class ProxySettings:
                                                            # uvicorn reports it; see trust_forwarded_for in cli)
     max_body_bytes: int = 4 * 2**20                        # larger requests get 413 (Jev's own limit is ~64k tokens)
     max_questions: int = 32                                # distinct choice questions routed per request
+    max_encoder_wait_ms: float = 200.0                     # encoder busier than this: forward (0 = never)
 
     def tenant_for(self, kh: str | None) -> str:
         if kh and kh in self.tenant_map:
@@ -215,10 +217,20 @@ class Proxy:
     def __init__(self, manager: TaskManager, settings: ProxySettings, keys: KeyRegistry,
                  client: httpx.AsyncClient | None = None, metrics: ProxyMetrics | None = None):
         self.manager, self.settings, self.keys = manager, settings, keys
-        self.client = client or httpx.AsyncClient(base_url=settings.upstream.rstrip("/"),
-                                                  timeout=settings.upstream_timeout_s, cookies=_no_cookies())
+        # Connections to Jev are split over several small clients, each request going to the least busy one.
+        # httpcore's pool does work per connection per waiting request on every event: one pool of 256 forwarded
+        # ~90 req/s at 256 callers, 16 pools of 16 ~840 (Jev's own ceiling with 290 ms answers: ~880).
+        n = max(1, settings.max_upstream_inflight)
+        self.clients = [client] if client is not None else [
+            httpx.AsyncClient(base_url=settings.upstream.rstrip("/"), timeout=settings.upstream_timeout_s,
+                              cookies=_no_cookies(), limits=httpx.Limits(max_connections=UPSTREAM_POOL,
+                                                                         max_keepalive_connections=UPSTREAM_POOL))
+            for _ in range(-(-n // UPSTREAM_POOL))]
+        self.client = self.clients[0]
+        self._client_busy = [0] * len(self.clients)             # event-loop only
         self.metrics = metrics or ProxyMetrics(MetricsRegistry())
         self._upstream_slots = settings.max_upstream_inflight   # event-loop only: no lock needed
+        self._routing = 0                                       # requests inside _route (event loop only)
         self.stats = {"local": 0, "forwarded": 0, "passthrough": 0, "errors": 0}
 
     # ---- upstream -----------------------------------------------------------------
@@ -236,10 +248,15 @@ class Proxy:
         self._upstream_slots -= 1
         t0 = time.perf_counter()
         try:
-            headers = {k: v for k, v in request.headers.items() if k.lower() not in FORWARD_DROP}
-            req = self.client.build_request(request.method, request.url.path, params=request.query_params,
-                                            headers=headers, content=body)
-            resp = await self.client.send(req)
+            i = min(range(len(self.clients)), key=self._client_busy.__getitem__)
+            self._client_busy[i] += 1
+            try:
+                headers = {k: v for k, v in request.headers.items() if k.lower() not in FORWARD_DROP}
+                req = self.clients[i].build_request(request.method, request.url.path, params=request.query_params,
+                                                    headers=headers, content=body)
+                resp = await self.clients[i].send(req)
+            finally:
+                self._client_busy[i] -= 1
         except httpx.TimeoutException:
             self.metrics.upstream.inc("timeout")
             return _error(504, "upstream API timed out (jevstiller)")
@@ -327,13 +344,17 @@ class Proxy:
             answer = _systemone_answer(resp)
             if answer is not None:
                 self.keys.accept(kh)
+            if answer is not None and not self._overloaded():       # record it, unless the encoder is saturated
                 routings, _ = await self._route(groups, specs, tenant, req)
-                self._defer_all(routings, "key_unverified")
-                await self._finish(routings, groups, answer, resp, (time.perf_counter() - t0) * 1000)
-                log_rec["tasks"] = [r.key for r in routings.values()][:8]
+                if routings is not None:                # None: routing failed and released everything
+                    self._defer_all(routings, "key_unverified")
+                    await self._finish(routings, groups, answer, resp, (time.perf_counter() - t0) * 1000)
+                    log_rec["tasks"] = [r.key for r in routings.values()][:8]
             return self._upstream_reply(resp, {n: "key_unverified" for g in groups.values() for n in g}, t0,
                                         log_rec)
 
+        if self._overloaded():                          # the local path would be slower than Jev: forward
+            return await self._plain_forward(request, body, kh, "overloaded", t0, log_rec)
         routings, unsupported = await self._route(groups, specs, tenant, req)
         if routings is None:                            # routing itself failed: fail open
             return await self._plain_forward(request, body, kh, "proxy_error", t0, log_rec)
@@ -368,6 +389,23 @@ class Proxy:
         for n in others:
             reasons[n] = "unsupported"
         return self._upstream_reply(resp, reasons, t0, log_rec)
+
+    def _overloaded(self) -> bool:
+        """The shared encoder is so backed up that a local answer would take longer than `max_encoder_wait_ms`.
+        Such requests go to Jev as they are: not routed, encoded or recorded. Without this, a burst beyond the
+        encoder's capacity queued without bound, and callers hit their timeouts (the P6.4 load test)."""
+        limit = self.settings.max_encoder_wait_ms
+        enc = self.manager.encoder
+        wait = getattr(enc, "expected_wait_s", None)
+        per = getattr(enc, "time_per_text_s", None)
+        if not limit or not callable(wait):
+            return False
+        # requests already routing wait for a worker thread before they reach the encoder's queue
+        ahead = max(wait(), (self._routing + 1) * per()) if callable(per) else wait()
+        if ahead * 1000 <= limit:
+            return False
+        self.metrics.questions.inc("overloaded")
+        return True
 
     async def _plain_forward(self, request: Request, body: bytes, kh: str | None, reason: str, t0: float,
                              log_rec: dict) -> Response:
@@ -411,10 +449,17 @@ class Proxy:
         (None, []) if routing failed unexpectedly (everything routed so far is released)."""
         routings: dict[str, Routing] = {}
         unsupported: list[str] = []
+        self._routing += 1
         try:
-            # the state is the same for every question: canonical text and embedding once per request
+            # the state is the same for every question: canonical text and embedding once per request, and the
+            # embedding only if some question is a task (requests that are only forwarded never pay for it)
             stexts = [state_text(req["state"])]
-            X = await anyio.to_thread.run_sync(self.manager.encoder.encode, stexts)
+            memo: list = []
+
+            def X():
+                if not memo:
+                    memo.append(self.manager.encoder.encode(stexts))
+                return memo[0]
             for spec in groups:
                 q = specs[spec]
                 try:
@@ -429,6 +474,8 @@ class Proxy:
             await self._finish(routings, groups, None, None, 0.0)   # releases; nothing is recorded
             self.stats["errors"] += 1
             return None, []
+        finally:
+            self._routing -= 1
         return routings, unsupported
 
     @staticmethod
@@ -633,7 +680,8 @@ def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys
     @contextlib.asynccontextmanager
     async def lifespan(app):
         yield
-        await proxy.client.aclose()
+        for c in proxy.clients:
+            await c.aclose()
         await anyio.to_thread.run_sync(manager.close)
         for close in closers:
             await anyio.to_thread.run_sync(close)
@@ -684,7 +732,19 @@ def _task_gauges(registry: MetricsRegistry, manager: TaskManager, keys: KeyRegis
                 out.append(((key, e._prod.name if e._prod else "-", e.mode), e.training_priority()))
         return out
 
+    def dropped():
+        from .store import dropped_records
+        return [((), dropped_records())]
+
+    def encoder_wait():
+        wait = getattr(manager.encoder, "expected_wait_s", None)
+        return [((), wait())] if callable(wait) else []
+
     registry.gauge("jevstiller_tasks", "Registered tasks", fn=tasks)
+    registry.gauge("jevstiller_encoder_wait_seconds", "How long a request would now wait for the shared encoder",
+                   fn=encoder_wait)
+    registry.counter_fn("jevstiller_store_dropped_records_total",
+                        "Records the sample stores failed to write (disk full, I/O errors)", fn=dropped)
     registry.gauge("jevstiller_tasks_loaded", "Tasks loaded in memory", fn=loaded)
     registry.gauge("jevstiller_student_memory_bytes", "Memory held by loaded students", fn=memory)
     registry.gauge("jevstiller_training_jobs", "Training jobs by state", ["state"], fn=training)

@@ -114,7 +114,12 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
   *Result (`benchmarks/manager.py --requests 60000`):* 1,000 tasks, 50 hot (90% of traffic), `max_loaded=50`, 8 threads, 5,600 loads/unloads. Throughput about 550 req/s. Hits: p50 2.8 ms, p99 7.5 ms. Reloading an unloaded task: p50 100 ms under load (4 ms alone). A first open, which creates the store: p50 210 ms. Student memory is capped at 118 MB.
   - Fixed on the way: BLAS oversubscription (`TaskManager(blas_threads=1)`: 2.4× throughput, p99 80 → 13 ms at 50 tasks). Also, maintenance now only works when something changed.
   - Also fixed: glibc kept freed arrays from unloaded tasks, and RSS climbed to 1.7 GB. It wasn't a leak: `malloc_trim` returns it. The manager now sets a fixed mmap threshold and trims after unloading.
-  - **Still open:** RSS ends at ~440 MB but peaks around 1 GB mid-run. The next suspects are SQLite page caches (2 MB × 2–3 connections per loaded task: try a smaller `cache_size`) and whether it's bounded over hours (P6.6 soak test). Also: reload p50 is 100 ms under load against 4 ms alone. That's lock and disk contention with the janitor's unloads, which is worth profiling before P3 ships.
+  - **Update (P6):** churn memory is explained and fixed.
+    - A reference cycle kept every unloaded engine alive until a full garbage collection.
+    - `max_loaded` wasn't held under a stream of loads: the janitor alone fell behind, and it skipped engines with a pass merely requested.
+    - glibc fragmented memory across many per-thread arenas (now 2).
+    - Re-measured: 7,365 load/unload cycles peak at 313 MB, where the same code without the fixes reached 2.7 GB. Reload latency under load is still ~110 ms p50.
+  - **Was open:** RSS ends at ~440 MB but peaks around 1 GB mid-run. The next suspects are SQLite page caches (2 MB × 2–3 connections per loaded task: try a smaller `cache_size`) and whether it's bounded over hours (P6.6 soak test). Also: reload p50 is 100 ms under load against 4 ms alone. That's lock and disk contention with the janitor's unloads, which is worth profiling before P3 ships.
 - [x] **P2.2** Shared encoder with micro-batching.
   *Result:* `BatchingEncoder` adds no waiting: one worker thread, and calls that queue up while it runs are merged into the next batch (optionally `max_wait_ms`). The manager takes one encoder for all tasks. Not benchmarked with a real GPU encoder yet.
 - [x] **P2.3** Shared storage layout. *Decision: one SQLite file per task* (`<data_dir>/tasks/<key>/samples.sqlite`). Tasks never share a writer, deleting a task is deleting a directory (P4.6), and a failure in one store doesn't touch the others. Reopening costs ~4 ms, after the store stopped re-running its schema on every open (`PRAGMA user_version`). A `Store` protocol documents the interface for a future Postgres backend. That backend would also need a way for the training job to read it.
@@ -184,11 +189,39 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 
 - [x] **P6.1** Proxy contract tests with the **real `typesafe-sdk`** (sync + async) against the proxy, as in the 2026-09-24 check. Cover local answers, forwarded answers, 401/422/429/5xx pass-through, `request_id` present, multi-question requests, object `state`, non-Choice questions. Run in CI against the pinned SDK and the latest SDK.
 - [x] **P6.2** Golden fixtures from P0.3 replayed through the proxy. The response bodies must parse identically to direct Jev.
-- [ ] **P6.3** Concurrency tests: many tasks × many threads/async callers. The audit rate stays at its target ±CI. No lost or double-written rows.
-- [ ] **P6.4** Load test (locust or k6): throughput and p50/p99 for local-only, forward-only, and mixed traffic. Targets go in the README.
-- [ ] **P6.5** Chaos: Jev down, Jev slow, 429 storms, 401 on a previously verified key, disk full, kill -9 during training/promote. Each has an expected behaviour written down and tested.
-- [ ] **P6.6** Soak test: 24 h replay with drift injected midway. Check fallback → retrain → re-promote without intervention, and flat memory.
-- [ ] **P6.7** End-to-end with live Jev through the proxy (after P0): one real task from cold start to promoted student. Record the report.
+- [x] **P6.3** Concurrency tests: many tasks × many threads/async callers. The audit rate stays at its target ±CI. No lost or double-written rows.
+  *Result (`tests/test_concurrency_many.py`):* 16 threads over 12 tasks with `max_loaded=3`, so tasks unload and reload under load while they train. Every item is recorded exactly once per task, nothing stays checked out, and at most 3 stay loaded. Through the proxy, 300 concurrent async clients (3 questions, 2 keys, including not-yet-verified keys) all get well-formed 200s, and each task's rows equal its requests. The audit rate under 8 threads is checked in `tests/test_concurrency.py`.
+- [x] **P6.4** Load test (locust or k6): throughput and p50/p99 for local-only, forward-only, and mixed traffic. Targets go in the README.
+  *Result (`benchmarks/load.py`, docs/benchmarks.md):*
+  - **Forwarding:** adds ~1–4 ms up to 64 callers, and reaches 585 req/s at 256 callers.
+  - **Local answers:** 16 ms p50 / 50 ms p99 with bge-small on CPU, up to the encoder's capacity (~150 texts/s here). Beyond it the excess is forwarded, so throughput keeps rising (424 req/s at 256 callers) and local answers stay under ~200 ms until the whole machine is CPU-bound.
+  - **Found and fixed:**
+    - Forwarding collapsed to ~70 req/s at 256 callers: one httpx pool of 256 connections, now pools of 16.
+    - Past the encoder's capacity, latency grew to 15 s p99: now `max_encoder_wait_ms` backpressure.
+    - Forwarded-only requests were being encoded.
+    - httpx logged every upstream call at `info`.
+- [x] **P6.5** Chaos: Jev down, Jev slow, 429 storms, 401 on a previously verified key, disk full, kill -9 during training/promote. Each has an expected behaviour written down and tested.
+  *Result (`tests/test_chaos.py`; expected behaviour in docs/operations.md, "Common situations"):*
+  - **Jev down:** local answers continue and forwarded requests get 502. Nothing is recorded as a teacher answer, and forwarding recovers when Jev returns.
+  - **Jev slow** (3 s against a 1 s timeout): forwarded requests get 504, while local answers stay at p95 < 250 ms with 16 callers stuck on Jev.
+  - **429 storm:** 100 requests on one key reach Jev at most 8 times, and the proxy answers the rest with 429 itself. Other keys are unaffected, and local answers continue for the limited key.
+  - **401 on a verified key:** covered by `test_bad_key_is_relayed_and_never_answered_locally`.
+  - **Disk full:** every request is still answered, and the dropped records are counted (new metric). Recording resumes when space returns.
+  - **`kill -9`** three times at different points of training, then a restart. The server comes up, the stores pass `integrity_check`, no staging directories are left, and the task still reaches local answers.
+  - **Found and fixed:** training workers (and the forkserver and resource tracker) outlived a `kill -9`. Workers now exit when the server dies.
+- [x] **P6.6** Soak test: 24 h replay with drift injected midway. Check fallback → retrain → re-promote without intervention, and flat memory.
+  *Result (`benchmarks/soak.py`, docs/benchmarks.md; compressed to 40 minutes, the 24 h run is still to do):* 100 req/s over 20 questions with `max_loaded = 12` (so ~1,050 reloads a minute), and a silent label rotation by the teacher at 20 minutes. There were 240k requests with no errors. Before the drift the local share was 85%. It bottomed at 19% after ~80 s (19 fallbacks), was back to 50% at +2.7 min and 80% at +12 min, and finished at 85%, all without intervention. Memory ended at 182 MB (peak 304 MB, models 33–50 MB).
+  - **Found and fixed:**
+    - Silent drift never recovered: training now restarts from the fallback point.
+    - Unloaded tasks were kept alive by reference cycles: a memory leak under churn.
+    - Reloads lost shadow, retraining and drift-check progress.
+    - Failing candidates retrained every 100 rows.
+  - **Confirmation run** (30 min, after the manager fixes): peak 222 MB, drift recovered.
+  - **Still to do:**
+    - the full 24 h run on an otherwise idle machine;
+    - a look at the rare keep-alive `ReadError` (2 in 180k, retried by the SDK).
+- [x] **P6.7** End-to-end with live Jev through the proxy (after P0): one real task from cold start to promoted student. Record the report.
+  *Result (`experiments/live_proxy.py`, docs/benchmarks.md):* the unmodified SDK sent 4,000 Banking77 messages (8 threads, 6-class question) through `jevstiller serve` to the real Jev. There were no errors. The first local answer came at request 3,697, after admission, 2,601 labelled rows and 1,010 shadow rows. The last 500 requests were 50% local. Local answers took p50 15 ms against 292 ms forwarded. It cost $0.067.
 
 ## Phase 7 — Docs and release
 

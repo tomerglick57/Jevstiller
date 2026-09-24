@@ -1,12 +1,14 @@
 """The loop: route, record, train, calibrate, shadow, promote, monitor, fall back."""
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
 import shutil
 import threading
 import time
+import weakref
 from collections.abc import Sequence
 from concurrent.futures import Executor, Future
 from concurrent.futures import wait as futures_wait
@@ -207,7 +209,7 @@ class Jevstiller:
         self._last_train_id = 0
         self._shadow_started_id = 0
         self._teacher_errors = 0
-        self._pending: tuple[Future, Path, str | None] | None = None   # queued/running training job
+        self._pending: tuple[Future, Path, str | None, int] | None = None   # queued/running training job
         self._teacher_rate = DecayingRate(half_life_s=600)
         self._audit_new = 0                 # audit answers since the last drift check
         self._counted_at = -10**9           # store max id at the last readiness count
@@ -217,7 +219,11 @@ class Jevstiller:
         shadows = self.registry.in_state("shadow")
         self._shadow: Bundle | None = self._load(shadows[-1]) if shadows else None
         if self._shadow is not None:
-            self._shadow_started_id = self.store.max_id()
+            self._shadow_started_id = self._shadow.meta.get("shadow_from_id", self.store.max_id())
+        versions = self.registry.versions()             # the last training, whatever became of its result
+        if versions:
+            with contextlib.suppress(OSError, ValueError):
+                self._last_train_id = self.registry.meta(versions[-1]["name"]).get("trained_to_id", 0)
         # teacher lineage: the model the last teacher answer came from. A different model must answer
         # `teacher_change_confirm` times in a row before the loop switches to it.
         self._teacher_model: str | None = self.store.latest_teacher_model(task.version)
@@ -226,6 +232,13 @@ class Jevstiller:
         trained_on = self._prod.meta.get("teacher_model") if self._prod else None
         if trained_on and self._teacher_model and trained_on != self._teacher_model:
             self._teacher_changed(trained_on, self._teacher_model)
+        # A confirmed drift restarts the training data at the row where it was detected (see _check_drift);
+        # a fallback that no promotion or operator has ended since survives a restart.
+        drift = self.store.last_event(("fallback",))
+        self._since_id: int = drift.get("since_id", 0) if drift else 0
+        last = self.store.last_event(("fallback", "promoted", "fallback_cleared"))
+        if last and last["kind"] == "fallback" and self._prod is not None:
+            self.forced_fallback = self._retrain_requested = True
         # background worker: `_kicks` counts batches that asked for maintenance, `_done` is the kick count
         # the last finished pass had seen; drain() waits for _done to catch up
         self._cv = threading.Condition()
@@ -282,8 +295,11 @@ class Jevstiller:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         with self._state:
             self.cfg.mode = mode
+            cleared = mode != "teacher_only" and self.forced_fallback
             if mode != "teacher_only":
                 self.forced_fallback = False
+        if cleared:
+            self.store.event("fallback_cleared", mode=mode)
 
     @property
     def audit_rate(self) -> float:
@@ -545,25 +561,35 @@ class Jevstiller:
 
     READINESS_CHECK_ROWS = 100      # re-count the store for a first student at most every this many new rows
 
+    def _current(self, bundle: Bundle | None) -> bool:
+        """The version was trained on the data the loop trains on now: this teacher lineage, since the last
+        confirmed drift."""
+        return (bundle is not None and bundle.meta.get("teacher_model") in (None, self._teacher_model)
+                and bundle.meta.get("since_id", 0) >= self._since_id)
+
     def _should_train(self) -> bool:
-        """Cheap checks first: a pass runs about once a second per loaded task, and counting scans the store."""
+        """Cheap checks first: a pass runs about once a second per loaded task, and counting scans the store.
+        Without a production student for the current data, train once the data is ready (readiness);
+        with one, retrain on request or every `min_new_samples` rows."""
         if self._teacher_model is None:
             return False
         latest = self.store.max_id()
-        if not self._retrain_requested:
-            if self._prod is not None and latest - self._last_train_id < self.cfg.min_new_samples:
+        fresh = not self._current(self._prod)
+        if fresh:
+            if latest - self._counted_at < self.READINESS_CHECK_ROWS:
                 return False
-            if self._prod is None and latest - self._counted_at < self.READINESS_CHECK_ROWS:
-                return False
-        self._counted_at = latest
-        c = self.store.counts(self.task.version, self._teacher_model)
-        if c["labelled_calib"] < self.cfg.min_calib_samples:
+            tried = self._last_train_id - self._since_id  # rows when a candidate on this data last trained
+            if tried > 0 and not self._retrain_requested:  # it didn't make it: wait for 25% more data
+                if latest - self._last_train_id < min(self.cfg.min_new_samples, max(self.READINESS_CHECK_ROWS,
+                                                                                    tried // 4)):
+                    return False
+        elif not self._retrain_requested and latest - self._last_train_id < self.cfg.min_new_samples:
             return False
-        if self._retrain_requested:
-            return True
-        if self._prod is None:
+        self._counted_at = latest
+        c = self.store.counts(self.task.version, self._teacher_model, self._since_id)
+        if fresh:
             return self._readiness(c)["ready"]
-        return (self.store.max_id() - self._last_train_id) >= self.cfg.min_new_samples
+        return c["labelled_calib"] >= self.cfg.min_calib_samples
 
     def train_now(self) -> TrainReport:
         """Train a candidate now and wait for it (the job itself runs on `train_executor` if set). If a
@@ -573,6 +599,17 @@ class Jevstiller:
                 futures_wait((self._pending[0],))
                 return self._finish_train(raise_errors=True)
             return self._start_train(wait=True, raise_errors=True)
+
+    def carry(self) -> dict:
+        """In-memory progress worth keeping across an unload and reload of this task (TaskManager keeps it):
+        audit answers towards the next drift check, and the recent rate of teacher calls."""
+        with self._state:
+            return {"audit_new": self._audit_new, "teacher_rate": self._teacher_rate}
+
+    def restore(self, carry: dict) -> None:
+        with self._state:
+            self._audit_new += carry.get("audit_new", 0)
+            self._teacher_rate = carry.get("teacher_rate", self._teacher_rate)
 
     def training_priority(self) -> float:
         """How much training this task could save: its recent rate of teacher calls (decayed, per minute)."""
@@ -587,10 +624,8 @@ class Jevstiller:
         with self._state:
             self._last_train_id = self.store.max_id()
             self._retrain_requested = False
-            lineage = self._teacher_model
-        prod = self._prod
-        if prod is not None and prod.meta.get("teacher_model") not in (None, lineage):
-            prod = None                                  # trained on another teacher: not a fair comparison
+            lineage, since = self._teacher_model, self._since_id
+        prod = self._prod if self._current(self._prod) else None   # else: other data, not a fair comparison
         staged = self.registry.staging_dir()
         job = FitJob(store_path=str(self.store.path), task_version=tv, encoder_id=eid, labels=self.labels,
                      dim=self.encoder.dim, out_dir=str(staged),
@@ -602,7 +637,7 @@ class Jevstiller:
                      hard_labels=self.cfg.label_target == "hard",
                      importance_weighting=self.cfg.importance_weighting,
                      prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None,
-                     teacher_model=lineage, min_samples_per_class=self.cfg.min_samples_per_class,
+                     teacher_model=lineage, since_id=since, min_samples_per_class=self.cfg.min_samples_per_class,
                      defer_rare=self.cfg.rare_classes == "defer")
         if self.train_executor is None:
             fut: Future = Future()
@@ -612,11 +647,12 @@ class Jevstiller:
                 fut.set_exception(e)
         else:
             fut = self.train_executor.submit(run_fit_job, job)
-        self._pending = (fut, staged, lineage)
+        self._pending = (fut, staged, lineage, since)
         if wait or self.train_executor is None:
             futures_wait((fut,))
             return self._finish_train(raise_errors)
-        fut.add_done_callback(lambda _f: self._kick())
+        me = weakref.ref(self)                           # no cycle: an unloaded engine is freed at once
+        fut.add_done_callback(lambda _f: (e := me()) is not None and e._kick())
         self.store.event("training_queued", teacher_model=lineage)
         return None
 
@@ -624,7 +660,7 @@ class Jevstiller:
         """Adopt the finished job's result as a shadow candidate (or record why not). Holds `_maint`.
         A failed job is recorded (`train_failed` event) and retried on a later pass; `raise_errors` re-raises
         it instead (explicit `train_now`)."""
-        fut, staged, lineage = self._pending
+        fut, staged, lineage, since = self._pending
         self._pending = None
         tv, eid = self.task.version, self.encoder.id
         try:
@@ -641,16 +677,18 @@ class Jevstiller:
         if res.policy is None:
             shutil.rmtree(staged, ignore_errors=True)
             return TrainReport(None, res.n_train, res.n_calib, None, float("nan"), 0.0, False, "no data")
-        if self._teacher_model != lineage:              # the teacher changed while this candidate trained
+        if self._teacher_model != lineage or self._since_id != since:     # changed while this candidate trained
             shutil.rmtree(staged, ignore_errors=True)
             return TrainReport(None, res.n_train, res.n_calib, res.policy, float("nan"), res.calib_agreement,
-                               False, "teacher changed during training")
+                               False, "teacher changed during training" if self._teacher_model != lineage
+                               else "drift during training")
         policy, fit = res.policy, res.fit
         meta = {"n_train": res.n_train, "n_calib": res.n_calib, "train_loss": fit["loss"], "epochs": fit["epochs"],
                 "prod_calib_coverage": res.prod_calib_coverage,
                 "calib_agreement": res.calib_agreement, "calib_accepted": res.calib_accepted,
                 "calib_disagree": res.calib_disagree, "encoder": eid, "task_version": tv,
-                "teacher_model": lineage, "labels": self.labels, "deferred_labels": res.deferred_labels,
+                "teacher_model": lineage, "since_id": since, "labels": self.labels,
+                "deferred_labels": res.deferred_labels, "trained_to_id": self._last_train_id,
                 "config": self.cfg.to_dict()}
         if not policy.usable:
             name = self.registry.adopt(staged, meta, state="rejected")
@@ -658,11 +696,12 @@ class Jevstiller:
                              n_calib=res.n_calib, calib_agreement=round(res.calib_agreement, 4))
             return TrainReport(name, res.n_train, res.n_calib, policy, fit["loss"], res.calib_agreement, False,
                                "no threshold satisfies the budget")
+        start = meta["shadow_from_id"] = self.store.max_id()   # kept, so a reload does not restart the count
         name = self.registry.adopt(staged, meta, state="shadow")
         bundle = self._load(name)
         with self._state:
             self._shadow = bundle
-            self._shadow_started_id = self.store.max_id()
+            self._shadow_started_id = start
         self.store.event("shadow", version=name, n_train=res.n_train, n_calib=res.n_calib, epochs=fit["epochs"],
                          expected_coverage=round(policy.expected_coverage, 4),
                          disagreement_ub=round(policy.disagreement_ub, 4),
@@ -671,15 +710,17 @@ class Jevstiller:
 
     def _judge_shadow(self) -> None:
         sh = self._shadow
-        if sh.meta.get("teacher_model") not in (None, self._teacher_model):
+        if not self._current(sh):
             self.registry.set_state(sh.name, "rejected")
             with self._state:
                 self._shadow = None
-            self.store.event("rejected", version=sh.name, reason="trained on another teacher model")
+            other = sh.meta.get("teacher_model") not in (None, self._teacher_model)
+            self.store.event("rejected", version=sh.name,
+                             reason="trained on another teacher model" if other else "trained before a drift")
             return
         if self.store.max_id() - self._shadow_started_id < self.cfg.shadow_min_samples:
             return
-        rows = self.store.shadow_records(sh.name, self.task.version, self._teacher_model)
+        rows = self.store.shadow_records(sh.name, self.task.version, self._teacher_model, self._since_id)
         N = len(rows)
         if N == 0:
             return
@@ -719,7 +760,7 @@ class Jevstiller:
     def _audit_stats(self, prod: Bundle):
         """System agreement on the recent audit window, re-scored with the given production model."""
         X, t_lab = self.store.audit_window(self.task.version, self.encoder.id, self.encoder.dim, self.cfg.drift_window,
-                                           self._teacher_model)
+                                           self._teacher_model, self._since_id)
         N = len(t_lab)
         if N == 0:
             return 0, None, None, None
@@ -735,17 +776,27 @@ class Jevstiller:
 
         suspicious: A < target                -> retrain (a candidate goes to shadow), audit rate raised
         broken:     ub(A) < target - margin   -> teacher_only until a candidate passes shadow
+
+        When broken, the teacher's answers or the inputs have changed enough that the older answers no longer
+        describe the task (a teacher can change its answers without changing its model name). Training,
+        calibration, shadow and audit restart from rows after this point; older rows stay in the store.
         """
         N, a, lb, ub = self._audit_stats(self._prod)
         if N < self.cfg.drift_min_samples:
             return
         tgt = self.task.target_agreement
         if ub < tgt - self.cfg.drift_margin:
+            since = self.store.max_id()
             with self._state:
                 self.forced_fallback = True
                 self._retrain_requested = True
+                self._since_id = since
+                dropped, self._shadow = self._shadow, None
+            if dropped is not None:
+                self.registry.set_state(dropped.name, "rejected")
             self.store.event("fallback", reason="audit agreement confidently below target", n=N,
-                             agreement=round(a, 4), upper_bound=round(ub, 4), target=tgt)
+                             agreement=round(a, 4), upper_bound=round(ub, 4), target=tgt, since_id=since,
+                             dropped_shadow=dropped.name if dropped else None)
         elif a < tgt and self._shadow is None and not self._retrain_requested:
             with self._state:
                 self._retrain_requested = True
@@ -778,8 +829,8 @@ class Jevstiller:
 
     def status(self) -> Status:
         with self._state:
-            lineage = self._teacher_model
-        c = self.store.counts(self.task.version, lineage)
+            lineage, since = self._teacher_model, self._since_id
+        c = self.store.counts(self.task.version, lineage, since)
         sb = c["served_by"]
         tot = c["total"] or 1
         avoided = sb.get("student", 0)
@@ -801,7 +852,7 @@ class Jevstiller:
             teacher_cost_avoided_usd=avoided * avg_cost, labelled_train=c["labelled_train"],
             labelled_calib=c["labelled_calib"], policy=prod.policy.__dict__ if prod else None,
             events=self.store.events(), teacher_errors=teacher_errors, teacher_model=lineage,
-            readiness=self._readiness(c) if prod is None else None)
+            readiness=None if self._current(prod) else self._readiness(c))
 
     def versions(self) -> list[dict]:
         """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back)."""
@@ -852,10 +903,11 @@ class Jevstiller:
                 "accepted": acc, "student_label": pred, "student_conf": conf, "ood": ood}
 
     def busy(self) -> bool:
-        """Maintenance (training, shadow judging, drift checks) is running or queued."""
-        with self._cv:
-            pending = self._kicks != self._done
-        return pending or self._maint.locked() or self._pending is not None
+        """A maintenance pass (training, shadow judging, drift checks) is running, or a training job is queued or
+        running. A pass that is only requested doesn't count: under steady traffic nearly every task has one
+        requested, and counting it kept the manager from unloading anything (598 tasks loaded against
+        `max_loaded = 50`, 2.7 GB, in benchmarks/manager.py). Closing drops it; the next load requests another."""
+        return self._maint.locked() or self._pending is not None
 
     def footprint_bytes(self) -> int:
         """Memory held by the loaded versions (student heads and OOD references)."""
@@ -874,6 +926,9 @@ class Jevstiller:
         if worker is not None:
             worker.join(timeout)
         pending = self._pending
-        if pending is not None and pending[0].cancel():  # still queued: drop it (a running job's staging
-            shutil.rmtree(pending[1], ignore_errors=True)  # directory is removed by the next Registry open)
+        if pending is not None:                          # never adopted now: drop the job and its directory
+            fut, staged = pending[0], pending[1]
+            fut.cancel()                                 # still queued: cancelled; running: finishes first
+            fut.add_done_callback(lambda _f: shutil.rmtree(staged, ignore_errors=True))
+            self._pending = None
         self.store.close()

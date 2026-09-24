@@ -175,6 +175,7 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 | `trust_forwarded_for` | `[]` | `--trust-forwarded-for` (repeat) | Proxies whose `X-Forwarded-For` is trusted for `allow_networks`. Empty: the TCP peer is used. |
 | `max_body_mb` | `4.0` | `--max-body-mb` | Larger bodies get 413 (declared or streamed). |
 | `max_questions` | `32` | `--max-questions` | Distinct choice questions routed per request; more → forwarded unrouted. |
+| `max_encoder_wait_ms` | `200` | `--max-encoder-wait-ms` | If a local answer would wait longer than this for the shared encoder (traffic beyond its capacity), forward the request to Jev instead. `0` never forwards for this reason (requests queue). |
 | `price_per_mtok` | `0.042` | | For cost accounting. |
 
 ### [manager]

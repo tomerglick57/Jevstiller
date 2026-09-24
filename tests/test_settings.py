@@ -62,6 +62,7 @@ def test_secrets_are_redacted(cfg):
     ("[engine]\nmode = 'hedge'\n", "mode"),
     ("[tasks.k]\ntarget = 0.9\n", "unknown keys"),
     ("[server]\nssl_certfile = 'a.pem'\n", "ssl_keyfile"),
+    ("[proxy]\nmax_encoder_wait_ms = -1\n", "max_encoder_wait_ms"),
 ])
 def test_invalid_configs_are_rejected(tmp_path, toml, err):
     p = tmp_path / "bad.toml"
@@ -89,3 +90,11 @@ def test_tenant_map_keys_must_be_key_hashes(tmp_path):
         load(cli={"tenants_file": str(tmp_path / "t.json")}, environ={})
     with pytest.raises(ValueError, match="network"):
         load(cli={"allow_networks": ["10.0.0.0/33"]}, environ={})
+
+
+def test_encoder_wait_setting(tmp_path):
+    p = tmp_path / "j.toml"
+    p.write_text("[proxy]\nmax_encoder_wait_ms = 50\n")
+    assert load(p, environ={}).max_encoder_wait_ms == 50
+    assert load(p, environ={"JEVSTILLER_MAX_ENCODER_WAIT_MS": "0"}).max_encoder_wait_ms == 0
+    assert load(environ={}).max_encoder_wait_ms == 200

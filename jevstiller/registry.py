@@ -145,6 +145,10 @@ class Registry:
             shutil.rmtree(staged, ignore_errors=True)
             raise
 
+    def meta(self, name: str) -> dict:
+        """A version's metadata alone (no arrays)."""
+        return json.loads((self.root / name.replace(":", "-") / "meta.json").read_text())
+
     def load(self, name: str) -> Bundle:
         vdir = self.root / name.replace(":", "-")
         return Bundle(name, LinearStudent.load(vdir / "head.npz"), KnnOOD.load(vdir / "ood.npz"),

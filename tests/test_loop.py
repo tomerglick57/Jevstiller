@@ -70,3 +70,91 @@ def test_drift_triggers_fallback(tmp_path, task, world, teacher):
             break
     assert js.mode == "teacher_only"
     assert any(e["kind"] == "fallback" for e in js.status().events)
+
+
+class _Swapped:
+    """The same teacher (same name, same model) with its answers silently rotated among the labels."""
+
+    name = "synthetic"
+
+    def __init__(self, inner, labels):
+        self.inner, self.perm = inner, dict(zip(labels, labels[1:] + labels[:1], strict=True))
+
+    def classify(self, texts, task):
+        outs = self.inner.classify(texts, task)
+        for o in outs:
+            o.label, o.probs = self.perm[o.label], {self.perm[c]: p for c, p in o.probs.items()}
+        return outs
+
+
+def test_recovers_from_a_silent_drift(tmp_path, task, world, teacher):
+    """The teacher changes its answers without changing its name: fall back, restart the training data at the
+    fallback, and serve locally again from a student trained only on the new answers."""
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(min_new_samples=3000, drift_min_samples=60))
+    for _ in range(30):
+        js.classify_batch([t for t, _ in world.sample(200)])
+    old = js.status().production
+    assert old and js.mode == "cascade"
+    new = _Swapped(teacher, task.labels)
+    js.teacher = new
+    for _ in range(30):
+        js.classify_batch([t for t, _ in world.sample(200)])
+        if js.mode == "teacher_only":
+            break
+    [fb] = [e for e in js.status().events if e["kind"] == "fallback"]
+    assert fb["since_id"] > 0 and js._since_id == fb["since_id"]
+    js.close()
+
+    js = Jevstiller(task, new, tmp_path, config=_cfg(min_new_samples=3000, drift_min_samples=60))
+    assert js.mode == "teacher_only" and js._since_id == fb["since_id"]     # the fallback survives a restart
+    for _ in range(40):
+        js.classify_batch([t for t, _ in world.sample(200)])
+        if js.mode == "cascade":
+            break
+    st = js.status()
+    assert js.mode == "cascade" and st.production != old, st.report()
+    meta = js.registry.load(st.production).meta
+    n_new = js.store.db.execute("SELECT COUNT(*) FROM samples WHERE id>? AND split='train' "
+                                "AND teacher_label IS NOT NULL", (fb["since_id"],)).fetchone()[0]
+    assert meta["since_id"] == fb["since_id"] and meta["n_train"] <= n_new
+    tail = [t for t, _ in world.sample(2000)]
+    res = js.classify_batch(tail)
+    served = [(t, r) for t, r in zip(tail, res, strict=True) if r.source != "teacher"]
+    assert len(served) / len(tail) > 0.5, st.report()
+    wrong = sum(r.label != new.classify([t], task)[0].label for t, r in served)
+    assert wrong / len(tail) <= task.budget + 0.01, st.report()
+    js.close()
+
+
+def test_operator_can_end_a_drift_fallback(tmp_path, task, world, teacher):
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg())
+    for _ in range(20):
+        js.classify_batch([t for t, _ in world.sample(200)])
+    assert js.mode == "cascade"
+    js.store.event("fallback", reason="test", since_id=js.store.max_id())    # as _check_drift records it
+    js.close()
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual"))
+    assert js.mode == "teacher_only"
+    js.set_mode("auto")                                  # the operator overrides: serve the old student
+    assert js.mode == "cascade" and js.store.last_event(("fallback", "fallback_cleared"))["kind"] == "fallback_cleared"
+    js.close()
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual"))
+    assert js.mode == "cascade"                          # and that survives a restart
+    js.close()
+
+
+def test_without_a_student_a_failed_candidate_backs_off(tmp_path, task, world, teacher):
+    """With no production student for the current data, a candidate that didn't make it is retried after 25% more
+    data (capped at min_new_samples), not every 100 rows: a hard task would otherwise train non-stop."""
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual", min_new_samples=10**6))
+    for _ in range(4):
+        js.classify_batch([t for t, _ in world.sample(200)])
+    assert js._should_train()
+    js.train_now()
+    js._shadow = None                                    # as if it had failed shadow
+    tried = js._last_train_id
+    js.classify_batch([t for t, _ in world.sample(tried // 4 - 50)])
+    assert not js._should_train()
+    js.classify_batch([t for t, _ in world.sample(100)])
+    assert js._should_train()
+    js.close()

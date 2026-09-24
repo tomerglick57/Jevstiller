@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +93,7 @@ class FitJob:
     importance_weighting: bool = True
     prod_dir: str | None = None    # production version, scored on the same calibration rows
     teacher_model: str | None = None   # train on this teacher lineage only
+    since_id: int = 0                  # ... and on rows after this one (a confirmed drift restarts the data)
     min_samples_per_class: int = 0
     defer_rare: bool = False       # classes below min_samples_per_class are deferred to the teacher
 
@@ -114,8 +117,10 @@ def run_fit_job(job: FitJob) -> FitResult:
 
     store = SampleStore(Path(job.store_path), read_only=True)
     try:
-        X, Y, y, w = store.training_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model)
-        Xc, _, yc, _ = store.calib_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model)
+        X, Y, y, w = store.training_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model,
+                                        job.since_id)
+        Xc, _, yc, _ = store.calib_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model,
+                                       job.since_id)
     finally:
         store.close()
     if len(X) == 0 or len(Xc) == 0:
@@ -151,6 +156,32 @@ def _lower_priority(niceness: int) -> None:
         pass
 
 
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:                    # pragma: no cover - exists, another user's
+        return True
+    try:                               # a dead parent nobody has reaped yet is a zombie: gone too
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True
+
+
+def _exit_with(server: int, every_s: float = 1.0) -> None:
+    while _alive(server):
+        time.sleep(every_s)
+    os._exit(1)
+
+
+def _init_worker(niceness: int, server: int) -> None:
+    """Lower the worker's priority, and end it when the server process dies: after a kill -9 (or the OOM
+    killer) a pool worker never sees its job queue close, and would otherwise live on, holding memory."""
+    _lower_priority(niceness)
+    threading.Thread(target=_exit_with, args=(server,), daemon=True, name="jevstiller-exit-with-server").start()
+
+
 def train_pool(workers: int = 2, niceness: int = 10) -> ProcessPoolExecutor:
     """A process pool for `train_executor`, shared by every task in the process.
 
@@ -160,4 +191,4 @@ def train_pool(workers: int = 2, niceness: int = 10) -> ProcessPoolExecutor:
 
     Like any process pool, it re-imports the main module in each worker: create it under
     `if __name__ == "__main__":` in scripts."""
-    return ProcessPoolExecutor(workers, initializer=_lower_priority, initargs=(niceness,))
+    return ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(niceness, os.getpid()))

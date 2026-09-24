@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
 from collections.abc import Sequence
 from concurrent.futures import Future
@@ -19,6 +20,10 @@ class BatchingEncoder:
 
     Calls with at least `max_batch` texts bypass the queue. Same `id` and `dim` as the inner encoder, so
     stored embeddings stay in one lineage.
+
+    `expected_wait_s()` estimates how long a new call would wait (texts queued or being encoded, times the
+    measured time per text), so a caller can do something else when the encoder is saturated (the proxy
+    forwards such requests to the teacher).
     """
 
     def __init__(self, inner, max_batch: int = 256, max_wait_ms: float = 0.0):
@@ -26,6 +31,8 @@ class BatchingEncoder:
         self.id, self.dim = inner.id, inner.dim
         self.max_batch, self.max_wait_s = max_batch, max_wait_ms / 1000
         self.batches = self.calls = 0                  # counters, for tests and metrics
+        self._inflight = 0                             # texts in the batch being encoded
+        self._per_text_s = 0.0                         # moving average of encode time per text
         self._q: deque[tuple[list[str], Future]] = deque()
         self._queued = 0
         self._cv = threading.Condition()
@@ -67,17 +74,32 @@ class BatchingEncoder:
                     batch.append((texts, fut))
                     n += len(texts)
                 self._queued -= n
+                self._inflight = n
                 self.batches += 1
+            t0 = time.perf_counter()
             try:
                 X = self.inner.encode([t for texts, _ in batch for t in texts])
             except BaseException as e:
                 for _, fut in batch:
                     fut.set_exception(e)
                 continue
+            finally:
+                with self._cv:
+                    self._inflight = 0
+            per = (time.perf_counter() - t0) / n
+            self._per_text_s = per if not self._per_text_s else 0.8 * self._per_text_s + 0.2 * per
             i = 0
             for texts, fut in batch:
                 fut.set_result(X[i:i + len(texts)])
                 i += len(texts)
+
+    def time_per_text_s(self) -> float:
+        """Measured encode time per text (moving average); 0 until the first batch."""
+        return self._per_text_s
+
+    def expected_wait_s(self) -> float:
+        """Roughly how long a call made now would take: everything ahead of it, then itself."""
+        return (self._queued + self._inflight + 1) * self._per_text_s
 
     def close(self) -> None:
         """Finish queued calls, then stop the worker."""

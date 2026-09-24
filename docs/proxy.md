@@ -83,6 +83,7 @@ Extra headers on every `/v1/systemone` response:
 | Jev doesn't answer within `upstream_timeout_s` (9 s) | 504 |
 | Jev unreachable | 502 |
 | More than `max_upstream_inflight` (256) forwarded requests in flight | 503, `retry-after: 1` |
+| Requests arrive faster than the encoder can embed them: a local answer would wait more than `max_encoder_wait_ms` (200 ms) | forwarded to Jev as it is (not routed or recorded; `questions_total{outcome="overloaded"}`), so the proxy is never much slower than Jev. The encoder is the local path's ceiling: ~150–340 texts/s for bge-small on 16 CPU cores, far more on a GPU. |
 | Any error inside the proxy's own logic, or a body it can't parse | the request is forwarded instead |
 | Network not in `allow_networks` | 403 |
 | Missing or wrong `x-jevstiller-token` (when `access_token` is set) | 401 |

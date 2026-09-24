@@ -115,6 +115,12 @@ class Gauge(_Metric):
         return self.header() + [f"{self.name}{_labels(self.labelnames, tuple(k))} {_num(v)}" for k, v in items]
 
 
+class ComputedCounter(Gauge):
+    """A counter read at scrape time from something that already counts (`fn` as for Gauge)."""
+
+    kind = "counter"
+
+
 class Registry:
     def __init__(self):
         self.metrics: list[_Metric] = []
@@ -133,6 +139,10 @@ class Registry:
     def gauge(self, name: str, help_: str, labels: Sequence[str] = (),
               fn: Callable[[], Iterable[tuple[Sequence[str], float]]] | None = None) -> Gauge:
         return self.add(Gauge(name, help_, labels, fn))           # type: ignore[return-value]
+
+    def counter_fn(self, name: str, help_: str, labels: Sequence[str] = (),
+                   fn: Callable[[], Iterable[tuple[Sequence[str], float]]] | None = None) -> ComputedCounter:
+        return self.add(ComputedCounter(name, help_, labels, fn))  # type: ignore[return-value]
 
     def render(self) -> str:
         lines: list[str] = []

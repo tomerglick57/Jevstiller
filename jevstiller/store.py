@@ -19,6 +19,15 @@ import numpy as np
 log = logging.getLogger("jevstiller")
 
 IID_CHANNELS = ("bootstrap", "audit", "fallback")   # only these may feed calibration / evaluation
+LOG_EVERY_S = 60.0                                  # write failures: one log line per store per minute
+
+_dropped = 0                                        # records every store in this process failed to write
+_dropped_lock = threading.Lock()
+
+
+def dropped_records() -> int:
+    """Records the write-behind stores of this process could not commit (disk full, I/O errors), since start."""
+    return _dropped
 TEACHER_CHANNELS = IID_CHANNELS + ("deferred",)
 
 
@@ -92,9 +101,10 @@ CREATE INDEX IF NOT EXISTS ix_samples_lineage ON samples(task_version, teacher_m
 """
 
 
-def _lineage(teacher_model: str | None) -> tuple[str, tuple]:
-    """SQL filter for one teacher lineage; None = every teacher."""
-    return (" AND teacher_model=?", (teacher_model,)) if teacher_model is not None else ("", ())
+def _lineage(teacher_model: str | None, since_id: int = 0) -> tuple[str, tuple]:
+    """SQL filter for one teacher lineage (None = every teacher), from row `since_id` on (0 = all rows)."""
+    sql, args = (" AND teacher_model=?", (teacher_model,)) if teacher_model is not None else ("", ())
+    return (sql + " AND id>?", (*args, since_id)) if since_id else (sql, args)
 
 
 @runtime_checkable
@@ -109,16 +119,18 @@ class Store(Protocol):
     def insert(self, recs: Sequence[Record]) -> None: ...
     def event(self, kind: str, **detail) -> None: ...
     def flush(self, timeout: float | None = None) -> bool: ...
-    def counts(self, task_version: str, teacher_model: str | None = None) -> dict: ...
-    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None): ...
-    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None): ...
-    def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None): ...
+    def counts(self, task_version: str, teacher_model: str | None = None, since_id: int = 0) -> dict: ...
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0): ...
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0): ...
+    def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None,
+                       since_id: int = 0): ...
     def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int,
-                     teacher_model: str | None = None): ...
+                     teacher_model: str | None = None, since_id: int = 0): ...
     def redact_text(self, older_than_ts: float) -> int: ...
     def latest_teacher_model(self, task_version: str) -> str | None: ...
     def max_id(self) -> int: ...
     def events(self, limit: int = 20) -> list[dict]: ...
+    def last_event(self, kinds: Sequence[str]) -> dict | None: ...
     def close(self) -> None: ...
 
 
@@ -152,6 +164,7 @@ class SampleStore:
         self._pending: deque[Record] = deque()
         self._enqueued = self._written = 0
         self._stopping = False
+        self._last_error_log = -LOG_EVERY_S
         self._writer: threading.Thread | None = None
         if not read_only:
             conn = self._conn()
@@ -224,9 +237,17 @@ class SampleStore:
             failed = False
             try:
                 self._write(batch)
-            except Exception:
+            except Exception as e:
                 failed = True
-                log.exception("sample store %s: dropped %d records", self.path, len(batch))
+                now = time.monotonic()
+                if now - self._last_error_log >= LOG_EVERY_S:          # a full disk fails every batch
+                    self._last_error_log = now
+                    log.error("sample store %s: dropped %d records (%d so far): %r", self.path, len(batch),
+                              self.write_errors + len(batch), e)
+            if failed:
+                global _dropped
+                with _dropped_lock:
+                    _dropped += len(batch)
             with self._wcv:
                 self._written += len(batch)
                 self.write_errors += len(batch) if failed else 0
@@ -291,11 +312,12 @@ class SampleStore:
         return X, Y, y, w
 
     def labelled(self, task_version: str, encoder_id: str, labels: Sequence[str], dim: int,
-                 split: str, channels: Iterable[str] = TEACHER_CHANNELS, teacher_model: str | None = None):
+                 split: str, channels: Iterable[str] = TEACHER_CHANNELS, teacher_model: str | None = None,
+                 since_id: int = 0):
         """Embeddings X, teacher distributions Y, teacher argmax y, importance weights w for teacher-labelled rows
-        (of one teacher lineage when `teacher_model` is given)."""
+        (of one teacher lineage when `teacher_model` is given, after row `since_id`)."""
         ch = tuple(channels)
-        lin, lin_args = _lineage(teacher_model)
+        lin, lin_args = _lineage(teacher_model, since_id)
         rows = self.db.execute(
             f"SELECT embedding, teacher_probs, teacher_label, weight FROM samples "
             f"WHERE task_version=? AND encoder_id=?{lin} "
@@ -303,25 +325,28 @@ class SampleStore:
             (task_version, encoder_id, *lin_args, split, *ch)).fetchall()
         return self._matrix(rows, labels, dim)
 
-    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None):
-        return self.labelled(task_version, encoder_id, labels, dim, "train", teacher_model=teacher_model)
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0):
+        return self.labelled(task_version, encoder_id, labels, dim, "train", teacher_model=teacher_model,
+                             since_id=since_id)
 
-    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None):
-        return self.labelled(task_version, encoder_id, labels, dim, "calib", IID_CHANNELS, teacher_model)
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0):
+        return self.labelled(task_version, encoder_id, labels, dim, "calib", IID_CHANNELS, teacher_model, since_id)
 
-    def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None):
+    def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None,
+                       since_id: int = 0):
         """IID rows where the shadow candidate ran alongside a teacher answer."""
         ch = IID_CHANNELS
-        lin, lin_args = _lineage(teacher_model)
+        lin, lin_args = _lineage(teacher_model, since_id)
         rows = self.db.execute(
             f"SELECT shadow_label, shadow_confidence, shadow_ood, teacher_label, student_label, student_confidence, "
             f"ood_score FROM samples WHERE shadow_version=? AND task_version=?{lin} AND teacher_label IS NOT NULL "
             f"AND channel IN ({','.join('?' * len(ch))})", (shadow_version, task_version, *lin_args, *ch)).fetchall()
         return rows
 
-    def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int, teacher_model: str | None = None):
+    def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int, teacher_model: str | None = None,
+                     since_id: int = 0):
         """Embeddings and teacher labels of the most recent audit rows, whichever student scored them."""
-        lin, lin_args = _lineage(teacher_model)
+        lin, lin_args = _lineage(teacher_model, since_id)
         rows = self.db.execute(
             f"SELECT embedding, teacher_label FROM samples WHERE task_version=? AND encoder_id=?{lin} "
             f"AND channel='audit' AND teacher_label IS NOT NULL AND embedding IS NOT NULL ORDER BY id DESC LIMIT ?",
@@ -331,9 +356,9 @@ class SampleStore:
         X = np.frombuffer(b"".join(r[0] for r in rows), dtype=np.float32).reshape(len(rows), dim)
         return X, np.array([r[1] for r in rows], dtype=object)
 
-    def counts(self, task_version: str, teacher_model: str | None = None) -> dict:
+    def counts(self, task_version: str, teacher_model: str | None = None, since_id: int = 0) -> dict:
         """Totals over every teacher; the labelled counts (what training can use) over one lineage if given."""
-        lin, lin_args = _lineage(teacher_model)
+        lin, lin_args = _lineage(teacher_model, since_id)
         c = {}
         c["total"] = self.db.execute("SELECT COUNT(*) FROM samples WHERE task_version=?", (task_version,)).fetchone()[0]
         for k, in_ in (("served_by", "served_by"), ("channel", "channel"), ("split", "split")):
@@ -388,6 +413,12 @@ class SampleStore:
     def events(self, limit: int = 20) -> list[dict]:
         rows = self.db.execute("SELECT ts, kind, detail FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [{"ts": ts, "kind": k, **json.loads(d)} for ts, k, d in rows][::-1]
+
+    def last_event(self, kinds: Sequence[str]) -> dict | None:
+        """The most recent event of any of these kinds."""
+        row = self.db.execute(f"SELECT ts, kind, detail FROM events WHERE kind IN ({','.join('?' * len(kinds))}) "
+                              "ORDER BY id DESC LIMIT 1", tuple(kinds)).fetchone()
+        return {"ts": row[0], "kind": row[1], **json.loads(row[2])} if row else None
 
     def replay_answers(self, task_version: str) -> dict:
         """text -> TeacherOutput for every teacher-labelled row (feeds ReplayTeacher)."""

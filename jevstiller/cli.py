@@ -47,6 +47,8 @@ def _logging(level: str, fmt: str) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
+    for noisy in ("httpx", "httpcore"):                  # a line per upstream call; the access log has it all
+        logging.getLogger(noisy).setLevel(max(logging.WARNING, root.level))
 
 
 def _settings(a: argparse.Namespace):
@@ -101,7 +103,8 @@ def _serve(a: argparse.Namespace) -> None:
                              max_upstream_inflight=s.max_upstream_inflight, tenancy=s.tenancy,
                              key_ttl_s=s.key_ttl_s, price_per_mtok=s.price_per_mtok, tenant_map=s.tenants,
                              access_token=s.access_token, allow_networks=s.allow_networks,
-                             max_body_bytes=int(s.max_body_mb * 2**20), max_questions=s.max_questions)
+                             max_body_bytes=int(s.max_body_mb * 2**20), max_questions=s.max_questions,
+                             max_encoder_wait_ms=s.max_encoder_wait_ms)
 
     def ready() -> dict[str, bool]:
         probe = data / ".ready-probe"
@@ -218,6 +221,8 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--max-tasks", type=int)
         p.add_argument("--max-tasks-per-tenant", type=int)
         p.add_argument("--max-questions", type=int, help="distinct choice questions routed per request")
+        p.add_argument("--max-encoder-wait-ms", type=float,
+                       help="forward to Jev when a local answer would wait longer than this for the encoder (0: never)")
         p.add_argument("--train-workers", type=int)
         p.add_argument("--log-level")
         p.add_argument("--log-format", choices=["text", "json"])

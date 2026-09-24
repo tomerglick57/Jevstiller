@@ -72,6 +72,7 @@ class ServeSettings:
     trust_forwarded_for: list[str] = field(default_factory=list)   # proxies allowed to set X-Forwarded-For
     max_body_mb: float = 4.0
     max_questions: int = 32                     # per request; more are forwarded without routing
+    max_encoder_wait_ms: float = 200.0          # encoder backed up beyond this: forward instead (0 = never)
     tenants: dict[str, str] = field(default_factory=dict)          # key hash -> tenant
     tenants_file: str | None = None             # JSON {"<key hash>": "<tenant>"}, merged over `tenants`
     price_per_mtok: float = 0.042
@@ -114,7 +115,7 @@ class ServeSettings:
             unknown = set(o) - {"target_agreement", "mode"}
             if unknown:
                 raise ValueError(f"[tasks.{key!r}]: unknown keys {sorted(unknown)}")
-        for name in ("max_loaded", "admit_after", "train_workers", "max_questions", "port"):
+        for name in ("max_loaded", "admit_after", "train_workers", "max_questions", "max_encoder_wait_ms", "port"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
         import ipaddress
@@ -157,8 +158,8 @@ SECTIONS = {
     "server": ("host", "port", "data_dir", "log_level", "log_format", "ssl_certfile", "ssl_keyfile", "admin_token",
                "admin_token_file", "metrics_public"),
     "proxy": ("upstream", "upstream_timeout_s", "max_upstream_inflight", "tenancy", "key_ttl_s", "access_token",
-              "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_questions", "tenants",
-              "tenants_file", "price_per_mtok"),
+              "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_questions",
+              "max_encoder_wait_ms", "tenants", "tenants_file", "price_per_mtok"),
     "manager": ("target_agreement", "max_loaded", "max_memory_mb", "admit_after", "admit_window_s", "max_tasks",
                 "max_tasks_per_tenant", "idle_ttl_days", "text_retention_days", "store_text", "train_workers",
                 "blas_threads"),

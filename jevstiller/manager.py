@@ -22,6 +22,7 @@ import os
 import shutil
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Executor
@@ -55,20 +56,40 @@ def _glibc():
 
 _LIBC = _glibc()
 _M_MMAP_THRESHOLD = -3
+_M_ARENA_MAX = -8
+ARENAS = 2
 
 
 def _allocator_setup() -> None:
     """Loading and unloading tasks frees many multi-megabyte arrays (OOD references) from many threads. glibc
     raises its mmap threshold after such frees, so later arrays land in per-thread heaps that are rarely
     returned to the OS: in benchmarks/manager.py resident memory climbed to ~1.7 GB with 50 tasks loaded,
-    ~0.2 GB of it live. A fixed threshold keeps large arrays in their own mappings, freed straight back."""
+    ~0.2 GB of it live. A fixed threshold keeps large arrays in their own mappings, freed straight back.
+
+    Every task load starts threads (maintenance, the store's writer) and SQLite connections, and glibc gives
+    threads their own heaps ("arenas", up to 8 per core). Freed memory scattered over many arenas is rarely
+    returned: with ~50 loads a second, resident memory grew ~47 KB per load/unload (292 -> 641 MB with Python's
+    own allocations flat). Two arenas: ~11 KB and slowing. Python holds the GIL anyway, so malloc contention
+    is not the bottleneck. (Set `MALLOC_ARENA_MAX` in the environment to choose another value.)"""
     if _LIBC is not None and hasattr(_LIBC, "mallopt"):
         _LIBC.mallopt(_M_MMAP_THRESHOLD, 1 << 20)
+        if "MALLOC_ARENA_MAX" not in os.environ:
+            _LIBC.mallopt(_M_ARENA_MAX, ARENAS)
 
 
 def _release_free_memory() -> None:
     if _LIBC is not None:
         _LIBC.malloc_trim(0)
+
+
+def _weak(method):
+    """A callable for a bound method that does not keep its object alive (0.0 once it is gone)."""
+    ref = weakref.WeakMethod(method)
+
+    def call() -> float:
+        m = ref()
+        return m() if m is not None else 0.0
+    return call
 
 
 def task_key(tenant: str, task: Task, question_type: str = "choice", model: str | None = None) -> str:
@@ -203,6 +224,7 @@ class TaskManager:
         self._per_tenant: dict[str, int] = {}
         self._engines: OrderedDict[str, Jevstiller] = OrderedDict()
         self._inflight: dict[str, int] = {}
+        self._carry: dict[str, dict] = {}            # progress of unloaded engines (Jevstiller.carry)
         self._key_locks: dict[str, threading.Lock] = {}
         self._dirty: set[str] = set()                   # last_seen changed since task.json was written
         self._written: dict[str, float] = {}
@@ -312,7 +334,8 @@ class TaskManager:
               X: Any = None) -> Routing:
         """First half of a request whose teacher call the caller makes itself (the proxy): find or admit the
         task and let its engine decide. Always follow with `complete` (it releases the engine). A task that
-        is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher."""
+        is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher.
+        `X` may be a callable returning the embeddings: it is only called if an engine needs them."""
         key, task = self.resolve(tenant, instructions, classes, model)
         if key not in self._index:
             reason = self._admit(key, tenant, task, len(states), model)
@@ -320,7 +343,7 @@ class TaskManager:
                 return Routing(key, task, None, None, reason)
         engine = self._acquire(key)
         try:
-            routed = engine.route(states, stexts, X)
+            routed = engine.route(states, stexts, X() if callable(X) else X)
         except BaseException:
             self._release(key)
             raise
@@ -418,14 +441,28 @@ class TaskManager:
             cfg = dataclasses.replace(self.cfg, mode=info.mode or self.cfg.mode)
             e = Jevstiller(info.task(), self.teacher, self.root, encoder=self.encoder, config=cfg,
                            train_executor=ex, hash_key=self.hash_key)
-            if isinstance(ex, TaskExecutor):
-                ex.priority = e.training_priority
+            if isinstance(ex, TaskExecutor):               # weakly: a strong one makes a cycle that keeps
+                ex.priority = _weak(e.training_priority)    # an unloaded engine (and its arrays) until a GC
+            with self._lock:
+                carry = self._carry.pop(key, None)
+            if carry:
+                e.restore(carry)
             with self._lock:
                 self._engines[key] = e
                 self._inflight[key] = self._inflight.get(key, 0) + 1
                 self._touch(key)
                 self.loads += 1
                 over = len(self._engines) > self.max_loaded
+        if over:
+            # Hold the cap here, not only in the janitor: with a steady stream of loads, one janitor thread
+            # unloading one engine at a time fell behind, and 505 tasks were loaded against max_loaded = 50
+            # (benchmarks/manager.py). Outside this key's lock: taking another key's lock inside it could deadlock.
+            for _ in range(2):
+                with self._lock:
+                    if len(self._engines) <= self.max_loaded:
+                        break
+                if not self._unload_one():
+                    break
         if over or self.max_memory_mb is not None:
             self._wake.set()
         return e
@@ -531,6 +568,7 @@ class TaskManager:
                     return True                          # changed under us; let the caller re-check
                 del self._engines[key]
                 self._inflight.pop(key, None)
+                self._carry[key] = e.carry()
                 self.unloads += 1
             e.close()
         return True
@@ -547,6 +585,7 @@ class TaskManager:
                 if self._inflight.get(key, 0):
                     return False
                 e = self._engines.pop(key, None)
+                self._carry.pop(key, None)
                 self._index.pop(key, None)
                 self._per_tenant[info.tenant] -= 1
                 self._dirty.discard(key)

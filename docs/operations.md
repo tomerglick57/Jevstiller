@@ -66,6 +66,8 @@ Agreement is with Jev, not accuracy.
 | `jevstiller_training_jobs{state}` | `running` / `queued` |
 | `jevstiller_verified_keys` | API keys currently accepted |
 | `jevstiller_task_teacher_calls_per_minute{task, production, mode}` | Per loaded task: how much training it would save |
+| `jevstiller_encoder_wait_seconds` | How long a request would now wait for the shared encoder. Above `max_encoder_wait_ms`, requests are forwarded (`questions_total{outcome="overloaded"}`). |
+| `jevstiller_store_dropped_records_total` | Records the sample stores could not write (disk full, I/O errors). Serving goes on; those requests just don't train anything. |
 
 Useful alerts:
 - **Local share:** `rate(requests_total{source="local"}) / rate(requests_total)` dropping suddenly usually means a fallback. Check the tasks' status for `fallback` or `teacher_changed` events.
@@ -73,6 +75,8 @@ Useful alerts:
 - **Queued training:** `training_jobs{state="queued"}` growing for hours means training can't keep up. Raise `train_workers` or cores.
 - **Refusals:** `rejected_total` rising means misconfigured callers (token, network) or abuse.
 - **Readiness:** `/readyz` failing `data_dir_writable` usually means the disk is full.
+- **Dropped records:** any increase in `store_dropped_records_total` means the disk is full or failing. Requests are still answered, but nothing new is learned, and a task's audit statistics go stale.
+- **Loads:** `jevstiller admin stats` shows `loads`. If it climbs by more than a few per minute, there are more active tasks than `max_loaded`: raise it.
 
 ## Logs
 
@@ -86,6 +90,7 @@ Events worth watching (logger `jevstiller`):
 | `teacher model changed` | Jev's resolved version moved; the task falls back or raises auditing |
 | `training failed` | Retried later |
 | `training pool broke` | A worker died (e.g. out of memory); the pool is replaced |
+| `sample store … dropped N records` | A write failed (disk full); logged at most once a minute per task |
 | `re-keyed task` | Migration on start |
 
 ## Data
@@ -101,10 +106,14 @@ Events worth watching (logger `jevstiller`):
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | Nothing is answered locally | Tasks not admitted yet (`admit_after`), the first student still collecting (`status` shows what it waits for), or the caller's key not yet accepted | `jevstiller admin tasks` / `status <key>`; wait, or lower `admit_after` / `min_train_samples` in `[engine]` |
-| A task stopped answering locally | Fallback: audit agreement confidently below target, or Jev's model changed | `status <key>` events; it retrains by itself. `mode <key> teacher_only` to hold it while you investigate. |
+| A task stopped answering locally | Fallback: audit agreement confidently below target, or Jev's model changed | `status <key>` events; it retrains by itself on answers from the fallback on (`since_id`), usually within a few thousand requests. `mode <key> teacher_only` to hold it while you investigate. `mode <key> auto` ends a fallback by hand (serving the old student again). |
 | "classes below N … blocking" | A rare class | Wait, or set `rare_classes = "defer"` in `[engine]` |
 | Callers get 401 from the proxy | `access_token` set and the caller doesn't send `x-jevstiller-token` | Add the header in the SDK: `TypeSafeClient(headers={"x-jevstiller-token": ...})` |
 | Callers get 403 | Client network not in `allow_networks` | Add the CIDR, or `trust_forwarded_for` for a reverse proxy |
 | Callers get 413 | Body larger than `max_body_mb` | Raise it (Jev's own limit is ~64k tokens) |
 | Callers get 429 from the proxy | Jev rate-limited that key; the proxy waits out `retry-after` | Nothing; it clears by itself |
 | Memory grows | Many loaded tasks | Lower `max_loaded` or set `max_memory_mb` |
+| Local share drops at peak times; `questions_total{outcome="overloaded"}` rising | Traffic beyond the encoder's capacity; the excess is forwarded to Jev | A GPU, more cores, or a smaller encoder. Forwarding is the safe overflow: answers stay correct, only Jev usage rises. |
+| `loads` climbing fast, local share low | More active tasks than `max_loaded`: tasks keep reloading | Raise `max_loaded` (a few MB per task) |
+| Disk full | Samples can't be written | Serving continues (local and forwarded). Free space; `store_dropped_records_total` stops rising and learning resumes by itself. |
+| The server was killed (`kill -9`, OOM) | — | Restart it. SQLite recovers its journal, half-built versions are discarded, and training workers of the dead process exit by themselves within seconds. |

@@ -238,3 +238,82 @@ def test_per_key_tenancy_keeps_tasks_apart(tmp_path, world):
         tenants = {i.tenant for i in m.tasks()}
         assert len(tenants) == 2 and all(t.startswith("key:") and GOOD not in t for t in tenants)
         m.close()
+
+
+def test_requests_that_are_only_forwarded_are_not_encoded(tmp_path, world):
+    """Encoding costs milliseconds of CPU with a real encoder; a question that is not a task (yet) never needs it.
+    The load test (P6.4) found forward-only throughput collapsing at 256 callers because every request was encoded."""
+    class Counting(HashEncoder):
+        calls = 0
+
+        def encode(self, texts):
+            Counting.calls += len(texts)
+            return super().encode(texts)
+    jev = FakeJev(world)
+    with serve(jev.app()) as upstream:
+        m = TaskManager(tmp_path, None, Counting(dim=64), Config(training="manual"),
+                        admission=Admission(min_requests=1000), janitor_interval_s=3600)
+        with serve(create_app(m, ProxySettings(upstream=upstream), KeyRegistry(b"s", 3600))) as proxy:
+            c = client(proxy)
+            for t, _ in world.sample(5):
+                ask(c, t)
+            assert Counting.calls == 0 and jev.calls == 5
+            m.admission = Admission(min_requests=1)      # now it becomes a task: encoded once per request
+            ask(c, "w1 w2")
+            assert Counting.calls == 1
+        m.close()
+
+
+def test_saturated_encoder_forwards_instead_of_queueing(stack, world):
+    """When a local answer would wait longer than max_encoder_wait_ms for the shared encoder, the request goes to
+    Jev as it is (P6.4: beyond the encoder's capacity, requests queued without bound and callers timed out)."""
+    proxy, jev, m, app = stack
+    c = client(proxy)
+    ask(c, "w1 w2")                                      # verified key, task created
+    m.encoder.expected_wait_s = lambda: 5.0              # as if the encoder had seconds of work queued
+    rows = m.engine(m.tasks()[0].key).store.counts(m.engine(m.tasks()[0].key).task.version)["total"]
+    calls = jev.calls
+    r = ask(c, "w3 w4")
+    assert r.raw_http_response.headers["x-jevstiller-source"] == "upstream" and jev.calls == calls + 1
+    e = m.engine(m.tasks()[0].key)
+    e.store.flush()
+    assert e.store.counts(e.task.version)["total"] == rows   # not routed, not recorded
+    metrics = app.state.proxy.metrics.questions.value("overloaded")
+    assert metrics >= 1
+    m.encoder.expected_wait_s = lambda: 0.001
+    ask(c, "w5 w6")
+    e.store.flush()
+    assert e.store.counts(e.task.version)["total"] == rows + 1
+
+
+def test_batching_encoder_estimates_its_wait():
+    import threading
+
+    from jevstiller.encoders.batching import BatchingEncoder
+
+    class Slow(HashEncoder):
+        def encode(self, texts):
+            time.sleep(0.01 * len(texts))
+            return super().encode(texts)
+    enc = BatchingEncoder(Slow(dim=16))
+    assert enc.expected_wait_s() == 0.0                  # nothing measured yet
+    enc.encode(["a", "b"])
+    assert 0.005 < enc.expected_wait_s() < 0.05          # one text's worth, ~10 ms
+    threads = [threading.Thread(target=enc.encode, args=(["x"] * 5,)) for _ in range(8)]
+    for t in threads:
+        t.start()
+    time.sleep(0.02)
+    busy = enc.expected_wait_s()
+    for t in threads:
+        t.join()
+    assert busy > 0.1                                    # dozens of texts ahead
+    enc.close()
+
+
+def test_upstream_connections_are_split_over_small_pools(tmp_path):
+    """One httpx pool of 256 connections forwarded ~90 req/s at 256 callers; 16 pools of 16 ~840 (P6.4)."""
+    from jevstiller.server import UPSTREAM_POOL, Proxy
+    m = TaskManager(tmp_path, None, HashEncoder(dim=64), Config(training="manual"), janitor_interval_s=3600)
+    p = Proxy(m, ProxySettings(upstream="http://127.0.0.1:9", max_upstream_inflight=40), KeyRegistry(b"s", 3600))
+    assert len(p.clients) == 3 == -(-40 // UPSTREAM_POOL) and len({id(c) for c in p.clients}) == 3
+    m.close()

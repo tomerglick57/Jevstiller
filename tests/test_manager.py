@@ -152,3 +152,95 @@ def test_per_call_teacher(manager, world, teacher):
     spy = Spy()
     manager.classify("acme", Q, LABELS, _texts(world, 4), teacher=spy)
     assert spy.n == 4
+
+
+@pytest.mark.parametrize("training", ["inline", "background", "manual"])
+def test_unloaded_engines_are_freed_without_the_cycle_collector(tmp_path, teacher, world, training):
+    """An unloaded engine holds megabytes of arrays. If a reference cycle kept it, it would stay until a full
+    garbage collection, and with tasks loading and unloading all the time memory would pile up (P6.6)."""
+    import gc
+    import weakref
+    from concurrent.futures import ThreadPoolExecutor
+
+    from jevstiller.scheduler import TrainScheduler
+    sched = TrainScheduler(pool_factory=lambda: ThreadPoolExecutor(1))
+    m = TaskManager(tmp_path, teacher, HashEncoder(dim=256), _cfg(training=training, min_new_samples=500),
+                    admission=Admission(min_requests=1), max_loaded=0, janitor_interval_s=3600, train_executor=sched)
+    for _ in range(12):
+        m.classify("acme", Q, LABELS, _texts(world, 200))
+    key = m.tasks()[0].key
+    e = m.engine(key)
+    e.drain()
+    ref = weakref.ref(e)
+    del e
+    gc.collect()
+    gc.disable()
+    try:
+        for _ in range(100):
+            m.sweep()
+            if key not in m.loaded():
+                break
+            time.sleep(0.05)
+        assert key not in m.loaded() and ref() is None
+    finally:
+        gc.enable()
+        m.close()
+        sched.shutdown()
+
+
+def test_progress_survives_unload_and_reload(tmp_path, teacher, world):
+    """A task that is often unloaded (more active tasks than max_loaded) still gets its shadow judged, is not
+    retrained on every reload, and still reaches its drift checks."""
+    m = TaskManager(tmp_path, teacher, HashEncoder(dim=512), _cfg(training="manual"),
+                    admission=Admission(min_requests=1), max_loaded=0, janitor_interval_s=3600)
+    for _ in range(4):
+        m.classify("acme", Q, LABELS, _texts(world, 200))
+    key = m.tasks()[0].key
+    e = m.engine(key)
+    e.train_now()                                        # -> shadow
+    shadow, start, trained = e._shadow.name, e._shadow_started_id, e._last_train_id
+    e._audit_new = 7
+    m.sweep()
+    assert key not in m.loaded()
+    e = m.engine(key)                                    # reloaded
+    assert e._shadow.name == shadow and e._shadow_started_id == start and start > 0
+    assert e._last_train_id == trained > 0 and e._audit_new == 7
+    m.close()
+
+
+def test_the_loaded_cap_holds_under_concurrent_loads(tmp_path, teacher, world):
+    """Loads hold the cap themselves: with only the janitor enforcing it, a steady stream of loads outran its
+    one-at-a-time unloads and hundreds of tasks stayed loaded against max_loaded = 50 (benchmarks/manager.py)."""
+    import threading
+    m = TaskManager(tmp_path, teacher, HashEncoder(dim=128), _cfg(training="background", maintenance_interval_s=0.5),
+                    admission=Admission(min_requests=1), max_loaded=4, janitor_interval_s=3600)
+    questions = [f"Question {i}?" for i in range(40)]
+    peak, lock = [0], threading.Lock()
+
+    def worker(i):
+        for j in range(60):
+            m.classify("acme", questions[(i * 7 + j) % 40], LABELS, _texts(world, 1))
+            with lock:
+                peak[0] = max(peak[0], len(m.loaded()))
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # the cap, plus requests in flight and engines mid-maintenance (neither can be unloaded), never all 40
+    assert m.unloads > 0 and peak[0] <= 4 + 8 + 4, peak[0]
+    m.sweep()
+    assert len(m.loaded()) <= 4
+    m.close()
+
+
+def test_a_requested_maintenance_pass_does_not_pin_an_engine(tmp_path, teacher, world):
+    m = TaskManager(tmp_path, teacher, HashEncoder(dim=128), _cfg(training="background", maintenance_interval_s=60),
+                    admission=Admission(min_requests=1), max_loaded=0, janitor_interval_s=3600)
+    m.classify("acme", Q, LABELS, _texts(world, 3))
+    m.classify("acme", Q, LABELS, _texts(world, 3))       # the worker rests 60 s: this pass stays requested
+    e = m.engine(m.tasks()[0].key)
+    assert not e.busy()
+    m.sweep()
+    assert m.loaded() == []
+    m.close()

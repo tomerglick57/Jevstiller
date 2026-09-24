@@ -457,9 +457,11 @@ Escalation on the audit channel's *system agreement* `A` (the student's accepted
 
 ```text
 suspicious:  A < target                 -> request a retrain; audit rate raised; candidate goes to shadow
-broken:      ub(A) < target − margin    -> mode = teacher_only immediately; alert; retrain
+broken:      ub(A) < target − margin    -> mode = teacher_only immediately; alert; retrain on data from here on
 recovered:   a candidate passes shadow  -> back to cascade
 ```
+
+**A broken contract restarts the training data.** Jev can change its answers without changing its model name, so a confirmed break may mean the older answers no longer describe the task. From the `fallback` event on (it records `since_id`, the last row before it), training, calibration, shadow and audit read only newer rows. Older rows stay in the store (for rollback and analysis) but no longer train. Before this rule, a task whose teacher silently changed retrained forever on mixed old and new answers, and every candidate failed shadow: the soak test (P6.6) found it. The rule also holds for plain input drift, where it costs some extra teacher calls. While in fallback every request goes to the teacher, so the new data fills quickly: in the replay test a task was back to 81% local answers within 2,000 requests of the fallback, and at its old ~96% within ~20,000. The fallback survives a restart; `mode auto` from the operator ends it (`fallback_cleared`).
 
 The "broken" test uses the *upper* bound on purpose: it fires only when the data are confident the contract is violated, not merely when a small audit sample is noisy. "Suspicious" uses the point estimate: at n = 500 and a 98% target, the lower bound sits below target even at 1% disagreement, so gating retrains on it would keep the audit rate elevated permanently. Until `drift_min_samples` audit records exist the monitor stays silent. The status report shows the interval and one of `OK` / `inconclusive` / `BROKEN`.
 
@@ -502,13 +504,16 @@ Simple thresholds, all configurable (§9):
 always:           ≥ min_calib_samples in the calibration split
 first training:   ≥ min_train_samples  AND  ≥ min_samples_per_class  in the train split
                   (rare_classes="defer": at least two classes with enough, the rest deferred, §7.6)
-retrain:          ≥ min_new_samples since last training
+                  also after a teacher change or a confirmed drift (no student for the current data);
+                  after a candidate that didn't make it: 25% more rows first (at most min_new_samples)
+retrain:          ≥ min_new_samples since last training (kept in the version's metadata, so a reload
+                  or restart does not count from zero)
              OR   drift monitor or a teacher change requested it
              OR   elapsed time ≥ retrain_interval   (roadmap)
 never:            while a candidate is already in shadow, or a training job is queued or running
 ```
 
-Training is idempotent and cheap (frozen encoder), so being trigger-happy is fine; the shadow gate is what prevents bad promotions. The cheap checks come first (new rows since the last training); the store is only re-counted every 100 new rows, because a maintenance pass runs about once a second per loaded task.
+Training is idempotent and cheap (frozen encoder), so being trigger-happy is fine; the shadow gate is what prevents bad promotions. The one exception is a task whose candidates keep failing (a hard task, or one still settling after a drift): it used to retrain every 100 rows, keeping a training worker busy forever. The 25% backoff bounds that to a logarithmic number of fits. The cheap checks come first (new rows since the last training); the store is only re-counted every 100 new rows, because a maintenance pass runs about once a second per loaded task.
 
 ### 7.12 Teacher lineage
 
@@ -518,6 +523,8 @@ A task's student reproduces *one* teacher. `jev-latest` is an alias, so the mode
 - a new model must answer `teacher_change_confirm` (20) times in a row before the lineage switches, so a gradual rollout behind the alias can't make it flap;
 - on a switch (`teacher_changed` event), any shadow candidate of the old lineage is rejected and a retrain is requested. `teacher_change="fallback"` (default) sends all traffic to the teacher until a student of the new model passes shadow, which is what the contract requires. `"audit"` keeps serving with a raised audit rate and lets the drift monitor decide, which is cheaper when a whole fleet's alias moves at once;
 - the lineage survives restarts (it is the model of the latest teacher-labelled row), and a production version records the lineage it was trained on.
+
+After a teacher change or a confirmed drift (§7.9), the loop has no production student *for the current data*. It then trains like a first student: once the readiness thresholds are met on the current data, not merely on request.
 
 ### 7.13 Training execution
 
@@ -535,6 +542,8 @@ Measured (docs/benchmarks.md): the fit is BLAS-bound, and BLAS uses every core b
 
 **`TrainScheduler`** is the shared executor for many tasks. It is round-robin across tenants, so one tenant's hundred tasks can't starve another's one. Within a tenant, the task with the highest recent rate of teacher calls goes first, because training it saves the most. Failed jobs are retried with backoff, a crashed worker pool is replaced, and queued jobs can be cancelled.
 
+Pool workers end themselves when the server process dies. After a `kill -9` or the OOM killer, a worker never sees its job queue close (it holds a write end of the queue itself) and would otherwise live on, holding memory, along with the forkserver and resource tracker (P6.5 found this). Each worker has a watchdog thread that exits within a second of the server's death. A training job interrupted by a crash leaves only a hidden staging directory, removed when the task next loads.
+
 ### 7.14 Many tasks: the task manager
 
 `TaskManager` owns every task of a process. A task is identified by what the teacher is asked, never by a caller-chosen name:
@@ -546,11 +555,15 @@ key = sha256(tenant, question type, Task.version [, requested model])[:20]     T
 Matching is exact on purpose: Jev reads its criteria literally, so a "similar" question is not the same question. *(roadmap)* Warm-starting a new task from a close one, for training speed only; never serving with it.
 
 - **Admission.** A new key becomes a task only after `min_requests` (50) requests within `window_s` (24 h). Before that, its requests go to the teacher unrecorded. Services that build questions per request would otherwise create an unbounded number of one-off tasks. `max_tasks_per_tenant` caps the rest.
-- **Loading.** Engines load on demand (~4 ms to reopen from disk) and sit in an LRU bounded by `max_loaded` and `max_memory_mb`. The janitor unloads idle engines only: no request in flight, no maintenance running, no training queued.
+- **Loading.** Engines load on demand (~4 ms to reopen from disk) and sit in an LRU bounded by `max_loaded` and `max_memory_mb`. Only idle engines are unloaded: no request in flight, no maintenance pass running, no training queued. (A pass that is only *requested* doesn't count: the next load requests another.) A load that pushes past `max_loaded` unloads the least recently used idle engine itself, and the janitor catches up on the rest. With the janitor alone, a steady stream of loads outran it: 505 tasks stayed loaded against a cap of 50.
+  - An unloaded engine must be freed at once, by reference counting. Its arrays (student, OOD reference: up to ~10 MB) are invisible to the cycle collector's allocation-count trigger, so an engine kept alive by a reference cycle lingers until a full collection. With more active tasks than `max_loaded`, tasks load and unload many times a second, and memory grew without bound (the P6.6 soak: 555 MB after 4 minutes, still accelerating). The scheduler therefore holds an engine's priority weakly, and training callbacks hold it weakly. `tests/test_manager.py` checks that an unloaded engine is freed with the collector off.
+  - Progress survives an unload: the last training point and a shadow's start are kept in the version's metadata, and the manager carries the in-memory counters (audit answers towards the next drift check, the teacher-call rate) to the next load. Without that, a task that was often unloaded never had its shadow judged, retrained on every reload, and never reached a drift check.
+  - Size `max_loaded` above the number of active tasks. A loaded task costs a few MB (`jevstiller_student_memory_bytes`), while a reload costs a few ms of disk reads each time.
 - **Layout.** `<data_dir>/tasks/<key>/` holds `task.json` (spec, tenant, model, created, last seen), `samples.sqlite` and `versions/`. `idle_ttl_s` (off by default) deletes unused tasks; `delete(key)` removes one.
 - **Process-level settings** the manager applies, each found by measurement:
   - BLAS is capped at 1 thread for serving: small matrix products from many threads otherwise oversubscribe the CPU (2.4× throughput, p99 80 → 13 ms at 50 tasks).
   - glibc is told to return freed memory: arrays freed by unloaded tasks otherwise stay resident, and RSS climbed to 1.7 GB with 0.2 GB live.
+  - glibc is limited to 2 heap arenas: every load starts threads and SQLite connections, and memory freed across many per-thread arenas stayed resident (~47 KB per load/unload, with Python's own allocations flat). With 2 arenas it's ~9 KB, with serving latency unchanged, because the GIL serialises most allocation anyway.
 
 ### 7.15 The proxy
 
@@ -558,7 +571,9 @@ Matching is exact on purpose: Jev reads its criteria literally, so a "similar" q
 
 - **All or nothing per request.** A request is answered entirely locally or entirely by Jev, and Jev's response is returned unchanged. That keeps the proxy exactly as correct as Jev whenever it forwards, and it never has to guess whether Jev answers questions independently. *(roadmap)* Forwarding only the questions the students can't answer.
 - **Keys must be proven.** A key counts as accepted only after Jev answered a `/v1/systemone` request made with it. Requests with an unaccepted key are forwarded first, and recorded only after Jev's successful answer, so a caller without a working key can't get local answers or create tasks. A 401/403 revokes at once. Keys are held as salted hashes in memory only. (Security audit, 2026-09-24: docs/security.md.)
-- **Bounded work per request.** At most `max_questions` distinct questions are routed; duplicate questions are routed once; the state is encoded once per request; the body limit is enforced while streaming.
+- **Bounded work per request.** At most `max_questions` distinct questions are routed; duplicate questions are routed once; the state is encoded once per request, and only if one of its questions is a task (a request that is only forwarded is never encoded); the body limit is enforced while streaming.
+- **Never much slower than Jev.** The shared encoder is the local path's ceiling (bge-small on 16 CPU cores: ~150–340 texts/s depending on text length). Beyond it, requests used to queue without bound: in the load test, 15 s p99 at 256 callers, and throughput halved as the machine thrashed. Now a request goes to Jev as it is whenever a local answer would wait longer than `max_encoder_wait_ms` (200). The estimate counts everything ahead of it: requests already routing (waiting for a worker thread) and texts in the encoder's queue, times the measured time per text. Jev is the overflow. Answers stay correct, and only Jev usage rises.
+- **Many small upstream pools.** httpcore's connection pool does work per connection for every waiting request, so one pool of 256 connections forwarded only ~90 req/s at 256 callers. Upstream connections are split over clients of 16, and each request takes the least busy: ~610 req/s through the proxy, against ~880 for Jev's own ceiling at 290 ms per answer.
 - **The requested model is part of the task key**, and the local response reports the concrete model version the student was trained against.
 - **Fail open to Jev.** Any error in the proxy's own logic forwards the request instead.
 - **Split engine API.** `Jevstiller.route()` decides, the proxy makes the upstream call itself (asynchronously), and `complete()` records. `classify_batch` is `route` + teacher + `complete`.
