@@ -11,6 +11,7 @@ from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 
@@ -77,6 +78,8 @@ CREATE INDEX IF NOT EXISTS ix_samples_ts ON samples(ts);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts REAL, kind TEXT, detail TEXT);
 """
 
+SCHEMA_VERSION = 1                     # PRAGMA user_version; 0 = a 0.1.0 store (or a new file)
+
 # columns added after 0.1.0: (name, type). Existing stores get them via ALTER TABLE on open.
 _ADDED_COLUMNS = (("state_type", "TEXT"),)
 _INDEXES_AFTER_MIGRATION = """
@@ -87,6 +90,30 @@ CREATE INDEX IF NOT EXISTS ix_samples_lineage ON samples(task_version, teacher_m
 def _lineage(teacher_model: str | None) -> tuple[str, tuple]:
     """SQL filter for one teacher lineage; None = every teacher."""
     return (" AND teacher_model=?", (teacher_model,)) if teacher_model is not None else ("", ())
+
+
+@runtime_checkable
+class Store(Protocol):
+    """What the engine and the training job need from a sample store. `SampleStore` (one SQLite file per
+    task) is the implementation; a shared database (e.g. Postgres, for several replicas) would implement the
+    same methods, plus a way for `training.run_fit_job` to open it read-only from a worker process (today it
+    reopens `SampleStore(path, read_only=True)`)."""
+
+    path: Path
+
+    def insert(self, recs: Sequence[Record]) -> None: ...
+    def event(self, kind: str, **detail) -> None: ...
+    def flush(self, timeout: float | None = None) -> bool: ...
+    def counts(self, task_version: str, teacher_model: str | None = None) -> dict: ...
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None): ...
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None): ...
+    def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None): ...
+    def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int,
+                     teacher_model: str | None = None): ...
+    def latest_teacher_model(self, task_version: str) -> str | None: ...
+    def max_id(self) -> int: ...
+    def events(self, limit: int = 20) -> list[dict]: ...
+    def close(self) -> None: ...
 
 
 class SampleStore:
@@ -122,14 +149,16 @@ class SampleStore:
         self._writer: threading.Thread | None = None
         if not read_only:
             conn = self._conn()
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(_SCHEMA)
-            have = {r[1] for r in conn.execute("PRAGMA table_info(samples)")}
-            with conn:
-                for col, typ in _ADDED_COLUMNS:
-                    if col not in have:
-                        conn.execute(f"ALTER TABLE samples ADD COLUMN {col} {typ}")
-            conn.executescript(_INDEXES_AFTER_MIGRATION)
+            if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:   # new or older store
+                conn.execute("PRAGMA journal_mode=WAL")                            # persists in the file
+                conn.executescript(_SCHEMA)
+                have = {r[1] for r in conn.execute("PRAGMA table_info(samples)")}
+                with conn:
+                    for col, typ in _ADDED_COLUMNS:
+                        if col not in have:
+                            conn.execute(f"ALTER TABLE samples ADD COLUMN {col} {typ}")
+                conn.executescript(_INDEXES_AFTER_MIGRATION)
+                conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def _conn(self) -> sqlite3.Connection:
         """This thread's connection, opened on first use."""

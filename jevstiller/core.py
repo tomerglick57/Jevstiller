@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 import threading
 import time
 from collections.abc import Sequence
-from concurrent.futures import Executor
+from concurrent.futures import Executor, Future
+from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +35,22 @@ class Result:
     routing_reason: str
     latency_ms: float
     error: Exception | None = None
+
+
+class DecayingRate:
+    """An exponentially decaying event count, reported per minute. Thread-safe enough for a priority hint."""
+
+    def __init__(self, half_life_s: float = 600):
+        self.tau = half_life_s / math.log(2)
+        self._v, self._t = 0.0, time.monotonic()
+
+    def add(self, n: float) -> None:
+        now = time.monotonic()
+        self._v = self._v * math.exp(-(now - self._t) / self.tau) + n
+        self._t = now
+
+    def value(self) -> float:
+        return self._v * math.exp(-(time.monotonic() - self._t) / self.tau) * 60 / self.tau
 
 
 class TeacherError(RuntimeError):
@@ -172,6 +190,10 @@ class Jevstiller:
         self._last_train_id = 0
         self._shadow_started_id = 0
         self._teacher_errors = 0
+        self._pending: tuple[Future, Path, str | None] | None = None   # queued/running training job
+        self._teacher_rate = DecayingRate(half_life_s=600)
+        self._audit_new = 0                 # audit answers since the last drift check
+        self._counted_at = -10**9           # store max id at the last readiness count
         self.labels = task.labels
         self._lidx = {c: i for i, c in enumerate(self.labels)}
         self._prod: Bundle | None = self._load(self.registry.production) if self.registry.production else None
@@ -268,18 +290,21 @@ class Jevstiller:
         ood = b.ood.score(X)
         return P, conf, ood
 
-    def classify(self, text: State) -> Result:
+    def classify(self, text: State, teacher: Teacher | None = None) -> Result:
         """Classify one state: text, or a JSON object/array. Raises TeacherError if it needed the teacher and
         the call failed."""
-        return self.classify_batch([text])[0]
+        return self.classify_batch([text], teacher=teacher)[0]
 
-    def classify_batch(self, texts: Sequence[State], errors: str = "raise") -> list[Result]:
+    def classify_batch(self, texts: Sequence[State], errors: str = "raise",
+                       teacher: Teacher | None = None) -> list[Result]:
         """Classify many states (text, or JSON objects/arrays). Objects are encoded and stored as canonical
         JSON; the teacher receives them unchanged. If some teacher calls fail, `errors="raise"` (default)
         raises TeacherError after recording the rest; `errors="return"` returns Results with `error` set and
-        `label=None`."""
+        `label=None`. `teacher` overrides the task's teacher for this call (e.g. the caller's own API key);
+        its answers join the same lineage as long as they report the same model."""
         if errors not in ("raise", "return"):
             raise ValueError("errors must be 'raise' or 'return'")
+        teacher = teacher or self.teacher
         t0 = time.perf_counter()
         n = len(texts)
         stexts = [state_text(t) for t in texts]
@@ -341,7 +366,7 @@ class Jevstiller:
         failed: dict[int, Exception] = {}
         if to_teacher:                                      # no lock held: callers' teacher calls overlap
             try:
-                outs = list(self.teacher.classify([texts[i] for i in to_teacher], self.task))
+                outs = list(teacher.classify([texts[i] for i in to_teacher], self.task))
                 if len(outs) != len(to_teacher):
                     raise RuntimeError(f"teacher returned {len(outs)} answers for {len(to_teacher)} texts")
             except Exception as e:
@@ -352,7 +377,7 @@ class Jevstiller:
                     continue
                 r = recs[i]
                 r.teacher_label, r.teacher_probs, r.teacher_confidence = o.label, o.probs, o.confidence
-                r.teacher_model, r.teacher_input_tokens = o.model or self.teacher.name, o.input_tokens
+                r.teacher_model, r.teacher_input_tokens = o.model or teacher.name, o.input_tokens
                 r.teacher_cost_usd, r.teacher_request_id, r.teacher_latency_ms = o.cost_usd, o.request_id, o.latency_ms
                 results[i] = Result(o.label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
 
@@ -365,6 +390,12 @@ class Jevstiller:
         answered = [recs[i].teacher_model for i in to_teacher if i not in failed]
         if answered:
             self._observe_teacher(answered)
+        if to_teacher:
+            self._teacher_rate.add(len(to_teacher))
+            n_audit = sum(recs[i].channel == "audit" for i in to_teacher if i not in failed)
+            if n_audit:
+                with self._state:
+                    self._audit_new += n_audit
         self._after_batch()
         if failed:
             with self._state:
@@ -381,7 +412,12 @@ class Jevstiller:
     def _after_batch(self) -> None:
         if self.cfg.training == "inline":
             self.maintain()
-        elif self.cfg.training == "background":
+        else:
+            self._kick()
+
+    def _kick(self) -> None:
+        """Ask the background worker for a maintenance pass (no-op unless training == "background")."""
+        if self.cfg.training == "background":
             with self._cv:
                 if self._stop:
                     return
@@ -428,12 +464,19 @@ class Jevstiller:
         """One maintenance pass: judge the shadow candidate, train if due, check drift. Safe from any thread;
         passes are serialised. Called automatically unless `config.training == "manual"`."""
         with self._maint:
+            if self._pending is not None and self._pending[0].done():
+                self._finish_train()
             if self._shadow is not None:
                 self._judge_shadow()
-            if self._shadow is None and self._should_train():
-                self._train()
+            if self._shadow is None and self._pending is None and self._should_train():
+                self._start_train(wait=self.cfg.training == "inline")
             if self._prod is not None and self.mode == "cascade":
-                self._check_drift()
+                with self._state:
+                    due = self._audit_new >= self.cfg.drift_check_every
+                    if due:
+                        self._audit_new = 0
+                if due:
+                    self._check_drift()
 
     def _readiness(self, c: dict) -> dict:
         """What the first student is waiting for, from `store.counts` of the current lineage."""
@@ -447,9 +490,19 @@ class Jevstiller:
                 "calib": (c["labelled_calib"], self.cfg.min_calib_samples), "min_per_class": need,
                 "rare": rare, "blocked_by_rare": blocked, "rare_classes": self.cfg.rare_classes}
 
+    READINESS_CHECK_ROWS = 100      # re-count the store for a first student at most every this many new rows
+
     def _should_train(self) -> bool:
+        """Cheap checks first: a pass runs about once a second per loaded task, and counting scans the store."""
         if self._teacher_model is None:
             return False
+        latest = self.store.max_id()
+        if not self._retrain_requested:
+            if self._prod is not None and latest - self._last_train_id < self.cfg.min_new_samples:
+                return False
+            if self._prod is None and latest - self._counted_at < self.READINESS_CHECK_ROWS:
+                return False
+        self._counted_at = latest
         c = self.store.counts(self.task.version, self._teacher_model)
         if c["labelled_calib"] < self.cfg.min_calib_samples:
             return False
@@ -460,11 +513,22 @@ class Jevstiller:
         return (self.store.max_id() - self._last_train_id) >= self.cfg.min_new_samples
 
     def train_now(self) -> TrainReport:
-        """Train a candidate now, in the calling thread (the fit itself goes to `train_executor` if set)."""
+        """Train a candidate now and wait for it (the job itself runs on `train_executor` if set). If a
+        training job is already queued or running, wait for that one instead."""
         with self._maint:
-            return self._train()
+            if self._pending is not None:
+                futures_wait((self._pending[0],))
+                return self._finish_train(raise_errors=True)
+            return self._start_train(wait=True, raise_errors=True)
 
-    def _train(self) -> TrainReport:
+    def training_priority(self) -> float:
+        """How much training this task could save: its recent rate of teacher calls (decayed, per minute)."""
+        return self._teacher_rate.value()
+
+    def _start_train(self, wait: bool, raise_errors: bool = False) -> TrainReport | None:
+        """Prepare a training job and run it: in this thread without `train_executor`; otherwise submit it,
+        and either wait (`wait=True`) or return None and let a later maintenance pass adopt the result, so
+        shadow judging and drift checks keep running while the job waits for a worker."""
         tv, eid = self.task.version, self.encoder.id
         self.store.flush()                               # the job reads the store from its own connection
         with self._state:
@@ -481,20 +545,46 @@ class Jevstiller:
                               ood_quantile=self.cfg.ood_quantile, ood_k=self.cfg.ood_k,
                               epochs=self.cfg.student_epochs, l2=self.cfg.student_l2,
                               patience=self.cfg.student_patience, seed=self.cfg.seed,
-                              threads=self.cfg.train_threads),
+                              threads=self.cfg.train_threads, ood_max_ref=self.cfg.ood_max_ref),
                      hard_labels=self.cfg.label_target == "hard",
                      importance_weighting=self.cfg.importance_weighting,
                      prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None,
                      teacher_model=lineage, min_samples_per_class=self.cfg.min_samples_per_class,
                      defer_rare=self.cfg.rare_classes == "defer")
+        if self.train_executor is None:
+            fut: Future = Future()
+            try:
+                fut.set_result(run_fit_job(job))
+            except BaseException as e:
+                fut.set_exception(e)
+        else:
+            fut = self.train_executor.submit(run_fit_job, job)
+        self._pending = (fut, staged, lineage)
+        if wait or self.train_executor is None:
+            futures_wait((fut,))
+            return self._finish_train(raise_errors)
+        fut.add_done_callback(lambda _f: self._kick())
+        self.store.event("training_queued", teacher_model=lineage)
+        return None
+
+    def _finish_train(self, raise_errors: bool = False) -> TrainReport:
+        """Adopt the finished job's result as a shadow candidate (or record why not). Holds `_maint`.
+        A failed job is recorded (`train_failed` event) and retried on a later pass; `raise_errors` re-raises
+        it instead (explicit `train_now`)."""
+        fut, staged, lineage = self._pending
+        self._pending = None
+        tv, eid = self.task.version, self.encoder.id
         try:
-            if self.train_executor is None:
-                res = run_fit_job(job)
-            else:
-                res = self.train_executor.submit(run_fit_job, job).result()
-        except BaseException:
+            res = fut.result()
+        except BaseException as e:
             shutil.rmtree(staged, ignore_errors=True)
-            raise
+            with self._state:
+                self._retrain_requested = True           # try again on a later pass
+            self.store.event("train_failed", error=repr(e)[:500])
+            log.error("task %s: training failed: %r", self.task.name, e)
+            if raise_errors:
+                raise
+            return TrainReport(None, 0, 0, None, float("nan"), 0.0, False, f"failed: {e!r}")
         if res.policy is None:
             shutil.rmtree(staged, ignore_errors=True)
             return TrainReport(None, res.n_train, res.n_calib, None, float("nan"), 0.0, False, "no data")
@@ -708,6 +798,20 @@ class Jevstiller:
                 "student_agreement_all": float((pred == t).mean()) if len(t) else 0.0,
                 "accepted": acc, "student_label": pred, "student_conf": conf, "ood": ood}
 
+    def busy(self) -> bool:
+        """Maintenance (training, shadow judging, drift checks) is running or queued."""
+        with self._cv:
+            pending = self._kicks != self._done
+        return pending or self._maint.locked() or self._pending is not None
+
+    def footprint_bytes(self) -> int:
+        """Memory held by the loaded versions (student heads and OOD references)."""
+        n = 0
+        for b in (self._prod, self._shadow):
+            if b is not None:
+                n += b.student.W.nbytes + b.student.b.nbytes + (b.ood.X.nbytes if b.ood.X is not None else 0)
+        return n
+
     def close(self, timeout: float | None = None) -> None:
         """Stop the background worker (after its current pass) and close the store."""
         with self._cv:
@@ -716,4 +820,7 @@ class Jevstiller:
             worker = self._worker
         if worker is not None:
             worker.join(timeout)
+        pending = self._pending
+        if pending is not None and pending[0].cancel():  # still queued: drop it (a running job's staging
+            shutil.rmtree(pending[1], ignore_errors=True)  # directory is removed by the next Registry open)
         self.store.close()

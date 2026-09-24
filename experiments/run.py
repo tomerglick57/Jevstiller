@@ -69,6 +69,7 @@ def main() -> None:
     ap.add_argument("--min-calib", type=int, default=200)
     ap.add_argument("--min-new", type=int, default=1000)
     ap.add_argument("--shadow-min", type=int, default=300)
+    ap.add_argument("--ood-max-ref", type=int, default=5000)
     ap.add_argument("--out", default="experiments/results")
     ap.add_argument("--tag", default="")
     a = ap.parse_args()
@@ -130,7 +131,7 @@ def main() -> None:
 
     cfg = Config(audit_rate=a.audit, min_train_samples=a.min_train, min_samples_per_class=a.min_per_class,
                  min_calib_samples=a.min_calib, min_new_samples=a.min_new, shadow_min_samples=a.shadow_min,
-                 seed=a.seed, label_target=a.label_target,
+                 seed=a.seed, label_target=a.label_target, ood_max_ref=a.ood_max_ref,
                  training="inline")                     # replays must not depend on thread timing
     js = Jevstiller(task, teacher, data_dir, encoder=enc, config=cfg)
 

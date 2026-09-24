@@ -16,6 +16,7 @@ class Encoder(Protocol):
         ...
 
 
+from .batching import BatchingEncoder  # noqa: E402
 from .hashing import HashEncoder  # noqa: E402
 
 # tier -> (torch checkpoint, onnx repo)
@@ -53,4 +54,4 @@ def load_encoder(spec: str = "base", backend: str = "auto", device: str = "auto"
     raise ValueError(f"unknown encoder spec {spec!r}")
 
 
-__all__ = ["Encoder", "HashEncoder", "load_encoder", "TIERS"]
+__all__ = ["Encoder", "HashEncoder", "BatchingEncoder", "load_encoder", "TIERS"]

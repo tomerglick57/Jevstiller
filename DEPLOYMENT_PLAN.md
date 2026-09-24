@@ -106,12 +106,20 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 
 ## Phase 2 — TaskManager: many tasks in one process
 
-- [ ] **P2.1** `TaskManager` keyed by `task_key`: get-or-create an `Engine`, with an LRU of loaded models (config: max loaded tasks / max memory). Unloading keeps everything on disk. *Done when:* 1,000 registered tasks with 50 active run inside a fixed memory cap.
-- [ ] **P2.2** A shared encoder across all tasks, with **micro-batching**. Collect requests over ~2–5 ms or N items and run one encoder batch (big win on GPU). One encoder instance per process.
-- [ ] **P2.3** Shared storage layout. One SQLite DB for the deployment, with `task_key` on every row and index (replacing `max_id()` across tasks), or one DB per task with a shared connection pool. Pick one and benchmark it at 1k tasks. Keep the store behind an interface (`SampleStore` protocol) so Postgres can be added later (and by the hosted repo).
-- [ ] **P2.4** Shrink the OOD reference. `KnnOOD` keeps up to 50k × dim float32 per task (~150 MB at dim 768). Cap it (e.g. 5k, stratified by class) or use float16. Check that coverage and agreement don't regress on the Banking77 replay.
-- [ ] **P2.5** Task admission and GC. Many callers build questions dynamically (per-request criteria), which would create unbounded one-off tasks. Only start collecting training rows once a `task_key` has been seen N times within a window (cheap counter first). Set a cap on tasks per tenant. Remove tasks idle beyond a TTL (configurable, off by default).
-- [ ] **P2.6** Global scheduler for training jobs: priority by traffic × expected savings, fairness across tenants, retries.
+- [x] **P2.1** `TaskManager` keyed by `task_key`: get-or-create an `Engine`, with an LRU of loaded models (config: max loaded tasks / max memory). Unloading keeps everything on disk. *Done when:* 1,000 registered tasks with 50 active run inside a fixed memory cap.
+  *Result (`benchmarks/manager.py --requests 60000`):* 1,000 tasks, 50 hot (90% of traffic), `max_loaded=50`, 8 threads, 5,600 loads/unloads. Throughput about 550 req/s. Hits: p50 2.8 ms, p99 7.5 ms. Reloading an unloaded task: p50 100 ms under load (4 ms alone). A first open, which creates the store: p50 210 ms. Student memory is capped at 118 MB.
+  - Fixed on the way: BLAS oversubscription (`TaskManager(blas_threads=1)`: 2.4× throughput, p99 80 → 13 ms at 50 tasks). Also, maintenance now only works when something changed.
+  - Also fixed: glibc kept freed arrays from unloaded tasks, and RSS climbed to 1.7 GB. It wasn't a leak: `malloc_trim` returns it. The manager now sets a fixed mmap threshold and trims after unloading.
+  - **Still open:** RSS ends at ~440 MB but peaks around 1 GB mid-run. The next suspects are SQLite page caches (2 MB × 2–3 connections per loaded task: try a smaller `cache_size`) and whether it's bounded over hours (P6.6 soak test). Also: reload p50 is 100 ms under load against 4 ms alone. That's lock and disk contention with the janitor's unloads, which is worth profiling before P3 ships.
+- [x] **P2.2** Shared encoder with micro-batching.
+  *Result:* `BatchingEncoder` adds no waiting: one worker thread, and calls that queue up while it runs are merged into the next batch (optionally `max_wait_ms`). The manager takes one encoder for all tasks. Not benchmarked with a real GPU encoder yet.
+- [x] **P2.3** Shared storage layout. *Decision: one SQLite file per task* (`<data_dir>/tasks/<key>/samples.sqlite`). Tasks never share a writer, deleting a task is deleting a directory (P4.6), and a failure in one store doesn't touch the others. Reopening costs ~4 ms, after the store stopped re-running its schema on every open (`PRAGMA user_version`). A `Store` protocol documents the interface for a future Postgres backend. That backend would also need a way for the training job to read it.
+- [x] **P2.4** Shrink the OOD reference.
+  *Result:* `Config.ood_max_ref` defaults to 5,000, sampled stratified by class (was 50,000 at random). Replays with a perfect teacher and bge-small: Banking77 held-out coverage is 65.7% at 50k and 5k, and 65.5% at 1k, with agreement 98.95% in all three. CLINC150 is 82.8% / 99.35% at 50k against 83.7% / 99.30% at 5k. Neither dataset exceeds ~6.4k training rows, so re-check on a large live task.
+- [x] **P2.5** Task admission and GC.
+  *Result:* `Admission(min_requests=50, window_s=86400)` counts in memory, capped at 100k candidate keys. Requests before admission go to the teacher unrecorded (`not_admitted`). `max_tasks_per_tenant` gives `tenant_task_limit`. `idle_ttl_s` (off by default) and `delete()` remove a task's directory.
+- [x] **P2.6** Global scheduler for training jobs.
+  *Result:* `TrainScheduler` is round-robin across tenants and orders by highest recent rate of teacher calls within a tenant. It retries with exponential backoff, replaces a broken process pool (found and fixed a deadlock: the pool's callback runs inside its own shutdown lock), and lets queued jobs be cancelled. Training is asynchronous with any executor, so a task waiting for a worker keeps judging its shadow and checking drift.
 
 ## Phase 3 — The proxy server
 

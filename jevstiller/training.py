@@ -40,7 +40,7 @@ class Candidate:
 def fit_candidate(X: np.ndarray, Y: np.ndarray, w: np.ndarray | None, Xc: np.ndarray, yc: np.ndarray,
                   *, budget: float, delta: float, ood_quantile: float, ood_k: int, epochs: int, l2: float,
                   patience: int, seed: int, threads: int = 0, labels: list[str] | None = None,
-                  deferred_labels: list[str] = ()) -> Candidate:
+                  deferred_labels: list[str] = (), ood_max_ref: int = 5_000) -> Candidate:
     """X, Y, w: training embeddings, teacher distributions, importance weights (None = unweighted).
     Xc, yc: IID calibration embeddings and teacher argmax indices. `budget` is the disagreement budget the
     policy is fitted at (already reduced by any headroom). `threads`: BLAS threads for the fit (0 = no cap).
@@ -48,7 +48,7 @@ def fit_candidate(X: np.ndarray, Y: np.ndarray, w: np.ndarray | None, Xc: np.nda
     small enough not to notice. `deferred_labels` (names from `labels`): the policy never lets the student
     answer when it predicts one of them."""
     args = (X, Y, w, Xc, yc, budget, delta, ood_quantile, ood_k, epochs, l2, patience, seed, labels,
-            list(deferred_labels))
+            list(deferred_labels), ood_max_ref)
     if threads > 0:
         with threadpool_limits(limits=threads, user_api="blas"):
             return _fit(*args)
@@ -56,11 +56,11 @@ def fit_candidate(X: np.ndarray, Y: np.ndarray, w: np.ndarray | None, Xc: np.nda
 
 
 def _fit(X, Y, w, Xc, yc, budget, delta, ood_quantile, ood_k, epochs, l2, patience, seed, labels,
-         deferred_labels) -> Candidate:
+         deferred_labels, ood_max_ref) -> Candidate:
     student = LinearStudent(X.shape[1], Y.shape[1])
     fit = student.fit(X, Y, epochs=epochs, l2=l2, seed=seed, sample_weight=w, patience=patience)
     ood = KnnOOD(ood_k)
-    ood.fit(X, seed=seed)
+    ood.fit(X, max_ref=ood_max_ref, seed=seed, y=Y.argmax(axis=1))
     Pc = student.predict_proba(Xc)
     conf = Pc.max(axis=1)
     agree = Pc.argmax(axis=1) == yc

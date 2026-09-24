@@ -100,9 +100,11 @@ class Config:
     shadow_min_samples: int = 1000      # requests a shadow candidate must run alongside before judgement
     ood_quantile: float = 0.99
     ood_k: int = 10
+    ood_max_ref: int = 5_000            # reference embeddings kept per version (memory, per-request cost)
     drift_window: int = 500             # audit records in the rolling agreement check
     drift_min_samples: int = 200
     drift_margin: float = 0.0           # ub(agreement) < target - margin -> hard fallback
+    drift_check_every: int = 20         # re-check drift after this many new audit answers
     mode: str = "auto"                  # auto | teacher_only | cascade
     training: str = "background"        # background: a worker thread trains off the request path
                                         # inline: train inside classify_batch (deterministic replays, tests)
