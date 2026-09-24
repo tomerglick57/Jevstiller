@@ -1,0 +1,8 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	// Cloudflare Pages project (classic Pages, not Workers), served at https://jevstiller.pages.dev.
+	// Static site only: Astro builds into ./dist and Pages serves it as-is (404.html included).
+	"name": "jevstiller",
+	"compatibility_date": "2026-09-24",
+	"pages_build_output_dir": "./dist"
+}

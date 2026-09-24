@@ -1,0 +1,57 @@
+name: website
+# Builds website/ and deploys it to Cloudflare Pages (project "jevstiller").
+#   push to main          -> production, https://jevstiller.pages.dev
+#   PR from this repo     -> preview, https://<branch>.jevstiller.pages.dev
+#   PR from a fork        -> build only (forks get no secrets)
+# Needs repo secrets CLOUDFLARE_API_TOKEN (Account > Cloudflare Pages > Edit) and CLOUDFLARE_ACCOUNT_ID.
+on:
+  push:
+    branches: [main]
+    paths: ["website/**", ".github/workflows/website.yml"]
+  pull_request:
+    paths: ["website/**", ".github/workflows/website.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}   # never cut a production deploy short
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write   # lets wrangler-action attach the preview URL to the PR
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+      - name: Pick the Pages branch
+        id: branch
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          REF: ${{ github.head_ref || github.ref_name }}
+        # Branch names go through env and are reduced to [a-zA-Z0-9-], so they can't inject into the command.
+        run: echo "name=$(printf '%s' "$REF" | tr -c 'a-zA-Z0-9-' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloudflare Pages
+        if: steps.branch.outcome == 'success'
+        uses: cloudflare/wrangler-action@v4.1.2
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: website
+          command: pages deploy --branch ${{ steps.branch.outputs.name }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
