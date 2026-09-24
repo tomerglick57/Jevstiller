@@ -7,12 +7,10 @@ description: Install Jevstiller, run the loop without an API key, then put it in
 
 Jevstiller needs Python 3.10 or newer. CPU works out of the box; a GPU only speeds up the encoder.
 
-It is not on PyPI yet, so install it from GitHub:
-
 ```bash
-pip install "jevstiller @ git+https://github.com/tomerglick57/Jevstiller"                 # core: numpy only
-pip install "jevstiller[jev,onnx] @ git+https://github.com/tomerglick57/Jevstiller"       # Jev adapter + ONNX encoders (CPU)
-pip install "jevstiller[jev,torch] @ git+https://github.com/tomerglick57/Jevstiller"      # PyTorch encoders (CUDA if available)
+pip install jevstiller                 # core: numpy only
+pip install "jevstiller[jev,onnx]"     # Jev adapter + ONNX encoders (CPU)
+pip install "jevstiller[jev,torch]"    # PyTorch encoders (CUDA if available)
 ```
 
 | extra | adds |
