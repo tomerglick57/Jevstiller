@@ -30,7 +30,8 @@ all = ["jevstiller[jev,onnx,torch]"]
 dev = ["pytest>=7", "ruff>=0.4"]
 
 [project.urls]
-Homepage = "https://github.com/tomerglick57/Jevstiller"
+Homepage = "https://jevstiller.pages.dev"
+Documentation = "https://jevstiller.pages.dev/getting-started/"
 Repository = "https://github.com/tomerglick57/Jevstiller"
 Issues = "https://github.com/tomerglick57/Jevstiller/issues"
 Design = "https://github.com/tomerglick57/Jevstiller/blob/main/DESIGN.md"
@@ -44,7 +45,7 @@ build-backend = "hatchling.build"
 packages = ["jevstiller"]
 
 [tool.hatch.build.targets.sdist]
-include = ["jevstiller", "tests", "README.md", "LICENSE", "DESIGN.md", "CHANGELOG.md"]
+include = ["/jevstiller", "/tests", "/README.md", "/LICENSE", "/DESIGN.md", "/CHANGELOG.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
