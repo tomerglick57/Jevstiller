@@ -15,8 +15,10 @@ task = Task(
     classes={c: "" for c in labels},
     target_agreement=0.95,
 )
+# training="inline": this replay pushes weeks of traffic through in seconds, faster than a background
+# trainer could keep up with. A live service keeps the default ("background").
 cfg = Config(audit_rate=0.05, min_train_samples=400, min_samples_per_class=20, min_calib_samples=150,
-             min_new_samples=1500, shadow_min_samples=200)
+             min_new_samples=1500, shadow_min_samples=200, training="inline")
 
 js = Jevstiller(task, teacher, data_dir="./jevstiller-data", config=cfg)
 

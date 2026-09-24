@@ -2,33 +2,50 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import threading
 import time
 from collections.abc import Sequence
+from concurrent.futures import Executor
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
-from .calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper, fit_policy
+from .calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper
 from .encoders import Encoder, HashEncoder
-from .ood import KnnOOD
 from .registry import Bundle, Registry
 from .store import Record, SampleStore, text_hash
-from .student import LinearStudent
-from .task import Config, Task
+from .task import MODES, Config, Task
 from .teachers import Teacher
+from .training import fit_candidate
+
+log = logging.getLogger("jevstiller")
 
 
 @dataclass
 class Result:
-    label: str
+    label: str | None           # None only when the teacher call failed (see `error`)
     probs: dict[str, float]
     confidence: float
-    source: str                 # "teacher" | "student:vN"
+    source: str                 # "teacher" | "student:vN" | "error"
     routing_reason: str
     latency_ms: float
+    error: Exception | None = None
+
+
+class TeacherError(RuntimeError):
+    """Some items of a batch needed the teacher and its call failed.
+
+    `errors` maps batch index -> exception; `results` holds every item that did get an answer (None for the
+    failed ones). Answered items are recorded as usual; failed items are not recorded.
+    """
+
+    def __init__(self, errors: dict[int, Exception], results: list[Result | None]):
+        self.errors, self.results = errors, results
+        first = next(iter(errors.values()))
+        super().__init__(f"{len(errors)} of {len(results)} teacher calls failed; first: {first!r}")
 
 
 @dataclass
@@ -70,6 +87,7 @@ class Status:
     labelled_calib: int
     policy: dict | None
     events: list = field(default_factory=list)
+    teacher_errors: int = 0                 # failed teacher calls since this process started
 
     def report(self) -> str:
         L = []
@@ -80,7 +98,8 @@ class Status:
         ch = "   ".join(f"{k} {v:,}" for k, v in sorted(self.channels.items()))
         L.append(f"Channels: {ch}")
         L.append(f"Teacher calls: {self.teacher_calls:,}   avoided: {self.teacher_calls_avoided:,}   "
-                 f"spent ${self.teacher_cost_usd:.4f}   avoided ${self.teacher_cost_avoided_usd:.4f}")
+                 f"spent ${self.teacher_cost_usd:.4f}   avoided ${self.teacher_cost_avoided_usd:.4f}"
+                 + (f"   errors: {self.teacher_errors:,}" if self.teacher_errors else ""))
         if self.audit_agreement is not None:
             if self.audit_agreement_lb >= self.target_agreement:
                 ok = "OK"
@@ -103,23 +122,38 @@ class Status:
 
 
 class Jevstiller:
+    """One task's loop. Thread-safe: any number of threads may call classify/classify_batch at once.
+
+    Locking: `_state` guards the routing state (production/shadow bundles, flags, rng) and is held only for
+    reads and swaps, never across encoding, inference, the teacher call, the store or training. `_maint`
+    serialises maintenance (judge shadow, train, drift check), which runs according to `config.training`:
+    in a background worker thread (default), inline after each batch, or only when `maintain()` is called.
+
+    `train_executor`: optional Executor for the CPU-heavy fit (e.g. a shared ProcessPoolExecutor, so
+    training never competes with serving for the GIL). Default: fit in the maintenance thread itself.
+    """
+
     def __init__(self, task: Task, teacher: Teacher, data_dir: str | Path,
-                 encoder: Encoder | None = None, config: Config | None = None):
+                 encoder: Encoder | None = None, config: Config | None = None,
+                 train_executor: Executor | None = None):
         self.task = task
         self.teacher = teacher
         self.cfg = config or Config()
         self.encoder = encoder or HashEncoder()
+        self.train_executor = train_executor
         self.dir = Path(data_dir) / task.name
         self.dir.mkdir(parents=True, exist_ok=True)
         self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction)
         self.registry = Registry(self.dir / "versions")
         self.rng = np.random.default_rng(self.cfg.seed)
-        self._lock = threading.RLock()
+        self._state = threading.Lock()
+        self._maint = threading.Lock()
         self.forced_fallback = False
         self._retrain_requested = False
         self._suspicious = False
         self._last_train_id = 0
         self._shadow_started_id = 0
+        self._teacher_errors = 0
         self._prod: Bundle | None = self.registry.load(self.registry.production) if self.registry.production else None
         shadows = self.registry.in_state("shadow")
         self._shadow: Bundle | None = self.registry.load(shadows[-1]) if shadows else None
@@ -127,13 +161,21 @@ class Jevstiller:
             self._shadow_started_id = self.store.max_id()
         self.labels = task.labels
         self._lidx = {c: i for i, c in enumerate(self.labels)}
+        # background worker: `_kicks` counts batches that asked for maintenance, `_done` is the kick count
+        # the last finished pass had seen; drain() waits for _done to catch up
+        self._cv = threading.Condition()
+        self._kicks = self._done = self._draining = 0
+        self._stop = False
+        self._worker: threading.Thread | None = None
 
     # ---- modes ----------------------------------------------------------------
     def set_mode(self, mode: str) -> None:
-        assert mode in ("auto", "teacher_only", "cascade")
-        self.cfg.mode = mode
-        if mode != "teacher_only":
-            self.forced_fallback = False
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+        with self._state:
+            self.cfg.mode = mode
+            if mode != "teacher_only":
+                self.forced_fallback = False
 
     @property
     def audit_rate(self) -> float:
@@ -148,8 +190,6 @@ class Jevstiller:
     def mode(self) -> str:
         if self.cfg.mode == "teacher_only" or self.forced_fallback:
             return "teacher_only"
-        if self.cfg.mode == "cascade":
-            return "cascade" if self._prod else "teacher_only"
         return "cascade" if self._prod else "teacher_only"
 
     # ---- inference --------------------------------------------------------------
@@ -160,18 +200,20 @@ class Jevstiller:
         return P, conf, ood
 
     def classify(self, text: str) -> Result:
+        """Classify one text. Raises TeacherError if it needed the teacher and the call failed."""
         return self.classify_batch([text])[0]
 
-    def classify_batch(self, texts: Sequence[str]) -> list[Result]:
-        with self._lock:
-            return self._classify_batch(texts)
-
-    def _classify_batch(self, texts: Sequence[str]) -> list[Result]:
+    def classify_batch(self, texts: Sequence[str], errors: str = "raise") -> list[Result]:
+        """Classify many texts. If some teacher calls fail, `errors="raise"` (default) raises TeacherError
+        after recording the rest; `errors="return"` returns Results with `error` set and `label=None`."""
+        if errors not in ("raise", "return"):
+            raise ValueError("errors must be 'raise' or 'return'")
         t0 = time.perf_counter()
         n = len(texts)
         X = self.encoder.encode(texts)
-        mode = self.mode
-        prod, shadow = self._prod, self._shadow
+        with self._state:                                   # one consistent snapshot of the routing state
+            mode, prod, shadow, audit_rate = self.mode, self._prod, self._shadow, self.audit_rate
+            draws = self.rng.random(n)
         P = conf = ood = None
         if prod is not None:
             P, conf, ood = self._run(prod, X)
@@ -202,10 +244,10 @@ class Jevstiller:
                 r.channel = "bootstrap" if prod is None else "fallback"
                 r.routing_reason = r.channel
                 to_teacher.append(i)
-            elif self.rng.random() < self.audit_rate:
+            elif draws[i] < audit_rate:
                 r.channel = r.routing_reason = "audit"
                 if self.cfg.importance_weighting:
-                    r.weight = min((1.0 / self.audit_rate) ** self.cfg.weight_power, self.cfg.max_weight)
+                    r.weight = min((1.0 / audit_rate) ** self.cfg.weight_power, self.cfg.max_weight)
                 to_teacher.append(i)
             else:
                 pol = prod.policy
@@ -220,9 +262,18 @@ class Jevstiller:
                     to_teacher.append(i)
             recs.append(r)
 
-        if to_teacher:
-            outs = self.teacher.classify([texts[i] for i in to_teacher], self.task)
-            for i, o in zip(to_teacher, outs, strict=False):
+        failed: dict[int, Exception] = {}
+        if to_teacher:                                      # no lock held: callers' teacher calls overlap
+            try:
+                outs = list(self.teacher.classify([texts[i] for i in to_teacher], self.task))
+                if len(outs) != len(to_teacher):
+                    raise RuntimeError(f"teacher returned {len(outs)} answers for {len(to_teacher)} texts")
+            except Exception as e:
+                outs = [e] * len(to_teacher)
+            for i, o in zip(to_teacher, outs, strict=True):
+                if isinstance(o, Exception):
+                    failed[i] = o
+                    continue
                 r = recs[i]
                 r.teacher_label, r.teacher_probs, r.teacher_confidence = o.label, o.probs, o.confidence
                 r.teacher_model, r.teacher_input_tokens = self.teacher.name, o.input_tokens
@@ -230,21 +281,80 @@ class Jevstiller:
                 results[i] = Result(o.label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
 
         dt = (time.perf_counter() - t0) * 1000 / max(n, 1)
-        for r, res in zip(recs, results, strict=False):
+        for i, r in enumerate(recs):
             r.latency_ms = dt
-            res.latency_ms = dt
-        self.store.insert(recs)
+            if results[i] is not None:
+                results[i].latency_ms = dt
+        self.store.insert([r for i, r in enumerate(recs) if i not in failed])
         self._after_batch()
+        if failed:
+            with self._state:
+                self._teacher_errors += len(failed)
+            log.warning("task %s: %d of %d teacher calls failed: %r", self.task.name, len(failed), n,
+                        next(iter(failed.values())))
+            if errors == "raise":
+                raise TeacherError(failed, results) from next(iter(failed.values()))
+            for i, e in failed.items():
+                results[i] = Result(None, {}, 0.0, "error", recs[i].routing_reason, dt, e)
         return results  # type: ignore[return-value]
 
-    # ---- the loop ---------------------------------------------------------------
+    # ---- maintenance ---------------------------------------------------------------
     def _after_batch(self) -> None:
-        if self._shadow is not None:
-            self._judge_shadow()
-        if self._shadow is None and self._should_train():
-            self._train_now()
-        if self._prod is not None and self.mode == "cascade":
-            self._check_drift()
+        if self.cfg.training == "inline":
+            self.maintain()
+        elif self.cfg.training == "background":
+            with self._cv:
+                if self._stop:
+                    return
+                self._kicks += 1
+                if self._worker is None:
+                    self._worker = threading.Thread(target=self._worker_loop, daemon=True,
+                                                    name=f"jevstiller-maint-{self.task.name}")
+                    self._worker.start()
+                self._cv.notify_all()
+
+    def _worker_loop(self) -> None:
+        while True:
+            with self._cv:
+                while self._kicks == self._done and not self._stop:
+                    self._cv.wait()
+                if self._stop:
+                    return
+                seen = self._kicks                       # batches after this point get another pass
+            started = time.monotonic()
+            try:
+                self.maintain()
+            except Exception:
+                log.exception("task %s: maintenance failed", self.task.name)
+            with self._cv:
+                self._done = seen
+                self._cv.notify_all()
+                # a pass scans the store; under heavy traffic, back-to-back passes would starve serving
+                rest = started + self.cfg.maintenance_interval_s - time.monotonic()
+                if rest > 0:
+                    self._cv.wait_for(lambda: self._stop or self._draining, rest)
+
+    def drain(self, timeout: float | None = None) -> bool:
+        """Block until background maintenance has caught up with every batch so far. False on timeout."""
+        with self._cv:
+            target = self._kicks
+            self._draining += 1                          # skip the pacing pause while someone waits
+            self._cv.notify_all()
+            try:
+                return self._cv.wait_for(lambda: self._done >= target or self._stop, timeout)
+            finally:
+                self._draining -= 1
+
+    def maintain(self) -> None:
+        """One maintenance pass: judge the shadow candidate, train if due, check drift. Safe from any thread;
+        passes are serialised. Called automatically unless `config.training == "manual"`."""
+        with self._maint:
+            if self._shadow is not None:
+                self._judge_shadow()
+            if self._shadow is None and self._should_train():
+                self._train()
+            if self._prod is not None and self.mode == "cascade":
+                self._check_drift()
 
     def _should_train(self) -> bool:
         c = self.store.counts(self.task.version)
@@ -259,54 +369,55 @@ class Jevstiller:
         return (self.store.max_id() - self._last_train_id) >= self.cfg.min_new_samples
 
     def train_now(self) -> TrainReport:
-        with self._lock:
-            return self._train_now()
+        """Train a candidate now, in the calling thread (the fit itself goes to `train_executor` if set)."""
+        with self._maint:
+            return self._train()
 
-    def _train_now(self) -> TrainReport:
+    def _train(self) -> TrainReport:
         tv, eid, dim = self.task.version, self.encoder.id, self.encoder.dim
         X, Y, _, w = self.store.training_set(tv, eid, self.labels, dim)
         Xc, _, yc, _ = self.store.calib_set(tv, eid, self.labels, dim)
-        self._last_train_id = self.store.max_id()
-        self._retrain_requested = False
+        with self._state:
+            self._last_train_id = self.store.max_id()
+            self._retrain_requested = False
         if len(X) == 0 or len(Xc) == 0:
             return TrainReport(None, len(X), len(Xc), None, float("nan"), 0.0, False, "no data")
         if self.cfg.label_target == "hard":
             Y = np.eye(len(self.labels), dtype=np.float32)[Y.argmax(axis=1)]
-        student = LinearStudent(dim, len(self.labels))
-        fit = student.fit(X, Y, epochs=self.cfg.student_epochs, l2=self.cfg.student_l2, seed=self.cfg.seed,
-                          sample_weight=w if self.cfg.importance_weighting else None,
-                          patience=self.cfg.student_patience)
-        ood = KnnOOD(self.cfg.ood_k)
-        ood.fit(X, seed=self.cfg.seed)
-        Pc = student.predict_proba(Xc)
-        conf = Pc.max(axis=1)
-        agree = Pc.argmax(axis=1) == yc
-        oodc = ood.score(Xc)
-        policy = fit_policy(conf, agree, oodc, self.task.budget * (1 - self.cfg.fit_headroom),
-                            1 - self.cfg.confidence, self.cfg.ood_quantile)
-        acc = policy.accepts(conf, oodc)
+        kw = dict(budget=self.task.budget * (1 - self.cfg.fit_headroom), delta=1 - self.cfg.confidence,
+                  ood_quantile=self.cfg.ood_quantile, ood_k=self.cfg.ood_k, epochs=self.cfg.student_epochs,
+                  l2=self.cfg.student_l2, patience=self.cfg.student_patience, seed=self.cfg.seed)
+        wt = w if self.cfg.importance_weighting else None
+        if self.train_executor is None:
+            cand = fit_candidate(X, Y, wt, Xc, yc, **kw)
+        else:
+            cand = self.train_executor.submit(fit_candidate, X, Y, wt, Xc, yc, **kw).result()
+        policy, fit = cand.policy, cand.fit
+        prod = self._prod
         prod_cov = None
-        if self._prod is not None:                       # production's coverage on the same calibration rows
-            _, pc, po = self._run(self._prod, Xc)
-            prod_cov = float(self._prod.policy.accepts(pc, po).mean())
+        if prod is not None:                             # production's coverage on the same calibration rows
+            _, pc, po = self._run(prod, Xc)
+            prod_cov = float(prod.policy.accepts(pc, po).mean())
         meta = {"n_train": len(X), "n_calib": len(Xc), "train_loss": fit["loss"], "epochs": fit["epochs"],
                 "prod_calib_coverage": prod_cov,
-                "calib_agreement": float(agree.mean()), "calib_accepted": int(acc.sum()),
-                "calib_disagree": int((acc & ~agree).sum()), "encoder": eid, "task_version": tv,
+                "calib_agreement": cand.calib_agreement, "calib_accepted": cand.calib_accepted,
+                "calib_disagree": cand.calib_disagree, "encoder": eid, "task_version": tv,
                 "config": self.cfg.to_dict()}
         if not policy.usable:
-            name = self.registry.save(student, ood, policy, meta, state="rejected")
+            name = self.registry.save(cand.student, cand.ood, policy, meta, state="rejected")
             self.store.event("rejected", version=name, reason="no threshold satisfies the budget",
-                             n_calib=len(Xc), calib_agreement=round(float(agree.mean()), 4))
-            return TrainReport(name, len(X), len(Xc), policy, fit["loss"], float(agree.mean()), False,
+                             n_calib=len(Xc), calib_agreement=round(cand.calib_agreement, 4))
+            return TrainReport(name, len(X), len(Xc), policy, fit["loss"], cand.calib_agreement, False,
                                "no threshold satisfies the budget")
-        name = self.registry.save(student, ood, policy, meta, state="shadow")
-        self._shadow = self.registry.load(name)
-        self._shadow_started_id = self.store.max_id()
+        name = self.registry.save(cand.student, cand.ood, policy, meta, state="shadow")
+        bundle = self.registry.load(name)
+        with self._state:
+            self._shadow = bundle
+            self._shadow_started_id = self.store.max_id()
         self.store.event("shadow", version=name, n_train=len(X), n_calib=len(Xc), epochs=fit["epochs"],
                          expected_coverage=round(policy.expected_coverage, 4),
                          disagreement_ub=round(policy.disagreement_ub, 4))
-        return TrainReport(name, len(X), len(Xc), policy, fit["loss"], float(agree.mean()), True, "shadow")
+        return TrainReport(name, len(X), len(Xc), policy, fit["loss"], cand.calib_agreement, True, "shadow")
 
     def _judge_shadow(self) -> None:
         sh = self._shadow
@@ -338,24 +449,26 @@ class Jevstiller:
                       budget=self.task.budget, production_coverage=prod_cov)
         if ok:
             prev = self.registry.promote(sh.name)
-            self._prod, self._shadow = self.registry.load(sh.name), None
-            self.forced_fallback = False
-            self._suspicious = False
+            with self._state:
+                self._prod, self._shadow = sh, None
+                self.forced_fallback = False
+                self._suspicious = False
             self.store.event("promoted", previous=prev, **detail)
         else:
             self.registry.set_state(sh.name, "rejected")
-            self._shadow = None
+            with self._state:
+                self._shadow = None
             self.store.event("rejected", reason="shadow evaluation", **detail)
 
-    def _audit_stats(self):
-        """System agreement on the recent audit window, re-scored with the current production model."""
+    def _audit_stats(self, prod: Bundle):
+        """System agreement on the recent audit window, re-scored with the given production model."""
         X, t_lab = self.store.audit_window(self.task.version, self.encoder.id, self.encoder.dim, self.cfg.drift_window)
         N = len(t_lab)
         if N == 0:
             return 0, None, None, None
-        P, conf, ood = self._run(self._prod, X)
+        P, conf, ood = self._run(prod, X)
         s_lab = np.array([self.labels[i] for i in P.argmax(axis=1)], dtype=object)
-        acc = self._prod.policy.accepts(conf, ood)
+        acc = prod.policy.accepts(conf, ood)
         k = int((acc & (s_lab != t_lab)).sum())
         d = 1 - self.cfg.confidence
         return N, 1 - k / N, 1 - clopper_pearson_upper(k, N, d), 1 - clopper_pearson_lower(k, N, d)
@@ -366,33 +479,45 @@ class Jevstiller:
         suspicious: A < target                -> retrain (a candidate goes to shadow), audit rate raised
         broken:     ub(A) < target - margin   -> teacher_only until a candidate passes shadow
         """
-        N, a, lb, ub = self._audit_stats()
+        N, a, lb, ub = self._audit_stats(self._prod)
         if N < self.cfg.drift_min_samples:
             return
         tgt = self.task.target_agreement
         if ub < tgt - self.cfg.drift_margin:
-            self.forced_fallback = True
+            with self._state:
+                self.forced_fallback = True
+                self._retrain_requested = True
             self.store.event("fallback", reason="audit agreement confidently below target", n=N,
                              agreement=round(a, 4), upper_bound=round(ub, 4), target=tgt)
-            self._retrain_requested = True
         elif a < tgt and self._shadow is None and not self._retrain_requested:
+            with self._state:
+                self._retrain_requested = True
+                self._suspicious = True
             self.store.event("suspicious", reason="audit agreement below target", n=N,
                              agreement=round(a, 4), lower_bound=round(lb, 4), target=tgt)
-            self._retrain_requested = True
-            self._suspicious = True
 
     # ---- control ---------------------------------------------------------------
     def promote(self, version: str) -> None:
-        self.registry.promote(version)
-        self._prod = self.registry.load(version)
-        self.forced_fallback = False
-        self.store.event("promoted", version=version, manual=True)
+        with self._maint:
+            if self.registry.state(version) is None:
+                raise ValueError(f"unknown version {version!r}")
+            bundle = self.registry.load(version)
+            self.registry.promote(version)
+            with self._state:
+                self._prod = bundle
+                if self._shadow is not None and self._shadow.name == version:
+                    self._shadow = None
+                self.forced_fallback = False
+            self.store.event("promoted", version=version, manual=True)
 
     def rollback(self) -> str | None:
-        target = self.registry.rollback()
-        self._prod = self.registry.load(target) if target else None
-        self.store.event("rollback", to=target)
-        return target
+        with self._maint:
+            target = self.registry.rollback()
+            bundle = self.registry.load(target) if target else None
+            with self._state:
+                self._prod = bundle
+            self.store.event("rollback", to=target)
+            return target
 
     def status(self) -> Status:
         c = self.store.counts(self.task.version)
@@ -401,19 +526,22 @@ class Jevstiller:
         avoided = sb.get("student", 0)
         avg_cost = (c["teacher_cost_usd"] / c["teacher_calls"]) if c["teacher_calls"] else 0.0
         N = a = lb = ub = None
-        if self._prod is not None:
-            N, a, lb, ub = self._audit_stats()
+        with self._state:
+            prod, shadow, mode, audit_rate = self._prod, self._shadow, self.mode, self.audit_rate
+            teacher_errors = self._teacher_errors
+        if prod is not None:
+            N, a, lb, ub = self._audit_stats(prod)
         return Status(
-            task=self.task.name, task_version=self.task.version, mode=self.mode, audit_rate=self.audit_rate,
-            production=self._prod.name if self._prod else None, shadow=self._shadow.name if self._shadow else None,
+            task=self.task.name, task_version=self.task.version, mode=mode, audit_rate=audit_rate,
+            production=prod.name if prod else None, shadow=shadow.name if shadow else None,
             requests=c["total"], served_by_student=sb.get("student", 0), served_by_teacher=sb.get("teacher", 0),
             channels=c["channel"], student_share=sb.get("student", 0) / tot, teacher_share=sb.get("teacher", 0) / tot,
             audit_n=N or 0, audit_agreement=a, audit_agreement_lb=lb, audit_agreement_ub=ub,
             target_agreement=self.task.target_agreement,
             teacher_calls=c["teacher_calls"], teacher_calls_avoided=avoided, teacher_cost_usd=c["teacher_cost_usd"],
             teacher_cost_avoided_usd=avoided * avg_cost, labelled_train=c["labelled_train"],
-            labelled_calib=c["labelled_calib"], policy=self._prod.policy.__dict__ if self._prod else None,
-            events=self.store.events())
+            labelled_calib=c["labelled_calib"], policy=prod.policy.__dict__ if prod else None,
+            events=self.store.events(), teacher_errors=teacher_errors)
 
     def versions(self) -> list[dict]:
         """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back)."""
@@ -461,5 +589,12 @@ class Jevstiller:
                 "student_agreement_all": float((pred == t).mean()) if len(t) else 0.0,
                 "accepted": acc, "student_label": pred, "student_conf": conf, "ood": ood}
 
-    def close(self) -> None:
+    def close(self, timeout: float | None = None) -> None:
+        """Stop the background worker (after its current pass) and close the store."""
+        with self._cv:
+            self._stop = True
+            self._cv.notify_all()
+            worker = self._worker
+        if worker is not None:
+            worker.join(timeout)
         self.store.close()

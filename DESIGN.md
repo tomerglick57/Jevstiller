@@ -603,8 +603,9 @@ js = Jevstiller(task, teacher, data_dir=...)
 js.classify(text) -> Result(label, confidence, source, routing_reason, latency_ms)
 js.classify_batch(texts) -> list[Result]
 js.status() -> Status(...)              # everything in §10
-js.set_mode("teacher_only" | "shadow" | "cascade" | "hedge" | "auto")
+js.set_mode("teacher_only" | "cascade" | "auto")   # "shadow" and "hedge" are not implemented yet
 js.train_now() ; js.promote("student:v3") ; js.rollback()
+js.maintain() ; js.drain() ; js.close()           # maintenance runs per Config.training (background|inline|manual)
 js.versions() -> list[VersionInfo]
 js.export(version) -> path             # a self-contained inference bundle
 ```

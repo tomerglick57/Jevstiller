@@ -16,7 +16,7 @@ class ReplayTeacher:
         self.fallback = fallback
         self.misses = 0
 
-    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput]:
+    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput | Exception]:
         out: list[TeacherOutput | None] = [self.answers.get(t) for t in texts]
         missing = [i for i, o in enumerate(out) if o is None]
         if missing:
@@ -24,9 +24,10 @@ class ReplayTeacher:
                 raise KeyError(f"{len(missing)} texts not in replay and no fallback teacher")
             self.misses += len(missing)
             fresh = self.fallback.classify([texts[i] for i in missing], task)
-            for i, o in zip(missing, fresh, strict=False):
+            for i, o in zip(missing, fresh, strict=True):
                 out[i] = o
-                self.answers[texts[i]] = o
+                if not isinstance(o, Exception):
+                    self.answers[texts[i]] = o
         return out  # type: ignore[return-value]
 
 
@@ -52,7 +53,7 @@ class CachedTeacher:
                     self.cache[d["key"]] = TeacherOutput(d["label"], d["probs"], d["confidence"], d["input_tokens"],
                                                          d["cost_usd"], d["latency_ms"], d.get("request_id"))
 
-    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput]:
+    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput | Exception]:
         import json
         keys = [f"{task.version}\t{t}" for t in texts]
         out: list[TeacherOutput | None] = [self.cache.get(k) for k in keys]
@@ -62,8 +63,10 @@ class CachedTeacher:
         if missing:
             fresh = self.inner.classify([texts[i] for i in missing], task)
             with open(self.path, "a") as f:
-                for i, o in zip(missing, fresh, strict=False):
+                for i, o in zip(missing, fresh, strict=True):
                     out[i] = o
+                    if isinstance(o, Exception):
+                        continue
                     self.cache[keys[i]] = o
                     f.write(json.dumps({"key": keys[i], "label": o.label, "probs": o.probs, "confidence": o.confidence,
                                         "input_tokens": o.input_tokens, "cost_usd": o.cost_usd,

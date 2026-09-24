@@ -34,7 +34,7 @@ class JevTeacher:
 
     def __init__(self, model: str = "jev-1.13.0", api_key: str | None = None, rpm: int = 1100,
                  concurrency: int = 8, price_per_mtok: float = 0.042, question_id: str = "label",
-                 max_retries: int = 5):
+                 max_retries: int = 5, timeout: float = 10.0):
         try:
             from typesafe_sdk import RetryPolicy, TypeSafeClient  # type: ignore
         except ImportError as e:  # pragma: no cover
@@ -45,7 +45,8 @@ class JevTeacher:
         self.question_id = question_id
         self.concurrency = concurrency
         self.bucket = _TokenBucket(rpm)
-        self.client = TypeSafeClient(api_key=api_key, model=model, retry=RetryPolicy(max_retries=max_retries))
+        self.client = TypeSafeClient(api_key=api_key, model=model, retry=RetryPolicy(max_retries=max_retries),
+                                     timeout=timeout)
         self._Choice = __import__("typesafe_sdk").Choice
 
     def _one(self, text: str, task: Task) -> TeacherOutput:
@@ -58,19 +59,32 @@ class JevTeacher:
         probs = {c: float(ans.probabilities.get(c, 0.0)) for c in task.labels}
         z = sum(probs.values()) or 1.0
         probs = {c: p / z for c, p in probs.items()}
-        raw = None
         toks = 0
+        usage = getattr(res, "usage", None)
+        if usage is not None and getattr(usage, "input_tokens", None) is not None:
+            toks = int(usage.input_tokens)
+        raw = None
         try:
             raw = res.raw_http_response.json()
-            toks = int(raw.get("usage", {}).get("input_tokens", 0))
+            toks = toks or int(raw.get("usage", {}).get("input_tokens", 0))
         except Exception:  # pragma: no cover - best effort
             pass
+        try:
+            request_id = res.request_id       # the SDK raises TypeSafeError when the header is missing
+        except Exception:
+            request_id = None
         return TeacherOutput(label=str(ans.choice), probs=probs, confidence=float(ans.confidence),
                              input_tokens=toks, cost_usd=toks * self.price_per_mtok / 1e6,
-                             latency_ms=dt, request_id=getattr(res, "request_id", None), raw=raw)
+                             latency_ms=dt, request_id=request_id, raw=raw)
 
-    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput]:
+    def _safe(self, text: str, task: Task) -> TeacherOutput | Exception:
+        try:
+            return self._one(text, task)
+        except Exception as e:                # one failed request fails only its own item
+            return e
+
+    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput | Exception]:
         if len(texts) == 1:
-            return [self._one(texts[0], task)]
+            return [self._safe(texts[0], task)]
         with ThreadPoolExecutor(max_workers=self.concurrency) as ex:
-            return list(ex.map(lambda t: self._one(t, task), texts))
+            return list(ex.map(lambda t: self._safe(t, task), texts))

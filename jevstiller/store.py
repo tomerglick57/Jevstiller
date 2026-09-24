@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
+import threading
 import time
+from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+log = logging.getLogger("jevstiller")
 
 IID_CHANNELS = ("bootstrap", "audit", "fallback")   # only these may feed calibration / evaluation
 TEACHER_CHANNELS = IID_CHANNELS + ("deferred",)
@@ -73,15 +78,106 @@ CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts REAL, kind TEXT, d
 
 
 class SampleStore:
-    def __init__(self, path: Path, calib_fraction: float = 0.2):
+    """Append-only store. Thread-safe.
+
+    Writes are write-behind by default: `insert` queues records and returns; one writer thread commits them
+    in batches, so no request waits on the disk. Every read through this class (including `.db`) first
+    waits for records queued before it, so reads always see earlier inserts. A crash loses at most the
+    records still queued (typically a few milliseconds of traffic). `write_behind=False` commits in `insert`.
+
+    Each thread gets its own SQLite connection (WAL), so reads never block the writer.
+    """
+
+    def __init__(self, path: Path, calib_fraction: float = 0.2, busy_timeout_s: float = 30.0,
+                 write_behind: bool = True, max_pending: int = 100_000, max_batch: int = 5_000):
         self.path = Path(path)
         self.calib_fraction = calib_fraction
-        self.db = sqlite3.connect(self.path, check_same_thread=False)
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.executescript(_SCHEMA)
+        self.busy_timeout_s = busy_timeout_s
+        self.write_behind = write_behind
+        self.max_pending, self.max_batch = max_pending, max_batch
+        self.write_errors = 0
+        self._local = threading.local()
+        self._conns: list[sqlite3.Connection] = []
+        self._conns_lock = threading.Lock()
+        self._closed = False
+        self._write_lock = threading.Lock()   # writers queue here, not in SQLite's sleeping busy handler
+        self._wcv = threading.Condition()
+        self._pending: deque[Record] = deque()
+        self._enqueued = self._written = 0
+        self._stopping = False
+        self._writer: threading.Thread | None = None
+        conn = self._conn()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(_SCHEMA)
+
+    def _conn(self) -> sqlite3.Connection:
+        """This thread's connection, opened on first use."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            with self._conns_lock:
+                if self._closed:
+                    raise sqlite3.ProgrammingError("the sample store is closed")
+                conn = sqlite3.connect(self.path, timeout=self.busy_timeout_s, check_same_thread=False)
+                conn.execute("PRAGMA synchronous=NORMAL")      # durable across crashes in WAL mode
+                self._conns.append(conn)
+            self._local.conn = conn
+        return conn
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        """This thread's connection, once every record queued so far is committed."""
+        self.flush()
+        return self._conn()
 
     # ---- writes -------------------------------------------------------------
     def insert(self, recs: Sequence[Record]) -> None:
+        if not recs:
+            return
+        if not self.write_behind:
+            self._write(recs)
+            return
+        with self._wcv:
+            if self._stopping:
+                raise sqlite3.ProgrammingError("the sample store is closed")
+            while len(self._pending) >= self.max_pending:  # backpressure if the disk falls behind
+                self._wcv.wait()
+            self._pending.extend(recs)
+            self._enqueued += len(recs)
+            if self._writer is None:
+                self._writer = threading.Thread(target=self._writer_loop, daemon=True,
+                                                name=f"jevstiller-writer-{self.path.parent.name}")
+                self._writer.start()
+            self._wcv.notify_all()
+
+    def _writer_loop(self) -> None:
+        while True:
+            with self._wcv:
+                while not self._pending and not self._stopping:
+                    self._wcv.wait()
+                if not self._pending:
+                    return
+                batch = [self._pending.popleft() for _ in range(min(len(self._pending), self.max_batch))]
+                self._wcv.notify_all()                       # room again for back-pressured inserts
+            failed = False
+            try:
+                self._write(batch)
+            except Exception:
+                failed = True
+                log.exception("sample store %s: dropped %d records", self.path, len(batch))
+            with self._wcv:
+                self._written += len(batch)
+                self.write_errors += len(batch) if failed else 0
+                self._wcv.notify_all()
+
+    def flush(self, timeout: float | None = None) -> bool:
+        """Wait until every record queued before this call is committed (or dropped on error)."""
+        if threading.current_thread() is self._writer:
+            return True
+        with self._wcv:
+            target = self._enqueued
+            return self._wcv.wait_for(lambda: self._written >= target, timeout)
+
+    def _write(self, recs: Sequence[Record]) -> None:
         rows = []
         for r in recs:
             h = r.text_hash or text_hash(r.text)
@@ -96,8 +192,9 @@ class SampleStore:
                          json.dumps(r.student_probs) if r.student_probs else None,
                          r.student_confidence, r.ood_score,
                          r.shadow_version, r.shadow_label, r.shadow_confidence, r.shadow_ood))
-        with self.db:
-            self.db.executemany(
+        conn = self._conn()
+        with self._write_lock, conn:
+            conn.executemany(
                 "INSERT INTO samples (ts,task_version,text,text_hash,encoder_id,embedding,"
                 "served_by,routing_reason,channel,split,latency_ms,weight,"
                 "teacher_label,teacher_probs,teacher_confidence,teacher_model,teacher_input_tokens,"
@@ -107,8 +204,9 @@ class SampleStore:
                 "VALUES (" + ",".join("?" * 29) + ")", rows)
 
     def event(self, kind: str, **detail) -> None:
-        with self.db:
-            self.db.execute("INSERT INTO events (ts, kind, detail) VALUES (?,?,?)",
+        conn = self._conn()
+        with self._write_lock, conn:
+            conn.execute("INSERT INTO events (ts, kind, detail) VALUES (?,?,?)",
                             (time.time(), kind, json.dumps(detail, default=str)))
 
     # ---- reads --------------------------------------------------------------
@@ -202,4 +300,15 @@ class SampleStore:
         return {t: TeacherOutput(l, json.loads(p), c or 0.0, tok or 0, cost or 0.0) for t, l, p, c, tok, cost in rows}
 
     def close(self) -> None:
-        self.db.close()
+        """Commit everything queued, stop the writer, close every connection."""
+        with self._wcv:
+            self._stopping = True
+            self._wcv.notify_all()
+            writer = self._writer
+        if writer is not None:
+            writer.join()
+        with self._conns_lock:
+            self._closed = True
+            conns, self._conns = self._conns, []
+        for c in conns:
+            c.close()

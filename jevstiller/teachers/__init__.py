@@ -22,9 +22,12 @@ class TeacherOutput:
 
 @runtime_checkable
 class Teacher(Protocol):
+    """`classify` returns one entry per text, in order. An entry may be an Exception instead of a
+    TeacherOutput when only that item failed; raising fails every item of the call."""
+
     name: str
 
-    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput]: ...
+    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput | Exception]: ...
 
 
 def peakedness(probs: dict[str, float]) -> float:

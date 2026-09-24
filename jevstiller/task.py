@@ -45,6 +45,10 @@ class Task:
         return hashlib.sha256(blob).hexdigest()[:12]
 
 
+MODES = ("auto", "teacher_only", "cascade")
+TRAINING = ("background", "inline", "manual")
+
+
 @dataclass
 class Config:
     """How the loop runs. Every field is a default that can be overridden."""
@@ -65,6 +69,10 @@ class Config:
     drift_min_samples: int = 200
     drift_margin: float = 0.0           # ub(agreement) < target - margin -> hard fallback
     mode: str = "auto"                  # auto | teacher_only | cascade
+    training: str = "background"        # background: a worker thread trains off the request path
+                                        # inline: train inside classify_batch (deterministic replays, tests)
+                                        # manual: never automatically; call maintain() / train_now()
+    maintenance_interval_s: float = 1.0  # background: at most one maintenance pass per interval
     store_text: bool = True             # False: keep only the hash + embedding (no raw text in the store)
     seed: int = 0
     student_epochs: int = 2000          # upper bound; early stopping on a validation slice decides
@@ -75,6 +83,11 @@ class Config:
     fit_headroom: float = 0.15          # fit policies at (1 - headroom) * budget; shadow judges at the full budget
     student_l2: float = 1e-6
     student_patience: int = 4
+
+    def __post_init__(self) -> None:
+        for name, allowed in (("mode", MODES), ("training", TRAINING), ("label_target", ("probs", "hard"))):
+            if getattr(self, name) not in allowed:
+                raise ValueError(f"{name} must be one of {allowed}, got {getattr(self, name)!r}")
 
     def to_dict(self) -> dict:
         return asdict(self)

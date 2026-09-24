@@ -5,7 +5,7 @@ from jevstiller import Config, HashEncoder, Jevstiller
 
 def _cfg(**kw):
     base = dict(audit_rate=0.05, min_train_samples=400, min_samples_per_class=20, min_calib_samples=150,
-                min_new_samples=1500, shadow_min_samples=150, drift_min_samples=100, seed=0)
+                min_new_samples=1500, shadow_min_samples=150, drift_min_samples=100, seed=0, training="inline")
     base.update(kw)
     return Config(**base)
 

@@ -26,11 +26,13 @@ class _Result:
 class _Client:
     calls = []
 
-    def __init__(self, api_key=None, model=None, retry=None):
-        self.model = model
+    def __init__(self, api_key=None, model=None, retry=None, timeout=None):
+        self.model, self.timeout = model, timeout
 
     def system_one(self, state, questions):
         _Client.calls.append((state, questions))
+        if state == "boom":
+            raise RuntimeError("529 overloaded")
         q = questions["label"]
         first = next(iter(q.criteria))
         probs = {c: (0.7 if c == first else 0.3 / (len(q.criteria) - 1)) for c in q.criteria}
@@ -63,3 +65,14 @@ def test_jev_adapter_maps_answers(fake_sdk):
     state, q = _Client.calls[0]
     assert q["label"].instructions == "Which team?" and q["label"].criteria == task.classes
     assert t.name == "jev:jev-1.13.0"
+
+
+def test_jev_adapter_isolates_failed_items(fake_sdk):
+    from jevstiller.teachers.jev import JevTeacher
+    task = Task(name="t", instructions="Which team?", classes={"billing": "money", "tech": "bugs"})
+    t = JevTeacher(rpm=100000, concurrency=2, timeout=3.0)
+    assert t.client.timeout == 3.0
+    outs = t.classify(["charged twice", "boom", "app crashes"], task)
+    assert outs[0].label == "billing" and outs[2].label == "billing"
+    assert isinstance(outs[1], RuntimeError)
+    assert isinstance(t.classify(["boom"], task)[0], RuntimeError)

@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,19 +26,62 @@ class Bundle:
     meta: dict
 
 
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:  # pragma: no cover - platforms that cannot open directories (Windows)
+        return
+    try:
+        os.fsync(fd)
+    except OSError:  # pragma: no cover
+        pass
+    finally:
+        os.close(fd)
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write to a temp file in the same directory, fsync, then rename over `path`. A crash at any point
+    leaves either the old file or the new one, never a partial one."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+    _fsync_dir(path.parent)
+
+
 class Registry:
+    """`registry.json` is the single source of truth: a version directory not listed there does not exist
+    (it is a leftover from a crash and is removed on the next save)."""
+
     def __init__(self, root: Path):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.index = self.root / "registry.json"
+        self._lock = threading.RLock()
         if not self.index.exists():
             self._write({"production": None, "versions": []})
+        for leftover in self.root.glob(".*"):             # temp files/dirs of a save interrupted by a crash
+            shutil.rmtree(leftover) if leftover.is_dir() else leftover.unlink()
+
+    @staticmethod
+    def _require(d: dict, name: str) -> None:
+        if not any(v["name"] == name for v in d["versions"]):
+            raise ValueError(f"unknown version {name!r}")
 
     def _read(self) -> dict:
         return json.loads(self.index.read_text())
 
     def _write(self, d: dict) -> None:
-        self.index.write_text(json.dumps(d, indent=2))
+        atomic_write_text(self.index, json.dumps(d, indent=2))
 
     @property
     def production(self) -> str | None:
@@ -54,17 +101,29 @@ class Registry:
 
     def save(self, student: LinearStudent, ood: KnnOOD, policy: RoutingPolicy, meta: dict,
              state: str = "candidate") -> str:
-        d = self._read()
-        name = f"student:v{len(d['versions']) + 1}"
-        vdir = self.root / name.replace(":", "-")
-        vdir.mkdir()
-        student.save(vdir / "head.npz")
-        ood.save(vdir / "ood.npz")
-        policy.save(vdir / "policy.json")
-        (vdir / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
-        d["versions"].append({"name": name, "state": state, "created": time.time(), "dir": str(vdir)})
-        self._write(d)
-        return name
+        with self._lock:
+            d = self._read()
+            name = f"student:v{len(d['versions']) + 1}"
+            vdir = self.root / name.replace(":", "-")
+            if vdir.exists():                            # orphan from a crash between copy and index write
+                shutil.rmtree(vdir)
+            tmp = Path(tempfile.mkdtemp(dir=self.root, prefix=f".{vdir.name}."))
+            try:
+                student.save(tmp / "head.npz")
+                ood.save(tmp / "ood.npz")
+                policy.save(tmp / "policy.json")
+                (tmp / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
+                for f in tmp.iterdir():
+                    with open(f, "rb") as fh:
+                        os.fsync(fh.fileno())
+                os.replace(tmp, vdir)
+            except BaseException:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise
+            _fsync_dir(self.root)
+            d["versions"].append({"name": name, "state": state, "created": time.time(), "dir": str(vdir)})
+            self._write(d)
+            return name
 
     def load(self, name: str) -> Bundle:
         vdir = self.root / name.replace(":", "-")
@@ -72,36 +131,42 @@ class Registry:
                       RoutingPolicy.load(vdir / "policy.json"), json.loads((vdir / "meta.json").read_text()))
 
     def set_state(self, name: str, state: str) -> None:
-        assert state in STATES
-        d = self._read()
-        for v in d["versions"]:
-            if v["name"] == name:
-                v["state"] = state
-        self._write(d)
+        if state not in STATES:
+            raise ValueError(f"state must be one of {STATES}, got {state!r}")
+        with self._lock:
+            d = self._read()
+            self._require(d, name)
+            for v in d["versions"]:
+                if v["name"] == name:
+                    v["state"] = state
+            self._write(d)
 
     def promote(self, name: str) -> str | None:
-        d = self._read()
-        prev = d["production"]
-        for v in d["versions"]:
-            if v["name"] == prev:
-                v["state"] = "superseded"
-            if v["name"] == name:
-                v["state"] = "production"
-        d["production"] = name
-        self._write(d)
-        return prev
+        with self._lock:
+            d = self._read()
+            self._require(d, name)
+            prev = d["production"]
+            for v in d["versions"]:
+                if v["name"] == prev:
+                    v["state"] = "superseded"
+                if v["name"] == name:
+                    v["state"] = "production"
+            d["production"] = name
+            self._write(d)
+            return prev
 
     def rollback(self) -> str | None:
         """Production -> rolled_back; the most recent superseded version becomes production."""
-        d = self._read()
-        cur = d["production"]
-        prev = [v for v in d["versions"] if v["state"] == "superseded"]
-        target = prev[-1]["name"] if prev else None
-        for v in d["versions"]:
-            if v["name"] == cur:
-                v["state"] = "rolled_back"
-            if v["name"] == target:
-                v["state"] = "production"
-        d["production"] = target
-        self._write(d)
-        return target
+        with self._lock:
+            d = self._read()
+            cur = d["production"]
+            prev = [v for v in d["versions"] if v["state"] == "superseded"]
+            target = prev[-1]["name"] if prev else None
+            for v in d["versions"]:
+                if v["name"] == cur:
+                    v["state"] = "rolled_back"
+                if v["name"] == target:
+                    v["state"] = "production"
+            d["production"] = target
+            self._write(d)
+            return target

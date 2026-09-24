@@ -130,7 +130,8 @@ def main() -> None:
 
     cfg = Config(audit_rate=a.audit, min_train_samples=a.min_train, min_samples_per_class=a.min_per_class,
                  min_calib_samples=a.min_calib, min_new_samples=a.min_new, shadow_min_samples=a.shadow_min,
-                 seed=a.seed, label_target=a.label_target)
+                 seed=a.seed, label_target=a.label_target,
+                 training="inline")                     # replays must not depend on thread timing
     js = Jevstiller(task, teacher, data_dir, encoder=enc, config=cfg)
 
     # --- replay ----------------------------------------------------------------------------------------

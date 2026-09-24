@@ -108,7 +108,7 @@ The full reasoning — including the five loop bugs the first real replay found 
 
 ## Status
 
-Alpha (0.1.0). The loop is tested end-to-end (`pytest`, CPU, no network) and validated on replays with a perfect "oracle" teacher. **The benchmark against live Jev is pending**; treat the numbers above as an upper bound until then. Training runs synchronously inside `classify_batch` when a trigger fires — a few seconds on one unlucky request; a background trainer is next.
+Alpha (0.1.0). The loop is tested end-to-end (`pytest`, CPU, no network) and validated on replays with a perfect "oracle" teacher. **The benchmark against live Jev is pending**; treat the numbers above as an upper bound until then. `Jevstiller` is thread-safe: teacher calls from concurrent callers overlap, samples are written behind the request, and training runs in a background thread (or a process pool via `train_executor=`), never on the request path. The drop-in Jev proxy is in progress — see [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
 
 Not for: tasks with changing class lists (retrain from scratch), non-text input, or volumes too low to ever collect a few thousand examples.
 

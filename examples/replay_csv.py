@@ -35,7 +35,9 @@ with open(a.csv, newline="") as f:
     texts = [row[a.column] for row in csv.DictReader(f)]
 
 teacher = CachedTeacher(JevTeacher(), "./jev-cache.jsonl")
-js = Jevstiller(task, teacher, data_dir="./jevstiller-data", encoder=load_encoder(a.encoder), config=Config())
+# training="inline": a replay moves faster than a background trainer; train in step with the data
+js = Jevstiller(task, teacher, data_dir="./jevstiller-data", encoder=load_encoder(a.encoder),
+                config=Config(training="inline"))
 
 for i in range(0, len(texts), 100):
     js.classify_batch(texts[i:i + 100])
