@@ -19,7 +19,7 @@ from .registry import Bundle, Registry
 from .store import Record, SampleStore, text_hash
 from .task import MODES, Config, Task
 from .teachers import Teacher
-from .training import fit_candidate
+from .training import FitJob, run_fit_job
 
 log = logging.getLogger("jevstiller")
 
@@ -129,8 +129,11 @@ class Jevstiller:
     serialises maintenance (judge shadow, train, drift check), which runs according to `config.training`:
     in a background worker thread (default), inline after each batch, or only when `maintain()` is called.
 
-    `train_executor`: optional Executor for the CPU-heavy fit (e.g. a shared ProcessPoolExecutor, so
-    training never competes with serving for the GIL). Default: fit in the maintenance thread itself.
+    `train_executor`: optional Executor for the training job (reading samples, fitting, writing the bundle).
+    Recommended when several tasks share a process: one `training.train_pool()` (2 low-priority workers) for
+    all of them. With 5 tasks training at once it cost serving ~1.12x at p99 and finished the fits ~2.5x
+    faster than threads (benchmarks/concurrency.py). What matters is capping training's CPU: pool size
+    x `config.train_threads`. Default (None): run the job in the maintenance thread (~1.11x, slower fits).
     """
 
     def __init__(self, task: Task, teacher: Teacher, data_dir: str | Path,
@@ -374,50 +377,55 @@ class Jevstiller:
             return self._train()
 
     def _train(self) -> TrainReport:
-        tv, eid, dim = self.task.version, self.encoder.id, self.encoder.dim
-        X, Y, _, w = self.store.training_set(tv, eid, self.labels, dim)
-        Xc, _, yc, _ = self.store.calib_set(tv, eid, self.labels, dim)
+        tv, eid = self.task.version, self.encoder.id
+        self.store.flush()                               # the job reads the store from its own connection
         with self._state:
             self._last_train_id = self.store.max_id()
             self._retrain_requested = False
-        if len(X) == 0 or len(Xc) == 0:
-            return TrainReport(None, len(X), len(Xc), None, float("nan"), 0.0, False, "no data")
-        if self.cfg.label_target == "hard":
-            Y = np.eye(len(self.labels), dtype=np.float32)[Y.argmax(axis=1)]
-        kw = dict(budget=self.task.budget * (1 - self.cfg.fit_headroom), delta=1 - self.cfg.confidence,
-                  ood_quantile=self.cfg.ood_quantile, ood_k=self.cfg.ood_k, epochs=self.cfg.student_epochs,
-                  l2=self.cfg.student_l2, patience=self.cfg.student_patience, seed=self.cfg.seed)
-        wt = w if self.cfg.importance_weighting else None
-        if self.train_executor is None:
-            cand = fit_candidate(X, Y, wt, Xc, yc, **kw)
-        else:
-            cand = self.train_executor.submit(fit_candidate, X, Y, wt, Xc, yc, **kw).result()
-        policy, fit = cand.policy, cand.fit
         prod = self._prod
-        prod_cov = None
-        if prod is not None:                             # production's coverage on the same calibration rows
-            _, pc, po = self._run(prod, Xc)
-            prod_cov = float(prod.policy.accepts(pc, po).mean())
-        meta = {"n_train": len(X), "n_calib": len(Xc), "train_loss": fit["loss"], "epochs": fit["epochs"],
-                "prod_calib_coverage": prod_cov,
-                "calib_agreement": cand.calib_agreement, "calib_accepted": cand.calib_accepted,
-                "calib_disagree": cand.calib_disagree, "encoder": eid, "task_version": tv,
+        staged = self.registry.staging_dir()
+        job = FitJob(store_path=str(self.store.path), task_version=tv, encoder_id=eid, labels=self.labels,
+                     dim=self.encoder.dim, out_dir=str(staged),
+                     fit=dict(budget=self.task.budget * (1 - self.cfg.fit_headroom), delta=1 - self.cfg.confidence,
+                              ood_quantile=self.cfg.ood_quantile, ood_k=self.cfg.ood_k,
+                              epochs=self.cfg.student_epochs, l2=self.cfg.student_l2,
+                              patience=self.cfg.student_patience, seed=self.cfg.seed,
+                              threads=self.cfg.train_threads),
+                     hard_labels=self.cfg.label_target == "hard",
+                     importance_weighting=self.cfg.importance_weighting,
+                     prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None)
+        try:
+            if self.train_executor is None:
+                res = run_fit_job(job)
+            else:
+                res = self.train_executor.submit(run_fit_job, job).result()
+        except BaseException:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
+        if res.policy is None:
+            shutil.rmtree(staged, ignore_errors=True)
+            return TrainReport(None, res.n_train, res.n_calib, None, float("nan"), 0.0, False, "no data")
+        policy, fit = res.policy, res.fit
+        meta = {"n_train": res.n_train, "n_calib": res.n_calib, "train_loss": fit["loss"], "epochs": fit["epochs"],
+                "prod_calib_coverage": res.prod_calib_coverage,
+                "calib_agreement": res.calib_agreement, "calib_accepted": res.calib_accepted,
+                "calib_disagree": res.calib_disagree, "encoder": eid, "task_version": tv,
                 "config": self.cfg.to_dict()}
         if not policy.usable:
-            name = self.registry.save(cand.student, cand.ood, policy, meta, state="rejected")
+            name = self.registry.adopt(staged, meta, state="rejected")
             self.store.event("rejected", version=name, reason="no threshold satisfies the budget",
-                             n_calib=len(Xc), calib_agreement=round(cand.calib_agreement, 4))
-            return TrainReport(name, len(X), len(Xc), policy, fit["loss"], cand.calib_agreement, False,
+                             n_calib=res.n_calib, calib_agreement=round(res.calib_agreement, 4))
+            return TrainReport(name, res.n_train, res.n_calib, policy, fit["loss"], res.calib_agreement, False,
                                "no threshold satisfies the budget")
-        name = self.registry.save(cand.student, cand.ood, policy, meta, state="shadow")
+        name = self.registry.adopt(staged, meta, state="shadow")
         bundle = self.registry.load(name)
         with self._state:
             self._shadow = bundle
             self._shadow_started_id = self.store.max_id()
-        self.store.event("shadow", version=name, n_train=len(X), n_calib=len(Xc), epochs=fit["epochs"],
+        self.store.event("shadow", version=name, n_train=res.n_train, n_calib=res.n_calib, epochs=fit["epochs"],
                          expected_coverage=round(policy.expected_coverage, 4),
                          disagreement_ub=round(policy.disagreement_ub, 4))
-        return TrainReport(name, len(X), len(Xc), policy, fit["loss"], cand.calib_agreement, True, "shadow")
+        return TrainReport(name, res.n_train, res.n_calib, policy, fit["loss"], res.calib_agreement, True, "shadow")
 
     def _judge_shadow(self) -> None:
         sh = self._shadow

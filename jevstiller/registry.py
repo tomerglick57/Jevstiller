@@ -58,6 +58,12 @@ def atomic_write_text(path: Path, text: str) -> None:
     _fsync_dir(path.parent)
 
 
+def write_bundle(vdir: Path, student: LinearStudent, ood: KnnOOD, policy: RoutingPolicy) -> None:
+    student.save(vdir / "head.npz")
+    ood.save(vdir / "ood.npz")
+    policy.save(vdir / "policy.json")
+
+
 class Registry:
     """`registry.json` is the single source of truth: a version directory not listed there does not exist
     (it is a leftover from a crash and is removed on the next save)."""
@@ -101,29 +107,43 @@ class Registry:
 
     def save(self, student: LinearStudent, ood: KnnOOD, policy: RoutingPolicy, meta: dict,
              state: str = "candidate") -> str:
-        with self._lock:
-            d = self._read()
-            name = f"student:v{len(d['versions']) + 1}"
-            vdir = self.root / name.replace(":", "-")
-            if vdir.exists():                            # orphan from a crash between copy and index write
-                shutil.rmtree(vdir)
-            tmp = Path(tempfile.mkdtemp(dir=self.root, prefix=f".{vdir.name}."))
-            try:
-                student.save(tmp / "head.npz")
-                ood.save(tmp / "ood.npz")
-                policy.save(tmp / "policy.json")
-                (tmp / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
-                for f in tmp.iterdir():
-                    with open(f, "rb") as fh:
-                        os.fsync(fh.fileno())
-                os.replace(tmp, vdir)
-            except BaseException:
-                shutil.rmtree(tmp, ignore_errors=True)
-                raise
-            _fsync_dir(self.root)
-            d["versions"].append({"name": name, "state": state, "created": time.time(), "dir": str(vdir)})
-            self._write(d)
-            return name
+        tmp = self.staging_dir()
+        try:
+            write_bundle(tmp, student, ood, policy)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        return self.adopt(tmp, meta, state)
+
+    def staging_dir(self) -> Path:
+        """A fresh directory to build a version in. Hidden, so a crash leaves nothing a restart keeps."""
+        return Path(tempfile.mkdtemp(dir=self.root, prefix=".staging-"))
+
+    def adopt(self, staged: Path, meta: dict, state: str = "candidate") -> str:
+        """Register a directory holding head.npz, ood.npz and policy.json (e.g. written by a training
+        worker) as the next version. The directory is moved, not copied."""
+        if state not in STATES:
+            raise ValueError(f"state must be one of {STATES}, got {state!r}")
+        staged = Path(staged)
+        try:
+            (staged / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
+            for f in staged.iterdir():
+                with open(f, "rb") as fh:
+                    os.fsync(fh.fileno())
+            with self._lock:
+                d = self._read()
+                name = f"student:v{len(d['versions']) + 1}"
+                vdir = self.root / name.replace(":", "-")
+                if vdir.exists():                        # orphan from a crash between move and index write
+                    shutil.rmtree(vdir)
+                os.replace(staged, vdir)
+                _fsync_dir(self.root)
+                d["versions"].append({"name": name, "state": state, "created": time.time(), "dir": str(vdir)})
+                self._write(d)
+                return name
+        except BaseException:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
 
     def load(self, name: str) -> Bundle:
         vdir = self.root / name.replace(":", "-")

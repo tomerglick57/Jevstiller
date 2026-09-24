@@ -76,8 +76,22 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
   *Result:* 19 → ~500 req/s (25×) with 32 callers and a 50 ms teacher (`benchmarks/concurrency.py`). Profiling showed the per-request SQLite commit was the next bottleneck, so the store now writes behind: one writer thread commits in batches, and reads through the store flush first.
 - [x] **P1.2** Move training off the request path. `_after_batch` only *enqueues* "train/judge/drift-check task X". A background worker does the work and atomically swaps in the new `Bundle`. *Done when:* no `classify` call ever runs `_train_now`, and p99 latency during training is unchanged.
   *Result:* `Config.training = background | inline | manual`. The background worker is paced by `maintenance_interval_s` (back-to-back passes halved throughput because each pass scans the store). Tests check that the fit never runs on a caller's thread.
-- [ ] **P1.3** Train in a **process** pool, not threads. numpy training and kNN fitting hold the GIL long enough to hurt serving. Set a max number of concurrent trainings (config). *Done when:* training 5 tasks at once doesn't move serving p99 by more than 10%.
-  *Status:* `train_executor=` accepts any Executor (a process pool works and is tested). **Not done:** the measurement showed the contention is CPU, not the GIL. numpy's BLAS spreads the fit over every core, so a process pool alone didn't help (p99 ~20 → ~80 ms both ways), while 2 BLAS threads brought thread mode to ~35 ms. Next: cap BLAS threads inside the fit (`threadpoolctl` or pool initializer env) and re-measure on a quiet machine. The 2026-09-24 numbers were taken under an unrelated load average of ~32.
+- [x] **P1.3** Keep training from slowing serving. *Done when:* training 5 tasks at once doesn't move serving p99 by more than 10%.
+  *Result:* the contention is CPU, not the GIL. BLAS spreads every fit over all cores, so where the fit runs matters less than how much CPU training gets. Now:
+  - `Config.train_threads` (default 2) caps BLAS per fit (`threadpoolctl`).
+  - The training job reads its own samples and writes its own bundle, so only small objects cross into the serving process.
+  - `training.train_pool(workers=2)` is a shared, low-priority process pool: its size caps concurrent trainings, and the rest queue.
+
+  Median over 3 interleaved runs, 5 tasks training while one serves 8 callers (`benchmarks/concurrency.py --during-training --rows 15000 --repeats 3`, 16 vCPU WSL):
+
+  | Setup | p99 slowdown | 5 fits took |
+  |---|---|---|
+  | `train_pool(2)`, 2 threads each | ×1.12 (1.01 / 1.34 / 1.12) | ~28 s |
+  | threads, 2 BLAS threads each | ×1.11 | ~71 s |
+  | 5 low-priority workers, 2 threads each | ×2.79 | ~26 s |
+  | 5 workers, BLAS uncapped | ×12.1 | ~44 s |
+
+  The median is at the target within this machine's noise. P2's TaskManager should own one `train_pool` and size it from the core count.
 - [x] **P1.4** Atomic registry writes (write temp file + `os.replace`) and fsync on promote. *Done when:* a crash-injection test (kill during save/promote) never leaves an unreadable `registry.json`.
 - [x] **P1.5** Teacher failure isolation. One failed Jev call must not fail the batch. Per-item result or error. Timeouts on every upstream call.
 - [ ] **P1.6** Generalise `Task`: accept JSON values (str/object/array/None) for `instructions` and criteria descriptions, with canonical JSON in `version`. Allow up to 255 classes (Jev's max).

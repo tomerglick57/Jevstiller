@@ -4,7 +4,9 @@
 
 - Concurrency: the engine no longer holds a lock across encoding, inference, the teacher call, or the store. 32 callers with a 50 ms teacher went from 19 to ~500 req/s (`benchmarks/concurrency.py`).
 - Training moved off the request path: `Config.training` = `background` (default, a worker thread per task, paced by `maintenance_interval_s`), `inline` (old behaviour; used by tests and experiment replays), or `manual` (call `maintain()` / `train_now()`). New `drain()`; `close()` stops the worker.
-- `train_executor=`: run the fit in any `concurrent.futures.Executor`, e.g. a shared `ProcessPoolExecutor`.
+- `train_executor=`: run training in any `concurrent.futures.Executor`, e.g. a shared `ProcessPoolExecutor`. The job (`training.run_fit_job`) reads the samples from a read-only store connection, fits, scores production, and writes the bundle itself; the registry `adopt()`s the finished directory. Only small objects cross the process boundary.
+- `training.train_pool(workers=2, niceness=10)`: a shared, low-priority process pool for `train_executor`. With 5 tasks training at once, serving p99 rose ~12% (vs ~12x with an uncapped 5-worker pool), and the fits finished ~2.5x faster than in threads.
+- `Config.train_threads` (default 2) caps BLAS threads per fit via `threadpoolctl` (new dependency). Uncapped, one fit takes every core and slows serving whichever process it runs in.
 - Sample store: write-behind batching on one writer thread, per-thread SQLite connections; reads see every earlier insert. `flush()`.
 - Registry: atomic, fsynced writes; crash leftovers are cleaned up; unknown versions/states raise `ValueError`.
 - Teacher failures are per item: adapters may return an `Exception` per text; `classify_batch` raises `TeacherError` (with the partial results) or, with `errors="return"`, returns `Result(label=None, error=...)`. Failed items are not recorded. `Status.teacher_errors`.

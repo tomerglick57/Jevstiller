@@ -57,12 +57,12 @@ def test_teacher_calls_overlap(tmp_path, task, world, teacher):
 
 def test_training_runs_off_the_request_path(tmp_path, task, world, teacher, monkeypatch):
     fit_threads = []
-    real = core.fit_candidate
+    real = core.run_fit_job
 
     def spy(*a, **kw):
         fit_threads.append(threading.get_ident())
         return real(*a, **kw)
-    monkeypatch.setattr(core, "fit_candidate", spy)
+    monkeypatch.setattr(core, "run_fit_job", spy)
     js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="background", maintenance_interval_s=0.0))
     for _ in range(40):
         js.classify_batch([t for t, _ in world.sample(200)])
@@ -149,3 +149,44 @@ def test_config_and_mode_validation(tmp_path, task, teacher):
     with pytest.raises(ValueError):
         js.promote("student:v9")
     js.close()
+
+
+def test_fit_caps_blas_threads(monkeypatch):
+    import numpy as np
+    from threadpoolctl import threadpool_info
+
+    import jevstiller.training as training
+    seen = []
+    real = training._fit
+
+    def spy(*a, **kw):
+        seen.append({i["num_threads"] for i in threadpool_info() if i["user_api"] == "blas"})
+        return real(*a, **kw)
+    monkeypatch.setattr(training, "_fit", spy)
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(200, 8)).astype(np.float32)
+    Y = np.eye(2, dtype=np.float32)[rng.integers(0, 2, 200)]
+    kw = dict(budget=0.05, delta=0.05, ood_quantile=0.99, ood_k=5, epochs=50, l2=1e-6, patience=2, seed=0)
+    training.fit_candidate(X, Y, None, X, Y.argmax(1), threads=1, **kw)
+    assert seen[-1] in ({1}, set())                  # set(): no BLAS library visible to threadpoolctl
+
+
+def test_failed_fit_leaves_no_staging_dir(tmp_path, task, world, teacher, monkeypatch):
+    def boom(job):
+        raise MemoryError("fit blew up")
+    monkeypatch.setattr(core, "run_fit_job", boom)
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual"))
+    js.classify_batch([t for t, _ in world.sample(100)])
+    with pytest.raises(MemoryError):
+        js.train_now()
+    assert not [p for p in js.registry.root.iterdir() if p.name.startswith(".staging")]
+    js.close()
+
+
+def test_train_pool_runs_at_lower_priority():
+    import os
+
+    from jevstiller.training import train_pool
+    with train_pool(workers=1, niceness=5) as pool:
+        child = pool.submit(os.nice, 0).result()
+    assert child >= min(os.nice(0) + 5, 19)

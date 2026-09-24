@@ -89,8 +89,10 @@ class SampleStore:
     """
 
     def __init__(self, path: Path, calib_fraction: float = 0.2, busy_timeout_s: float = 30.0,
-                 write_behind: bool = True, max_pending: int = 100_000, max_batch: int = 5_000):
+                 write_behind: bool = True, max_pending: int = 100_000, max_batch: int = 5_000,
+                 read_only: bool = False):
         self.path = Path(path)
+        self.read_only = read_only
         self.calib_fraction = calib_fraction
         self.busy_timeout_s = busy_timeout_s
         self.write_behind = write_behind
@@ -106,9 +108,10 @@ class SampleStore:
         self._enqueued = self._written = 0
         self._stopping = False
         self._writer: threading.Thread | None = None
-        conn = self._conn()
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript(_SCHEMA)
+        if not read_only:
+            conn = self._conn()
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(_SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
         """This thread's connection, opened on first use."""
@@ -117,8 +120,12 @@ class SampleStore:
             with self._conns_lock:
                 if self._closed:
                     raise sqlite3.ProgrammingError("the sample store is closed")
-                conn = sqlite3.connect(self.path, timeout=self.busy_timeout_s, check_same_thread=False)
-                conn.execute("PRAGMA synchronous=NORMAL")      # durable across crashes in WAL mode
+                if self.read_only:                              # e.g. a training worker process
+                    conn = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True,
+                                           timeout=self.busy_timeout_s, check_same_thread=False)
+                else:
+                    conn = sqlite3.connect(self.path, timeout=self.busy_timeout_s, check_same_thread=False)
+                    conn.execute("PRAGMA synchronous=NORMAL")  # durable across crashes in WAL mode
                 self._conns.append(conn)
             self._local.conn = conn
         return conn
@@ -133,6 +140,8 @@ class SampleStore:
     def insert(self, recs: Sequence[Record]) -> None:
         if not recs:
             return
+        if self.read_only:
+            raise sqlite3.ProgrammingError("the sample store is read-only")
         if not self.write_behind:
             self._write(recs)
             return

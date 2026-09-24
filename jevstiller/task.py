@@ -73,6 +73,7 @@ class Config:
                                         # inline: train inside classify_batch (deterministic replays, tests)
                                         # manual: never automatically; call maintain() / train_now()
     maintenance_interval_s: float = 1.0  # background: at most one maintenance pass per interval
+    train_threads: int = 2              # BLAS threads per fit (0 = library default, i.e. every core)
     store_text: bool = True             # False: keep only the hash + embedding (no raw text in the store)
     seed: int = 0
     student_epochs: int = 2000          # upper bound; early stopping on a validation slice decides
