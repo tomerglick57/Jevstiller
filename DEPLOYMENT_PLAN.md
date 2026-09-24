@@ -218,7 +218,7 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
     - Failing candidates retrained every 100 rows.
   - **Confirmation run** (30 min, after the manager fixes): peak 222 MB, drift recovered.
   - **Still to do:**
-    - the full 24 h run on an otherwise idle machine;
+    - the full 24 h run on an otherwise idle machine (the confirmation run's second half overlapped a disk backup: I/O stalls);
     - a look at the rare keep-alive `ReadError` (2 in 180k, retried by the SDK).
 - [x] **P6.7** End-to-end with live Jev through the proxy (after P0): one real task from cold start to promoted student. Record the report.
   *Result (`experiments/live_proxy.py`, docs/benchmarks.md):* the unmodified SDK sent 4,000 Banking77 messages (8 threads, 6-class question) through `jevstiller serve` to the real Jev. There were no errors. The first local answer came at request 3,697, after admission, 2,601 labelled rows and 1,010 shadow rows. The last 500 requests were 50% local. Local answers took p50 15 ms against 292 ms forwarded. It cost $0.067.
