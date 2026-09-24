@@ -5,30 +5,61 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from typing import Any
+
+State = str | dict | list
+"""What is classified: text, or a JSON object/array (Jev's `state`). Non-text states are encoded as
+canonical JSON (see `state_text`); the teacher always receives the original value."""
+
+MAX_CLASSES = 255                       # Jev's limit for a Choice question
+
+
+def canonical_json(value: Any) -> str:
+    """Stable text for a JSON value: sorted keys, no insignificant whitespace, UTF-8 kept as is."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def state_text(state: State) -> str:
+    """The text the encoder sees and the store keeps. Strings are unchanged."""
+    if isinstance(state, str):
+        return state
+    if isinstance(state, (dict, list)):
+        return canonical_json(state)
+    raise TypeError(f"state must be str, dict or list, got {type(state).__name__}")
 
 
 @dataclass(frozen=True)
 class Task:
     """What is being classified. Everything here defines the *teacher's* behaviour.
 
-    `classes` maps class name -> description. Descriptions are sent to the teacher
-    verbatim (Jev's `criteria`), so they are part of the task version.
+    `classes` maps class name -> description. Descriptions are sent to the teacher verbatim (Jev's
+    `criteria`), so they are part of the task version. Like `instructions`, a description may be text, a
+    JSON object or array, or None ("interpreted by its name alone"). A plain list of names means empty
+    descriptions.
     """
 
     name: str
-    instructions: str
-    classes: Mapping[str, str] | Sequence[str]
+    instructions: Any
+    classes: Mapping[str, Any] | Sequence[str]
     target_agreement: float = 0.98
 
     def __post_init__(self) -> None:
         if not isinstance(self.classes, Mapping):
+            if isinstance(self.classes, str):
+                raise ValueError("classes must be a mapping or a list of names, not a string")
             object.__setattr__(self, "classes", {c: "" for c in self.classes})
         else:
             object.__setattr__(self, "classes", dict(self.classes))
-        if len(self.classes) < 2:
-            raise ValueError("a task needs at least two classes")
+        if not all(isinstance(c, str) and c for c in self.classes):
+            raise ValueError("class names must be non-empty strings")
+        if not 2 <= len(self.classes) <= MAX_CLASSES:
+            raise ValueError(f"a task needs between 2 and {MAX_CLASSES} classes, got {len(self.classes)}")
         if not 0.5 <= self.target_agreement < 1.0:
             raise ValueError("target_agreement must be in [0.5, 1)")
+        try:
+            json.dumps({"i": self.instructions, "c": self.classes})
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"instructions and class descriptions must be JSON values: {e}") from None
 
     @property
     def labels(self) -> list[str]:
@@ -41,12 +72,16 @@ class Task:
 
     @property
     def version(self) -> str:
+        """Hash of what the teacher is asked. Independent of class order (a loaded student is reordered to
+        the task's labels), and unchanged from 0.1.0 for text instructions/descriptions."""
         blob = json.dumps({"i": self.instructions, "c": self.classes}, sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()[:12]
 
 
 MODES = ("auto", "teacher_only", "cascade")
 TRAINING = ("background", "inline", "manual")
+TEACHER_CHANGE = ("fallback", "audit")
+RARE_CLASSES = ("wait", "defer")
 
 
 @dataclass
@@ -74,6 +109,15 @@ class Config:
                                         # manual: never automatically; call maintain() / train_now()
     maintenance_interval_s: float = 1.0  # background: at most one maintenance pass per interval
     train_threads: int = 2              # BLAS threads per fit (0 = library default, i.e. every core)
+    teacher_change: str = "fallback"    # the teacher's resolved model changed (e.g. jev-latest moved):
+                                        # fallback: all traffic to the teacher until a student of the new
+                                        #   model passes shadow; audit: keep serving, raise the audit rate,
+                                        #   retrain, and let the drift monitor decide
+    teacher_change_confirm: int = 20    # consecutive answers from a new model before switching lineage
+    rare_classes: str = "wait"          # a class below min_samples_per_class:
+                                        # wait: no first student until every class has enough samples
+                                        # defer: train without waiting; a prediction of a rare class goes
+                                        #   to the teacher until the class has enough samples
     store_text: bool = True             # False: keep only the hash + embedding (no raw text in the store)
     seed: int = 0
     student_epochs: int = 2000          # upper bound; early stopping on a validation slice decides
@@ -86,7 +130,8 @@ class Config:
     student_patience: int = 4
 
     def __post_init__(self) -> None:
-        for name, allowed in (("mode", MODES), ("training", TRAINING), ("label_target", ("probs", "hard"))):
+        for name, allowed in (("mode", MODES), ("training", TRAINING), ("label_target", ("probs", "hard")),
+                              ("teacher_change", TEACHER_CHANGE), ("rare_classes", RARE_CLASSES)):
             if getattr(self, name) not in allowed:
                 raise ValueError(f"{name} must be one of {allowed}, got {getattr(self, name)!r}")
 

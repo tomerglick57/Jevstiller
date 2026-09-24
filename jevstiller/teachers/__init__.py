@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from ..task import Task
+from ..task import State, Task
 
 
 @dataclass
@@ -18,16 +18,20 @@ class TeacherOutput:
     latency_ms: float = 0.0
     request_id: str | None = None
     raw: Any = None
+    model: str | None = None         # the model that actually answered (e.g. Jev's resolved `model`); lineage key
 
 
 @runtime_checkable
 class Teacher(Protocol):
-    """`classify` returns one entry per text, in order. An entry may be an Exception instead of a
-    TeacherOutput when only that item failed; raising fails every item of the call."""
+    """`classify` returns one entry per state (text, or a JSON object/array), in order. An entry may be an
+    Exception instead of a TeacherOutput when only that item failed; raising fails every item of the call.
+
+    `TeacherOutput.model` should name the model that answered, as precisely as the teacher reports it. A
+    change of model starts a new lineage (Config.teacher_change). None means `name`."""
 
     name: str
 
-    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput | Exception]: ...
+    def classify(self, texts: Sequence[State], task: Task) -> list[TeacherOutput | Exception]: ...
 
 
 def peakedness(probs: dict[str, float]) -> float:

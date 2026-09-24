@@ -1,6 +1,6 @@
 """Jev (TypeSafe) adapter over `typesafe-sdk`. Requires TYPESAFE_API_KEY.
 
-One request per text: state=text, one Choice question whose criteria are the task's
+One request per state (text or JSON), one Choice question whose criteria are the task's
 class descriptions. The full probability distribution is the training target.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
-from ..task import Task
+from ..task import State, Task
 from . import TeacherOutput
 
 
@@ -49,7 +49,7 @@ class JevTeacher:
                                      timeout=timeout)
         self._Choice = __import__("typesafe_sdk").Choice
 
-    def _one(self, text: str, task: Task) -> TeacherOutput:
+    def _one(self, text: State, task: Task) -> TeacherOutput:
         self.bucket.wait()
         q = {self.question_id: self._Choice(instructions=task.instructions, criteria=dict(task.classes))}
         t0 = time.perf_counter()
@@ -73,17 +73,19 @@ class JevTeacher:
             request_id = res.request_id       # the SDK raises TypeSafeError when the header is missing
         except Exception:
             request_id = None
+        resolved = getattr(res, "model", None)       # jev-latest -> the concrete version that answered
         return TeacherOutput(label=str(ans.choice), probs=probs, confidence=float(ans.confidence),
                              input_tokens=toks, cost_usd=toks * self.price_per_mtok / 1e6,
-                             latency_ms=dt, request_id=request_id, raw=raw)
+                             latency_ms=dt, request_id=request_id, raw=raw,
+                             model=f"jev:{resolved}" if isinstance(resolved, str) and resolved else self.name)
 
-    def _safe(self, text: str, task: Task) -> TeacherOutput | Exception:
+    def _safe(self, text: State, task: Task) -> TeacherOutput | Exception:
         try:
             return self._one(text, task)
         except Exception as e:                # one failed request fails only its own item
             return e
 
-    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput | Exception]:
+    def classify(self, texts: Sequence[State], task: Task) -> list[TeacherOutput | Exception]:
         if len(texts) == 1:
             return [self._safe(texts[0], task)]
         with ThreadPoolExecutor(max_workers=self.concurrency) as ex:

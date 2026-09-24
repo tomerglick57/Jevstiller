@@ -11,6 +11,11 @@
 - Registry: atomic, fsynced writes; crash leftovers are cleaned up; unknown versions/states raise `ValueError`.
 - Teacher failures are per item: adapters may return an `Exception` per text; `classify_batch` raises `TeacherError` (with the partial results) or, with `errors="return"`, returns `Result(label=None, error=...)`. Failed items are not recorded. `Status.teacher_errors`.
 - `JevTeacher`: `timeout=` (default 10 s), per-item errors, token usage from `response.usage`, tolerant of a missing request id.
+- Tasks: `instructions` and class descriptions may be any JSON value (text, object, array, or `None` for a name-only class), as in Jev's `criteria`; 2–255 classes; labels validated. Task versions of text tasks are unchanged from 0.1.0.
+- A trained student stores its label order and is reordered on load. The task version ignores class order, so a task declared with its classes in another order used to silently misread a saved model.
+- States: `classify` / `classify_batch` / `evaluate` take text or a JSON object/array. Objects are encoded and stored as canonical JSON (`state_type` column, added to existing stores on open); the teacher receives the object unchanged.
+- Teacher lineage: `TeacherOutput.model` names the model that answered (`JevTeacher`: `jev:<resolved model>`, e.g. `jev-latest` -> `jev:jev-1.13.0`). After `teacher_change_confirm` (20) answers in a row from a new model, the loop starts a new lineage: training, calibration, shadow and audit use only that model's answers; `teacher_change="fallback"` (default) sends everything to the teacher until a new student passes shadow, `"audit"` keeps serving with a raised audit rate. Bundles record `teacher_model`; `Status.teacher_model`; `teacher_changed` event.
+- Rare classes: `status()` / the report say what the first student is waiting for (samples, and which classes are below `min_samples_per_class`). `Config.rare_classes="defer"` trains without waiting; the policy's `deferred_labels` are never answered by the student (`routing_reason="rare_class"`), and calibration accounts for that.
 - `__version__` comes from package metadata; `Config` and `set_mode` validate with `ValueError`; CI on Python 3.10–3.14.
 
 ## 0.1.0 — 2026-09-22

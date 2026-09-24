@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -56,15 +57,23 @@ class RoutingPolicy:
     budget: float
     delta: float
     n_calib: int
+    deferred_labels: list[str] = field(default_factory=list)   # the student never answers these (rare classes)
 
     @property
     def usable(self) -> bool:
         return self.conf_threshold is not None
 
-    def accepts(self, conf: np.ndarray, ood: np.ndarray) -> np.ndarray:
+    def accepts(self, conf: np.ndarray, ood: np.ndarray, pred: np.ndarray | None = None) -> np.ndarray:
+        """Which rows the student answers. `pred` (the student's predicted labels) is required when the
+        policy defers labels."""
         if self.conf_threshold is None:
             return np.zeros(len(conf), dtype=bool)
-        return (conf >= self.conf_threshold) & (ood <= self.ood_threshold)
+        ok = (conf >= self.conf_threshold) & (ood <= self.ood_threshold)
+        if self.deferred_labels:
+            if pred is None:
+                raise ValueError("this policy defers labels; pass the predicted labels")
+            ok &= ~np.isin(np.asarray(pred, dtype=object), self.deferred_labels)
+        return ok
 
     def save(self, path: Path) -> None:
         path.write_text(json.dumps(asdict(self), indent=2))
@@ -75,11 +84,13 @@ class RoutingPolicy:
 
 
 def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: float,
-               delta: float = 0.05, ood_quantile: float = 0.99, grid: int = 200) -> RoutingPolicy:
+               delta: float = 0.05, ood_quantile: float = 0.99, grid: int = 200,
+               eligible: np.ndarray | None = None, deferred_labels: Sequence[str] = ()) -> RoutingPolicy:
     """Maximise coverage subject to coverage * UB(selective disagreement) <= budget.
 
     Inputs are from an IID calibration set: student max-prob, agreement with the teacher
-    (bool), and OOD score per example.
+    (bool), and OOD score per example. `eligible` marks rows the student may answer at all (False where it
+    predicts one of `deferred_labels`); coverage still counts every row.
     """
     conf = np.asarray(conf, dtype=float)
     agree = np.asarray(agree, dtype=bool)
@@ -87,6 +98,8 @@ def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: flo
     N = len(conf)
     ood_thr = float(np.quantile(ood, ood_quantile)) if N else 0.0
     in_dist = ood <= ood_thr
+    if eligible is not None:
+        in_dist &= np.asarray(eligible, dtype=bool)
     best = None
     if N:
         cands = np.unique(np.quantile(conf[in_dist], np.linspace(0, 1, grid))) if in_dist.any() else []
@@ -100,7 +113,8 @@ def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: flo
             cov = n / N
             if cov * ub <= budget and (best is None or cov > best[1]):
                 best = (float(t), cov, ub)
+    deferred = list(deferred_labels)
     if best is None:
-        return RoutingPolicy(None, ood_thr, 0.0, 1.0, 0.0, budget, delta, N)
+        return RoutingPolicy(None, ood_thr, 0.0, 1.0, 0.0, budget, delta, N, deferred)
     t, cov, ub = best
-    return RoutingPolicy(t, ood_thr, cov, ub, cov * ub, budget, delta, N)
+    return RoutingPolicy(t, ood_thr, cov, ub, cov * ub, budget, delta, N, deferred)

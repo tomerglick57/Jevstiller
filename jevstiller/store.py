@@ -37,6 +37,7 @@ class Record:
     served_by: str                      # teacher | student
     routing_reason: str
     channel: str                        # bootstrap | audit | fallback | deferred | student
+    state_type: str = "text"            # text | json (then `text` is the canonical JSON of the state)
     ts: float = field(default_factory=time.time)
     weight: float = 1.0                 # importance weight: how many requests this row stands for
     text_hash: str | None = None        # set by the caller when text is not stored
@@ -76,6 +77,17 @@ CREATE INDEX IF NOT EXISTS ix_samples_ts ON samples(ts);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts REAL, kind TEXT, detail TEXT);
 """
 
+# columns added after 0.1.0: (name, type). Existing stores get them via ALTER TABLE on open.
+_ADDED_COLUMNS = (("state_type", "TEXT"),)
+_INDEXES_AFTER_MIGRATION = """
+CREATE INDEX IF NOT EXISTS ix_samples_lineage ON samples(task_version, teacher_model, split);
+"""
+
+
+def _lineage(teacher_model: str | None) -> tuple[str, tuple]:
+    """SQL filter for one teacher lineage; None = every teacher."""
+    return (" AND teacher_model=?", (teacher_model,)) if teacher_model is not None else ("", ())
+
 
 class SampleStore:
     """Append-only store. Thread-safe.
@@ -112,6 +124,12 @@ class SampleStore:
             conn = self._conn()
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            have = {r[1] for r in conn.execute("PRAGMA table_info(samples)")}
+            with conn:
+                for col, typ in _ADDED_COLUMNS:
+                    if col not in have:
+                        conn.execute(f"ALTER TABLE samples ADD COLUMN {col} {typ}")
+            conn.executescript(_INDEXES_AFTER_MIGRATION)
 
     def _conn(self) -> sqlite3.Connection:
         """This thread's connection, opened on first use."""
@@ -200,7 +218,7 @@ class SampleStore:
                          r.student_version, r.student_label,
                          json.dumps(r.student_probs) if r.student_probs else None,
                          r.student_confidence, r.ood_score,
-                         r.shadow_version, r.shadow_label, r.shadow_confidence, r.shadow_ood))
+                         r.shadow_version, r.shadow_label, r.shadow_confidence, r.shadow_ood, r.state_type))
         conn = self._conn()
         with self._write_lock, conn:
             conn.executemany(
@@ -209,8 +227,8 @@ class SampleStore:
                 "teacher_label,teacher_probs,teacher_confidence,teacher_model,teacher_input_tokens,"
                 "teacher_cost_usd,teacher_request_id,teacher_latency_ms,"
                 "student_version,student_label,student_probs,student_confidence,ood_score,"
-                "shadow_version,shadow_label,shadow_confidence,shadow_ood) "
-                "VALUES (" + ",".join("?" * 29) + ")", rows)
+                "shadow_version,shadow_label,shadow_confidence,shadow_ood,state_type) "
+                "VALUES (" + ",".join("?" * 30) + ")", rows)
 
     def event(self, kind: str, **detail) -> None:
         conn = self._conn()
@@ -237,61 +255,74 @@ class SampleStore:
         return X, Y, y, w
 
     def labelled(self, task_version: str, encoder_id: str, labels: Sequence[str], dim: int,
-                 split: str, channels: Iterable[str] = TEACHER_CHANNELS):
-        """Embeddings X, teacher distributions Y, teacher argmax y, importance weights w for teacher-labelled rows."""
+                 split: str, channels: Iterable[str] = TEACHER_CHANNELS, teacher_model: str | None = None):
+        """Embeddings X, teacher distributions Y, teacher argmax y, importance weights w for teacher-labelled rows
+        (of one teacher lineage when `teacher_model` is given)."""
         ch = tuple(channels)
+        lin, lin_args = _lineage(teacher_model)
         rows = self.db.execute(
             f"SELECT embedding, teacher_probs, teacher_label, weight FROM samples "
-            f"WHERE task_version=? AND encoder_id=? "
+            f"WHERE task_version=? AND encoder_id=?{lin} "
             f"AND split=? AND teacher_label IS NOT NULL AND channel IN ({','.join('?' * len(ch))}) ORDER BY id",
-            (task_version, encoder_id, split, *ch)).fetchall()
+            (task_version, encoder_id, *lin_args, split, *ch)).fetchall()
         return self._matrix(rows, labels, dim)
 
-    def training_set(self, task_version, encoder_id, labels, dim):
-        return self.labelled(task_version, encoder_id, labels, dim, "train")
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None):
+        return self.labelled(task_version, encoder_id, labels, dim, "train", teacher_model=teacher_model)
 
-    def calib_set(self, task_version, encoder_id, labels, dim):
-        return self.labelled(task_version, encoder_id, labels, dim, "calib", IID_CHANNELS)
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None):
+        return self.labelled(task_version, encoder_id, labels, dim, "calib", IID_CHANNELS, teacher_model)
 
-    def shadow_records(self, shadow_version: str, task_version: str):
+    def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None):
         """IID rows where the shadow candidate ran alongside a teacher answer."""
         ch = IID_CHANNELS
+        lin, lin_args = _lineage(teacher_model)
         rows = self.db.execute(
             f"SELECT shadow_label, shadow_confidence, shadow_ood, teacher_label, student_label, student_confidence, "
-            f"ood_score FROM samples WHERE shadow_version=? AND task_version=? AND teacher_label IS NOT NULL "
-            f"AND channel IN ({','.join('?' * len(ch))})", (shadow_version, task_version, *ch)).fetchall()
+            f"ood_score FROM samples WHERE shadow_version=? AND task_version=?{lin} AND teacher_label IS NOT NULL "
+            f"AND channel IN ({','.join('?' * len(ch))})", (shadow_version, task_version, *lin_args, *ch)).fetchall()
         return rows
 
-    def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int):
+    def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int, teacher_model: str | None = None):
         """Embeddings and teacher labels of the most recent audit rows, whichever student scored them."""
+        lin, lin_args = _lineage(teacher_model)
         rows = self.db.execute(
-            "SELECT embedding, teacher_label FROM samples WHERE task_version=? AND encoder_id=? AND channel='audit' "
-            "AND teacher_label IS NOT NULL AND embedding IS NOT NULL ORDER BY id DESC LIMIT ?",
-            (task_version, encoder_id, limit)).fetchall()
+            f"SELECT embedding, teacher_label FROM samples WHERE task_version=? AND encoder_id=?{lin} "
+            f"AND channel='audit' AND teacher_label IS NOT NULL AND embedding IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (task_version, encoder_id, *lin_args, limit)).fetchall()
         if not rows:
             return np.zeros((0, dim), np.float32), np.array([], dtype=object)
         X = np.frombuffer(b"".join(r[0] for r in rows), dtype=np.float32).reshape(len(rows), dim)
         return X, np.array([r[1] for r in rows], dtype=object)
 
-    def counts(self, task_version: str) -> dict:
+    def counts(self, task_version: str, teacher_model: str | None = None) -> dict:
+        """Totals over every teacher; the labelled counts (what training can use) over one lineage if given."""
+        lin, lin_args = _lineage(teacher_model)
         c = {}
         c["total"] = self.db.execute("SELECT COUNT(*) FROM samples WHERE task_version=?", (task_version,)).fetchone()[0]
         for k, in_ in (("served_by", "served_by"), ("channel", "channel"), ("split", "split")):
             c[k] = dict(self.db.execute(f"SELECT {in_}, COUNT(*) FROM samples WHERE task_version=? GROUP BY {in_}",
                                         (task_version,)).fetchall())
         c["per_class_train"] = dict(self.db.execute(
-            "SELECT teacher_label, COUNT(*) FROM samples WHERE task_version=? AND split='train' "
-            "AND teacher_label IS NOT NULL GROUP BY teacher_label", (task_version,)).fetchall())
+            f"SELECT teacher_label, COUNT(*) FROM samples WHERE task_version=?{lin} AND split='train' "
+            f"AND teacher_label IS NOT NULL GROUP BY teacher_label", (task_version, *lin_args)).fetchall())
         c["labelled_train"] = sum(c["per_class_train"].values())
         c["labelled_calib"] = self.db.execute(
-            "SELECT COUNT(*) FROM samples WHERE task_version=? AND split='calib' AND teacher_label IS NOT NULL",
-            (task_version,)).fetchone()[0]
+            f"SELECT COUNT(*) FROM samples WHERE task_version=?{lin} AND split='calib' AND teacher_label IS NOT NULL",
+            (task_version, *lin_args)).fetchone()[0]
         c["teacher_cost_usd"] = self.db.execute(
             "SELECT COALESCE(SUM(teacher_cost_usd),0) FROM samples WHERE task_version=?", (task_version,)).fetchone()[0]
         c["teacher_calls"] = self.db.execute(
             "SELECT COUNT(*) FROM samples WHERE task_version=? AND teacher_label IS NOT NULL",
             (task_version,)).fetchone()[0]
         return c
+
+    def latest_teacher_model(self, task_version: str) -> str | None:
+        """The teacher model of the most recent teacher-labelled row: the lineage the store was last in."""
+        row = self.db.execute(
+            "SELECT teacher_model FROM samples WHERE task_version=? AND teacher_label IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1", (task_version,)).fetchone()
+        return row[0] if row else None
 
     def max_id(self) -> int:
         return self.db.execute("SELECT COALESCE(MAX(id),0) FROM samples").fetchone()[0]

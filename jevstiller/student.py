@@ -81,6 +81,15 @@ class LinearStudent:
         loss = float(-(wt * Yt * np.log(P + 1e-12)).sum() / len(ti))
         return {"epochs": stopped, "loss": loss, "n": n, "n_val": n_val, "val_loss": best[0] if n_val else None}
 
+    def reorder(self, from_labels: list[str], to_labels: list[str]) -> None:
+        """Permute the output columns from one label order to another (same set of labels)."""
+        if list(from_labels) == list(to_labels):
+            return
+        if sorted(from_labels) != sorted(to_labels):
+            raise ValueError("cannot reorder a student to a different set of labels")
+        perm = [list(from_labels).index(c) for c in to_labels]
+        self.W, self.b = self.W[:, perm], self.b[perm]
+
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         return _softmax(X.astype(np.float64) @ self.W + self.b)
 

@@ -16,6 +16,7 @@ class _Result:
     def __init__(self, ans, tokens):
         self.choices = {"label": ans}
         self.request_id = "req_test"
+        self.model = "jev-1.13.0"                 # what `jev-latest` resolved to
 
         class _Raw:
             def json(_self):
@@ -31,6 +32,8 @@ class _Client:
 
     def system_one(self, state, questions):
         _Client.calls.append((state, questions))
+        if isinstance(state, dict):
+            state = " ".join(f"{k} {v}" for k, v in state.items())
         if state == "boom":
             raise RuntimeError("529 overloaded")
         q = questions["label"]
@@ -76,3 +79,14 @@ def test_jev_adapter_isolates_failed_items(fake_sdk):
     assert outs[0].label == "billing" and outs[2].label == "billing"
     assert isinstance(outs[1], RuntimeError)
     assert isinstance(t.classify(["boom"], task)[0], RuntimeError)
+
+
+def test_jev_adapter_reports_resolved_model_and_passes_objects(fake_sdk):
+    from jevstiller.teachers.jev import JevTeacher
+    task = Task(name="t", instructions={"q": "Which team?"}, classes={"billing": {"covers": "money"}, "tech": None})
+    t = JevTeacher(model="jev-latest", rpm=100000)
+    state = {"subject": "charged twice", "body": "please refund"}
+    out = t.classify([state], task)[0]
+    assert out.model == "jev:jev-1.13.0" and t.name == "jev:jev-latest"
+    sent_state, q = _Client.calls[-1]
+    assert sent_state is state and q["label"].criteria == {"billing": {"covers": "money"}, "tech": None}

@@ -17,7 +17,7 @@ from .calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upp
 from .encoders import Encoder, HashEncoder
 from .registry import Bundle, Registry
 from .store import Record, SampleStore, text_hash
-from .task import MODES, Config, Task
+from .task import MODES, Config, State, Task, state_text
 from .teachers import Teacher
 from .training import FitJob, run_fit_job
 
@@ -88,6 +88,8 @@ class Status:
     policy: dict | None
     events: list = field(default_factory=list)
     teacher_errors: int = 0                 # failed teacher calls since this process started
+    teacher_model: str | None = None        # the teacher lineage the loop trains and audits against
+    readiness: dict | None = None           # before the first student: what training is waiting for
 
     def report(self) -> str:
         L = []
@@ -111,11 +113,24 @@ class Status:
                      f"[{self.audit_agreement_lb:.2%}, {self.audit_agreement_ub:.2%}]   "
                      f"target {self.target_agreement:.0%}   {ok}")
             L.append("  note: agreement with the teacher is not accuracy.")
-        L.append(f"Labelled: train {self.labelled_train:,}   calib {self.labelled_calib:,}")
+        L.append(f"Labelled: train {self.labelled_train:,}   calib {self.labelled_calib:,}"
+                 + (f"   teacher {self.teacher_model}" if self.teacher_model else ""))
+        if self.readiness:
+            r = self.readiness
+            line = (f"Waiting for a first student: train {r['train'][0]:,}/{r['train'][1]:,}   "
+                    f"calib {r['calib'][0]:,}/{r['calib'][1]:,}")
+            if r["rare"]:
+                rare = ", ".join(f"{c} {n}" for c, n in sorted(r["rare"].items(), key=lambda kv: kv[1]))
+                line += f"\n  classes below {r['min_per_class']}: {rare}"
+                line += ("   (blocking: set Config.rare_classes='defer' to train without them)" if r["blocked_by_rare"]
+                         else "   (will be deferred to the teacher)")
+            L.append(line)
         if self.policy:
             p = self.policy
             L.append(f"Policy: conf>={p['conf_threshold']:.3f} ood<={p['ood_threshold']:.3f}  "
                      f"expected coverage {p['expected_coverage']:.1%}  disagreement ub {p['disagreement_ub']:.2%}")
+            if p.get("deferred_labels"):
+                L.append(f"  rare classes, always sent to the teacher: {', '.join(p['deferred_labels'])}")
         for e in self.events[-5:]:
             L.append(f"  event: {e['kind']} " + " ".join(f"{k}={v}" for k, v in e.items() if k not in ('kind', 'ts')))
         return "\n".join(L)
@@ -157,19 +172,70 @@ class Jevstiller:
         self._last_train_id = 0
         self._shadow_started_id = 0
         self._teacher_errors = 0
-        self._prod: Bundle | None = self.registry.load(self.registry.production) if self.registry.production else None
-        shadows = self.registry.in_state("shadow")
-        self._shadow: Bundle | None = self.registry.load(shadows[-1]) if shadows else None
-        if self._shadow is not None:
-            self._shadow_started_id = self.store.max_id()
         self.labels = task.labels
         self._lidx = {c: i for i, c in enumerate(self.labels)}
+        self._prod: Bundle | None = self._load(self.registry.production) if self.registry.production else None
+        shadows = self.registry.in_state("shadow")
+        self._shadow: Bundle | None = self._load(shadows[-1]) if shadows else None
+        if self._shadow is not None:
+            self._shadow_started_id = self.store.max_id()
+        # teacher lineage: the model the last teacher answer came from. A different model must answer
+        # `teacher_change_confirm` times in a row before the loop switches to it.
+        self._teacher_model: str | None = self.store.latest_teacher_model(task.version)
+        self._pending_model: str | None = None
+        self._pending_count = 0
+        trained_on = self._prod.meta.get("teacher_model") if self._prod else None
+        if trained_on and self._teacher_model and trained_on != self._teacher_model:
+            self._teacher_changed(trained_on, self._teacher_model)
         # background worker: `_kicks` counts batches that asked for maintenance, `_done` is the kick count
         # the last finished pass had seen; drain() waits for _done to catch up
         self._cv = threading.Condition()
         self._kicks = self._done = self._draining = 0
         self._stop = False
         self._worker: threading.Thread | None = None
+
+    def _load(self, name: str) -> Bundle:
+        """Load a version with its outputs in this task's label order (the task version ignores order)."""
+        b = self.registry.load(name)
+        b.student.reorder(b.meta.get("labels") or self.labels, self.labels)
+        return b
+
+    # ---- teacher lineage ---------------------------------------------------------
+    def _observe_teacher(self, models: Sequence[str]) -> None:
+        changed = None
+        with self._state:
+            for m in models:
+                if self._teacher_model is None:
+                    self._teacher_model = m
+                elif m == self._teacher_model:
+                    self._pending_model, self._pending_count = None, 0
+                else:
+                    if m == self._pending_model:
+                        self._pending_count += 1
+                    else:
+                        self._pending_model, self._pending_count = m, 1
+                    if self._pending_count >= self.cfg.teacher_change_confirm:
+                        changed = (self._teacher_model, m)
+                        self._teacher_model, self._pending_model, self._pending_count = m, None, 0
+        if changed:
+            self._teacher_changed(*changed)
+
+    def _teacher_changed(self, old: str, new: str) -> None:
+        """The teacher now answers from a different model: the old student's agreement with it is unknown.
+        Start a new lineage: training, calibration, shadow and audit use only the new model's answers."""
+        with self._state:
+            self._teacher_model = new
+            self._retrain_requested = True
+            if self.cfg.teacher_change == "fallback" and self._prod is not None:
+                self.forced_fallback = True
+            else:
+                self._suspicious = True
+            dropped, self._shadow = self._shadow, None
+        if dropped is not None:
+            self.registry.set_state(dropped.name, "rejected")
+        self.store.event("teacher_changed", previous=old, current=new, action=self.cfg.teacher_change,
+                         dropped_shadow=dropped.name if dropped else None)
+        log.warning("task %s: teacher model changed %s -> %s (%s)", self.task.name, old, new, self.cfg.teacher_change)
 
     # ---- modes ----------------------------------------------------------------
     def set_mode(self, mode: str) -> None:
@@ -202,18 +268,22 @@ class Jevstiller:
         ood = b.ood.score(X)
         return P, conf, ood
 
-    def classify(self, text: str) -> Result:
-        """Classify one text. Raises TeacherError if it needed the teacher and the call failed."""
+    def classify(self, text: State) -> Result:
+        """Classify one state: text, or a JSON object/array. Raises TeacherError if it needed the teacher and
+        the call failed."""
         return self.classify_batch([text])[0]
 
-    def classify_batch(self, texts: Sequence[str], errors: str = "raise") -> list[Result]:
-        """Classify many texts. If some teacher calls fail, `errors="raise"` (default) raises TeacherError
-        after recording the rest; `errors="return"` returns Results with `error` set and `label=None`."""
+    def classify_batch(self, texts: Sequence[State], errors: str = "raise") -> list[Result]:
+        """Classify many states (text, or JSON objects/arrays). Objects are encoded and stored as canonical
+        JSON; the teacher receives them unchanged. If some teacher calls fail, `errors="raise"` (default)
+        raises TeacherError after recording the rest; `errors="return"` returns Results with `error` set and
+        `label=None`."""
         if errors not in ("raise", "return"):
             raise ValueError("errors must be 'raise' or 'return'")
         t0 = time.perf_counter()
         n = len(texts)
-        X = self.encoder.encode(texts)
+        stexts = [state_text(t) for t in texts]
+        X = self.encoder.encode(stexts)
         with self._state:                                   # one consistent snapshot of the routing state
             mode, prod, shadow, audit_rate = self.mode, self._prod, self._shadow, self.audit_rate
             draws = self.rng.random(n)
@@ -228,9 +298,10 @@ class Jevstiller:
         results: list[Result | None] = [None] * n
         to_teacher: list[int] = []
         for i in range(n):
-            r = Record(text=texts[i] if self.cfg.store_text else "", text_hash=text_hash(texts[i]),
+            r = Record(text=stexts[i] if self.cfg.store_text else "", text_hash=text_hash(stexts[i]),
                        task_version=self.task.version, encoder_id=self.encoder.id,
-                       embedding=X[i], served_by="teacher", routing_reason="", channel="")
+                       embedding=X[i], served_by="teacher", routing_reason="", channel="",
+                       state_type="text" if isinstance(texts[i], str) else "json")
             if prod is not None:
                 r.student_version = prod.name
                 r.student_label = self.labels[int(P[i].argmax())]
@@ -254,14 +325,16 @@ class Jevstiller:
                 to_teacher.append(i)
             else:
                 pol = prod.policy
-                accept = pol.usable and conf[i] >= pol.conf_threshold and ood[i] <= pol.ood_threshold
+                rare = r.student_label in pol.deferred_labels
+                accept = pol.usable and conf[i] >= pol.conf_threshold and ood[i] <= pol.ood_threshold and not rare
                 if accept:
                     r.served_by, r.channel, r.routing_reason = "student", "student", "confident"
                     results[i] = Result(r.student_label, r.student_probs, r.student_confidence,
                                         prod.name, "confident", 0.0)
                 else:
                     r.channel = "deferred"
-                    r.routing_reason = "ood" if (pol.usable and ood[i] > pol.ood_threshold) else "low_confidence"
+                    r.routing_reason = ("ood" if (pol.usable and ood[i] > pol.ood_threshold)
+                                        else "rare_class" if rare else "low_confidence")
                     to_teacher.append(i)
             recs.append(r)
 
@@ -279,7 +352,7 @@ class Jevstiller:
                     continue
                 r = recs[i]
                 r.teacher_label, r.teacher_probs, r.teacher_confidence = o.label, o.probs, o.confidence
-                r.teacher_model, r.teacher_input_tokens = self.teacher.name, o.input_tokens
+                r.teacher_model, r.teacher_input_tokens = o.model or self.teacher.name, o.input_tokens
                 r.teacher_cost_usd, r.teacher_request_id, r.teacher_latency_ms = o.cost_usd, o.request_id, o.latency_ms
                 results[i] = Result(o.label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
 
@@ -289,6 +362,9 @@ class Jevstiller:
             if results[i] is not None:
                 results[i].latency_ms = dt
         self.store.insert([r for i, r in enumerate(recs) if i not in failed])
+        answered = [recs[i].teacher_model for i in to_teacher if i not in failed]
+        if answered:
+            self._observe_teacher(answered)
         self._after_batch()
         if failed:
             with self._state:
@@ -359,16 +435,28 @@ class Jevstiller:
             if self._prod is not None and self.mode == "cascade":
                 self._check_drift()
 
+    def _readiness(self, c: dict) -> dict:
+        """What the first student is waiting for, from `store.counts` of the current lineage."""
+        per, need = c["per_class_train"], self.cfg.min_samples_per_class
+        rare = {l: per.get(l, 0) for l in self.labels if per.get(l, 0) < need}
+        enough = len(self.labels) - len(rare)
+        blocked = bool(rare) and (self.cfg.rare_classes == "wait" or enough < 2)
+        ready = (c["labelled_train"] >= self.cfg.min_train_samples and c["labelled_calib"] >= self.cfg.min_calib_samples
+                 and not blocked)
+        return {"ready": ready, "train": (c["labelled_train"], self.cfg.min_train_samples),
+                "calib": (c["labelled_calib"], self.cfg.min_calib_samples), "min_per_class": need,
+                "rare": rare, "blocked_by_rare": blocked, "rare_classes": self.cfg.rare_classes}
+
     def _should_train(self) -> bool:
-        c = self.store.counts(self.task.version)
+        if self._teacher_model is None:
+            return False
+        c = self.store.counts(self.task.version, self._teacher_model)
         if c["labelled_calib"] < self.cfg.min_calib_samples:
             return False
         if self._retrain_requested:
             return True
         if self._prod is None:
-            per = c["per_class_train"]
-            return (c["labelled_train"] >= self.cfg.min_train_samples
-                    and all(per.get(l, 0) >= self.cfg.min_samples_per_class for l in self.labels))
+            return self._readiness(c)["ready"]
         return (self.store.max_id() - self._last_train_id) >= self.cfg.min_new_samples
 
     def train_now(self) -> TrainReport:
@@ -382,7 +470,10 @@ class Jevstiller:
         with self._state:
             self._last_train_id = self.store.max_id()
             self._retrain_requested = False
+            lineage = self._teacher_model
         prod = self._prod
+        if prod is not None and prod.meta.get("teacher_model") not in (None, lineage):
+            prod = None                                  # trained on another teacher: not a fair comparison
         staged = self.registry.staging_dir()
         job = FitJob(store_path=str(self.store.path), task_version=tv, encoder_id=eid, labels=self.labels,
                      dim=self.encoder.dim, out_dir=str(staged),
@@ -393,7 +484,9 @@ class Jevstiller:
                               threads=self.cfg.train_threads),
                      hard_labels=self.cfg.label_target == "hard",
                      importance_weighting=self.cfg.importance_weighting,
-                     prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None)
+                     prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None,
+                     teacher_model=lineage, min_samples_per_class=self.cfg.min_samples_per_class,
+                     defer_rare=self.cfg.rare_classes == "defer")
         try:
             if self.train_executor is None:
                 res = run_fit_job(job)
@@ -405,11 +498,16 @@ class Jevstiller:
         if res.policy is None:
             shutil.rmtree(staged, ignore_errors=True)
             return TrainReport(None, res.n_train, res.n_calib, None, float("nan"), 0.0, False, "no data")
+        if self._teacher_model != lineage:              # the teacher changed while this candidate trained
+            shutil.rmtree(staged, ignore_errors=True)
+            return TrainReport(None, res.n_train, res.n_calib, res.policy, float("nan"), res.calib_agreement,
+                               False, "teacher changed during training")
         policy, fit = res.policy, res.fit
         meta = {"n_train": res.n_train, "n_calib": res.n_calib, "train_loss": fit["loss"], "epochs": fit["epochs"],
                 "prod_calib_coverage": res.prod_calib_coverage,
                 "calib_agreement": res.calib_agreement, "calib_accepted": res.calib_accepted,
                 "calib_disagree": res.calib_disagree, "encoder": eid, "task_version": tv,
+                "teacher_model": lineage, "labels": self.labels, "deferred_labels": res.deferred_labels,
                 "config": self.cfg.to_dict()}
         if not policy.usable:
             name = self.registry.adopt(staged, meta, state="rejected")
@@ -418,28 +516,35 @@ class Jevstiller:
             return TrainReport(name, res.n_train, res.n_calib, policy, fit["loss"], res.calib_agreement, False,
                                "no threshold satisfies the budget")
         name = self.registry.adopt(staged, meta, state="shadow")
-        bundle = self.registry.load(name)
+        bundle = self._load(name)
         with self._state:
             self._shadow = bundle
             self._shadow_started_id = self.store.max_id()
         self.store.event("shadow", version=name, n_train=res.n_train, n_calib=res.n_calib, epochs=fit["epochs"],
                          expected_coverage=round(policy.expected_coverage, 4),
-                         disagreement_ub=round(policy.disagreement_ub, 4))
+                         disagreement_ub=round(policy.disagreement_ub, 4),
+                         deferred_labels=res.deferred_labels or None)
         return TrainReport(name, res.n_train, res.n_calib, policy, fit["loss"], res.calib_agreement, True, "shadow")
 
     def _judge_shadow(self) -> None:
         sh = self._shadow
+        if sh.meta.get("teacher_model") not in (None, self._teacher_model):
+            self.registry.set_state(sh.name, "rejected")
+            with self._state:
+                self._shadow = None
+            self.store.event("rejected", version=sh.name, reason="trained on another teacher model")
+            return
         if self.store.max_id() - self._shadow_started_id < self.cfg.shadow_min_samples:
             return
-        rows = self.store.shadow_records(sh.name, self.task.version)
+        rows = self.store.shadow_records(sh.name, self.task.version, self._teacher_model)
         N = len(rows)
         if N == 0:
             return
-        s_lab = np.array([r[0] for r in rows])
+        s_lab = np.array([r[0] for r in rows], dtype=object)
         s_conf = np.array([r[1] for r in rows], float)
         s_ood = np.array([r[2] for r in rows], float)
         t_lab = np.array([r[3] for r in rows])
-        acc = sh.policy.accepts(s_conf, s_ood)
+        acc = sh.policy.accepts(s_conf, s_ood, s_lab)
         # Pool the calibration rows (used to fit the policy) with the fresh shadow rows: both are IID
         # teacher-labelled traffic, and pooling keeps the test powered while adding out-of-time evidence.
         n = int(acc.sum()) + sh.meta.get("calib_accepted", 0)
@@ -470,13 +575,14 @@ class Jevstiller:
 
     def _audit_stats(self, prod: Bundle):
         """System agreement on the recent audit window, re-scored with the given production model."""
-        X, t_lab = self.store.audit_window(self.task.version, self.encoder.id, self.encoder.dim, self.cfg.drift_window)
+        X, t_lab = self.store.audit_window(self.task.version, self.encoder.id, self.encoder.dim, self.cfg.drift_window,
+                                           self._teacher_model)
         N = len(t_lab)
         if N == 0:
             return 0, None, None, None
         P, conf, ood = self._run(prod, X)
         s_lab = np.array([self.labels[i] for i in P.argmax(axis=1)], dtype=object)
-        acc = prod.policy.accepts(conf, ood)
+        acc = prod.policy.accepts(conf, ood, s_lab)
         k = int((acc & (s_lab != t_lab)).sum())
         d = 1 - self.cfg.confidence
         return N, 1 - k / N, 1 - clopper_pearson_upper(k, N, d), 1 - clopper_pearson_lower(k, N, d)
@@ -509,7 +615,7 @@ class Jevstiller:
         with self._maint:
             if self.registry.state(version) is None:
                 raise ValueError(f"unknown version {version!r}")
-            bundle = self.registry.load(version)
+            bundle = self._load(version)
             self.registry.promote(version)
             with self._state:
                 self._prod = bundle
@@ -521,14 +627,16 @@ class Jevstiller:
     def rollback(self) -> str | None:
         with self._maint:
             target = self.registry.rollback()
-            bundle = self.registry.load(target) if target else None
+            bundle = self._load(target) if target else None
             with self._state:
                 self._prod = bundle
             self.store.event("rollback", to=target)
             return target
 
     def status(self) -> Status:
-        c = self.store.counts(self.task.version)
+        with self._state:
+            lineage = self._teacher_model
+        c = self.store.counts(self.task.version, lineage)
         sb = c["served_by"]
         tot = c["total"] or 1
         avoided = sb.get("student", 0)
@@ -549,7 +657,8 @@ class Jevstiller:
             teacher_calls=c["teacher_calls"], teacher_calls_avoided=avoided, teacher_cost_usd=c["teacher_cost_usd"],
             teacher_cost_avoided_usd=avoided * avg_cost, labelled_train=c["labelled_train"],
             labelled_calib=c["labelled_calib"], policy=prod.policy.__dict__ if prod else None,
-            events=self.store.events(), teacher_errors=teacher_errors)
+            events=self.store.events(), teacher_errors=teacher_errors, teacher_model=lineage,
+            readiness=self._readiness(c) if prod is None else None)
 
     def versions(self) -> list[dict]:
         """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back)."""
@@ -569,24 +678,26 @@ class Jevstiller:
         (dst / "task.json").write_text(json.dumps({
             "name": self.task.name, "instructions": self.task.instructions, "classes": self.task.classes,
             "target_agreement": self.task.target_agreement, "task_version": self.task.version,
-            "encoder_id": self.encoder.id, "version": name, "config": self.cfg.to_dict()}, indent=2))
+            "encoder_id": self.encoder.id, "version": name, "labels": self.labels,
+            "teacher_model": self.registry.load(name).meta.get("teacher_model"), "config": self.cfg.to_dict()},
+            indent=2, ensure_ascii=False))
         return dst
 
-    def evaluate(self, texts: Sequence[str], teacher_labels: Sequence[str], version: str | None = None,
+    def evaluate(self, texts: Sequence[State], teacher_labels: Sequence[str], version: str | None = None,
                  X: np.ndarray | None = None) -> dict:
         """Offline check of a version's routing policy against teacher labels on held-out texts.
 
         Returns coverage, selective disagreement, system agreement (= 1 - coverage * selective
         disagreement), and per-row decisions. Does not touch the store.
         """
-        b = self._prod if version is None else self.registry.load(version)
+        b = self._prod if version is None else self._load(version)
         if b is None:
             return {"version": None}
         if X is None:
-            X = self.encoder.encode(texts)
+            X = self.encoder.encode([state_text(t) for t in texts])
         P, conf, ood = self._run(b, X)
-        acc = b.policy.accepts(conf, ood)
-        pred = np.array([self.labels[i] for i in P.argmax(axis=1)])
+        pred = np.array([self.labels[i] for i in P.argmax(axis=1)], dtype=object)
+        acc = b.policy.accepts(conf, ood, pred)
         t = np.asarray(teacher_labels)
         n = int(acc.sum())
         k = int((acc & (pred != t)).sum())

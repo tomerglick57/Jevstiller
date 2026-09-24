@@ -6,7 +6,7 @@ import math
 import random
 from collections.abc import Sequence
 
-from ..task import Task
+from ..task import State, Task, state_text
 from . import TeacherOutput, peakedness
 
 
@@ -90,5 +90,5 @@ class SyntheticTeacher:
                              input_tokens=toks, cost_usd=toks * self.price_per_mtok / 1e6,
                              latency_ms=0.0)
 
-    def classify(self, texts: Sequence[str], task: Task) -> list[TeacherOutput]:
-        return [self.answer(t, task) for t in texts]
+    def classify(self, texts: Sequence[State], task: Task) -> list[TeacherOutput]:
+        return [self.answer(state_text(t), task) for t in texts]
