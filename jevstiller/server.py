@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -25,7 +26,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,8 @@ REQUEST_ID = "x-typesafe-request-id"
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
               "transfer-encoding", "upgrade", "host", "content-length"}
 RESPONSE_DROP = HOP_BY_HOP | {"content-encoding"}         # httpx hands us the decoded body
+PROXY_TOKEN_HEADER = "x-jevstiller-token"
+FORWARD_DROP = HOP_BY_HOP | {PROXY_TOKEN_HEADER}          # the proxy's own credential never reaches Jev
 KNOWN_FIELDS = {"state", "model", "questions"}
 
 
@@ -57,6 +60,15 @@ class ProxySettings:
     tenancy: str = "shared"                                # shared: one tenant; per_key: one per API key
     key_ttl_s: float = 3600.0                              # re-verify a key with Jev after this long
     price_per_mtok: float = 0.042
+    tenant_map: dict[str, str] = field(default_factory=dict)   # key hash -> tenant (overrides `tenancy`)
+    access_token: str | None = None                        # if set, callers must send x-jevstiller-token
+    allow_networks: list[str] = field(default_factory=list)    # if set, only these client CIDRs (direct peer)
+    max_body_bytes: int = 4 * 2**20                        # larger requests get 413 (Jev's own limit is ~64k tokens)
+
+    def tenant_for(self, kh: str | None) -> str:
+        if kh and kh in self.tenant_map:
+            return self.tenant_map[kh]
+        return "default" if self.tenancy == "shared" else f"key:{kh}"
 
 
 class KeyRegistry:
@@ -157,7 +169,7 @@ class Proxy:
             return _error(503, "jevstiller is overloaded; retry shortly", 1)
         self._upstream_slots -= 1
         try:
-            headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
+            headers = {k: v for k, v in request.headers.items() if k.lower() not in FORWARD_DROP}
             req = self.client.build_request(request.method, request.url.path, params=request.query_params,
                                             headers=headers, content=body)
             resp = await self.client.send(req)
@@ -187,14 +199,20 @@ class Proxy:
         return Response(resp.content, status_code=resp.status_code, headers=headers)
 
     # ---- handlers -----------------------------------------------------------------
-    async def passthrough(self, request: Request) -> Response:
+    async def _body(self, request: Request) -> bytes:
         body = await request.body()
+        if len(body) > self.settings.max_body_bytes:
+            raise _TooLarge()
+        return body
+
+    async def passthrough(self, request: Request) -> Response:
+        body = await self._body(request)
         kh = self.keys.hash(_bearer(request))
         self.stats["passthrough"] += 1
         return self.relay(await self.forward(request, body, kh))
 
     async def system_one(self, request: Request) -> Response:
-        body = await request.body()
+        body = await self._body(request)
         key = _bearer(request)
         kh = self.keys.hash(key)
         try:
@@ -206,7 +224,7 @@ class Proxy:
             self.stats["passthrough"] += 1
             return self.relay(await self.forward(request, body, kh))   # let Jev judge what we don't understand
 
-        tenant = "default" if self.settings.tenancy == "shared" else f"key:{kh}"
+        tenant = self.settings.tenant_for(kh)
         routings: dict[str, Routing] = {}
         others: list[str] = []
         try:
@@ -318,8 +336,52 @@ class Proxy:
                                            "x-jevstiller-detail": json.dumps(detail, separators=(",", ":"))})
 
     async def healthz(self, request: Request) -> Response:
-        return JSONResponse({"ok": True, **self.stats, "tasks": len(self.manager.tasks()),
-                             "loaded": len(self.manager.loaded())})
+        """Liveness: the process answers. No counters here (it is usually unauthenticated)."""
+        return JSONResponse({"ok": True})
+
+
+class _TooLarge(Exception):
+    pass
+
+
+class AccessMiddleware:
+    """Who may use the proxy at all, checked before anything else: client network, shared token, body size.
+    `/healthz` is exempt from the network and token checks (load-balancer probes)."""
+
+    def __init__(self, app, settings: ProxySettings):
+        import ipaddress
+        self.app, self.settings = app, settings
+        self.networks = [ipaddress.ip_network(n, strict=False) for n in settings.allow_networks]
+
+    def _client_allowed(self, scope) -> bool:
+        if not self.networks:
+            return True
+        import ipaddress
+        host = (scope.get("client") or ("",))[0]
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        return any(ip in n for n in self.networks)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") in ("/healthz", "/readyz"):
+            return await self.app(scope, receive, send)
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        if not self._client_allowed(scope):
+            return await _error(403, "client network not allowed (jevstiller)")(scope, receive, send)
+        token = self.settings.access_token
+        if token and not hmac.compare_digest(headers.get(PROXY_TOKEN_HEADER, "").encode(), token.encode()):
+            return await _error(401, "missing or invalid x-jevstiller-token (jevstiller)")(scope, receive, send)
+        try:
+            if int(headers.get("content-length", "0")) > self.settings.max_body_bytes:
+                return await _error(413, "request body too large (jevstiller)")(scope, receive, send)
+        except ValueError:
+            return await _error(400, "invalid content-length (jevstiller)")(scope, receive, send)
+        try:
+            await self.app(scope, receive, send)
+        except _TooLarge:
+            await _error(413, "request body too large (jevstiller)")(scope, receive, send)
 
 
 def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys: KeyRegistry | None = None,
@@ -345,4 +407,5 @@ def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys
         Route("/{path:path}", proxy.passthrough, methods=methods),
     ], lifespan=lifespan)
     app.state.proxy = proxy
+    app.add_middleware(AccessMiddleware, settings=settings)
     return app

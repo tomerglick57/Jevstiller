@@ -110,6 +110,16 @@ class Store(Protocol):
     def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None): ...
     def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int,
                      teacher_model: str | None = None): ...
+    def redact_text(self, older_than_ts: float) -> int:
+        """Blank the stored text of rows older than `older_than_ts` (hash, embedding and answers stay, so
+        they still train and calibrate). Returns the number of rows changed."""
+        self.flush()
+        conn = self._conn()
+        with self._write_lock, conn:
+            cur = conn.execute("UPDATE samples SET text='' WHERE ts < ? AND text IS NOT NULL AND text != ''",
+                               (older_than_ts,))
+        return cur.rowcount
+
     def latest_teacher_model(self, task_version: str) -> str | None: ...
     def max_id(self) -> int: ...
     def events(self, limit: int = 20) -> list[dict]: ...
@@ -345,6 +355,16 @@ class SampleStore:
             "SELECT COUNT(*) FROM samples WHERE task_version=? AND teacher_label IS NOT NULL",
             (task_version,)).fetchone()[0]
         return c
+
+    def redact_text(self, older_than_ts: float) -> int:
+        """Blank the stored text of rows older than `older_than_ts` (hash, embedding and answers stay, so
+        they still train and calibrate). Returns the number of rows changed."""
+        self.flush()
+        conn = self._conn()
+        with self._write_lock, conn:
+            cur = conn.execute("UPDATE samples SET text='' WHERE ts < ? AND text IS NOT NULL AND text != ''",
+                               (older_than_ts,))
+        return cur.rowcount
 
     def latest_teacher_model(self, task_version: str) -> str | None:
         """The teacher model of the most recent teacher-labelled row: the lineage the store was last in."""

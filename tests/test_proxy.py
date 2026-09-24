@@ -35,6 +35,7 @@ class FakeJev:
 
     async def system_one(self, request: Request):
         self.calls += 1
+        self.last_headers = dict(request.headers)
         auth = request.headers.get("authorization", "")
         if auth.removeprefix("Bearer ") not in self.valid:
             return JSONResponse({"detail": "invalid API key"}, 401, headers={"x-typesafe-request-id": "req_401"})

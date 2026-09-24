@@ -34,6 +34,7 @@ from .core import Jevstiller, Result, Routed, TeacherError
 from .encoders import Encoder
 from .registry import atomic_write_text
 from .scheduler import TaskExecutor, TrainScheduler
+from .store import SampleStore
 from .task import Config, State, Task, canonical_json
 from .teachers import Teacher, TeacherOutput
 
@@ -154,6 +155,8 @@ class TaskManager:
       (`routing_reason="tenant_task_limit"`).
     - `idle_ttl_s`: tasks unused that long are deleted from disk by the janitor (None = never).
     - `blas_threads`: caps BLAS threads for the whole process (serving); None leaves it alone.
+    - `text_retention_s`: blank the raw text of samples older than this, in every task, about hourly (hash,
+      embedding and teacher answers are kept, so they still train). None keeps text (see Config.store_text).
 
     One `encoder` (wrap it in `BatchingEncoder` to merge concurrent calls) and one `train_executor` are shared
     by every task; with a `TrainScheduler`, training is fair across tenants and prioritised by each task's
@@ -164,7 +167,8 @@ class TaskManager:
                  *, target_agreement: float = 0.98, max_loaded: int = 64, max_memory_mb: float | None = None,
                  admission: Admission | None = None, max_tasks_per_tenant: int | None = None,
                  idle_ttl_s: float | None = None, train_executor: Executor | None = None,
-                 janitor_interval_s: float = 5.0, blas_threads: int | None = 1):
+                 janitor_interval_s: float = 5.0, blas_threads: int | None = 1,
+                 text_retention_s: float | None = None):
         if blas_threads:
             # Serving runs many small matrix products from many threads; BLAS's default of one thread per
             # core for each of them oversubscribes the CPU (1 thread: 2.4x throughput, 4x lower p99 in
@@ -180,6 +184,8 @@ class TaskManager:
         self.max_loaded, self.max_memory_mb = max_loaded, max_memory_mb
         self.admission = admission if admission is not None else Admission()
         self.max_tasks_per_tenant, self.idle_ttl_s = max_tasks_per_tenant, idle_ttl_s
+        self.text_retention_s = text_retention_s
+        self._retention_at = 0.0
         self.train_executor = train_executor
         self.loads = self.unloads = 0
         self._lock = threading.Lock()
@@ -413,6 +419,38 @@ class TaskManager:
             for info in self.tasks():
                 if info.last_seen < cutoff:
                     self.delete(info.key, reason="idle")
+        if self.text_retention_s is not None and time.time() - self._retention_at > 3600:
+            self._retention_at = time.time()
+            self.apply_retention()
+
+    def apply_retention(self) -> int:
+        """Blank raw text older than `text_retention_s` in every task's store (loaded or not)."""
+        if self.text_retention_s is None:
+            return 0
+        cutoff = time.time() - self.text_retention_s
+        total = 0
+        for info in self.tasks():
+            with self._lock:
+                engine = self._engines.get(info.key)
+            try:
+                if engine is not None:
+                    total += engine.store.redact_text(cutoff)
+                elif (self.root / info.key / "samples.sqlite").exists():
+                    store = SampleStore(self.root / info.key / "samples.sqlite")
+                    try:
+                        total += store.redact_text(cutoff)
+                    finally:
+                        store.close()
+            except Exception:
+                log.exception("text retention failed for task %s", info.key)
+        if total:
+            log.info("text retention: blanked %d samples older than %.0f s", total, self.text_retention_s)
+        return total
+
+    def delete_tenant(self, tenant: str) -> list[str]:
+        """Delete every task of `tenant` and all their data. Returns the deleted keys; tasks with a request in
+        flight are skipped (call again)."""
+        return [i.key for i in self.tasks(tenant) if self.delete(i.key, reason=f"tenant {tenant!r} deleted")]
 
     def _unload_one(self) -> bool:
         """Unload the least recently used idle engine. False if none can be unloaded right now."""
