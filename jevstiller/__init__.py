@@ -6,4 +6,4 @@ from .teachers import CachedTeacher, ReplayTeacher, SyntheticTeacher, SyntheticW
 __all__ = ["Task", "Config", "Jevstiller", "Result", "Status", "TrainReport", "Teacher", "TeacherOutput",
            "SyntheticTeacher", "SyntheticWorld", "ReplayTeacher", "CachedTeacher", "Encoder", "HashEncoder",
            "load_encoder"]
-__version__ = "0.0.1"
+__version__ = "0.1.0"
