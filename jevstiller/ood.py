@@ -43,6 +43,25 @@ class KnnOOD:
             out[s:s + chunk] = 1.0 - top.mean(axis=1)
         return out
 
+    def threshold(self, quantile: float, max_rows: int = 2_000, seed: int = 0, chunk: int = 512) -> float:
+        """The `quantile` of leave-one-out scores of reference rows (each scored against the rest of the
+        reference). Training data only, so a routing policy can be tested on calibration rows that played no
+        part in choosing it. +inf (no gate) when the reference is too small to score."""
+        assert self.X is not None, "fit first"
+        n = self.X.shape[0]
+        if n <= self.k:
+            return float("inf")
+        rows = np.random.default_rng(seed).choice(n, min(n, max_rows), replace=False)
+        k = min(self.k, n - 1)
+        scores = []
+        for s in range(0, len(rows), chunk):
+            idx = rows[s:s + chunk]
+            sims = self.X[idx] @ self.X.T
+            sims[np.arange(len(idx)), idx] = -np.inf     # not itself
+            top = -np.partition(-sims, k - 1, axis=1)[:, :k]
+            scores.append(1.0 - top.mean(axis=1))
+        return float(np.quantile(np.concatenate(scores), quantile))
+
     def save(self, path: Path) -> None:
         np.savez(path, X=self.X, k=self.k)
 

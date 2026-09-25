@@ -51,9 +51,9 @@ def clopper_pearson_lower(k: int, n: int, delta: float = 0.05) -> float:
 class RoutingPolicy:
     conf_threshold: float | None      # None -> student never answers
     ood_threshold: float
-    expected_coverage: float
-    disagreement_ub: float            # upper bound on P(disagree | student answered)
-    expected_system_disagreement: float   # coverage * ub, must be <= budget
+    expected_coverage: float          # share of calibration rows the student answers
+    disagreement_ub: float            # upper bound (at 1 - delta) on P(student answers and disagrees), per request
+    expected_system_disagreement: float   # that rate on the calibration rows (the bound is what meets the budget)
     budget: float
     delta: float
     n_calib: int
@@ -83,38 +83,51 @@ class RoutingPolicy:
         return cls(**json.loads(path.read_text()))
 
 
-def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: float,
-               delta: float = 0.05, ood_quantile: float = 0.99, grid: int = 200,
-               eligible: np.ndarray | None = None, deferred_labels: Sequence[str] = ()) -> RoutingPolicy:
-    """Maximise coverage subject to coverage * UB(selective disagreement) <= budget.
+def threshold_grid(n_labels: int, size: int = 400) -> np.ndarray:
+    """Candidate confidence thresholds, strictest first. Fixed before any calibration row is seen, so testing
+    them in sequence costs no confidence. Dense near 1, where a student's usable answers are."""
+    floor = 1.0 / max(n_labels, 2)
+    return 1.0 - np.geomspace(1e-4, 1.0 - floor, size)
 
-    Inputs are from an IID calibration set: student max-prob, agreement with the teacher
-    (bool), and OOD score per example. `eligible` marks rows the student may answer at all (False where it
-    predicts one of `deferred_labels`); coverage still counts every row.
+
+def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: float, delta: float = 0.05,
+               ood_threshold: float = math.inf, candidates: np.ndarray | None = None,
+               eligible: np.ndarray | None = None, deferred_labels: Sequence[str] = ()) -> RoutingPolicy:
+    """The loosest confidence threshold whose rate of *answered and disagreeing* requests is at most `budget`,
+    with probability at least 1 - `delta`.
+
+    Rows come from an IID calibration set: the student's max-prob, whether it agrees with the teacher, and its
+    OOD score. The loss per row is 1[the student answers and disagrees], so its rate over all rows is exactly
+    what the budget limits (disagreement over all requests).
+
+    Candidates are tested strictest first with an exact Clopper-Pearson bound at `delta`, and the scan stops at
+    the first failure (fixed-sequence testing, as in "Learn Then Test"). The loss can only grow as the
+    threshold loosens, so the chance that the chosen threshold breaks the budget is at most `delta`, with no
+    multiple-testing penalty. That needs everything else fixed without these rows: `candidates` (default: a
+    fixed grid) and `ood_threshold` (the caller picks it on training data). `eligible` marks rows the student
+    may answer at all (False where it predicts one of `deferred_labels`); the rate still counts every row.
     """
     conf = np.asarray(conf, dtype=float)
     agree = np.asarray(agree, dtype=bool)
     ood = np.asarray(ood, dtype=float)
     N = len(conf)
-    ood_thr = float(np.quantile(ood, ood_quantile)) if N else 0.0
-    in_dist = ood <= ood_thr
+    in_dist = ood <= ood_threshold
     if eligible is not None:
         in_dist &= np.asarray(eligible, dtype=bool)
+    grid = threshold_grid(2) if candidates is None else np.asarray(candidates, dtype=float)
+    deferred = list(deferred_labels)
     best = None
     if N:
-        cands = np.unique(np.quantile(conf[in_dist], np.linspace(0, 1, grid))) if in_dist.any() else []
-        for t in sorted(cands, reverse=True):
+        for t in sorted(grid, reverse=True):
             sel = in_dist & (conf >= t)
-            n = int(sel.sum())
-            if n == 0:
-                continue
             k = int((sel & ~agree).sum())
-            ub = clopper_pearson_upper(k, n, delta)
-            cov = n / N
-            if cov * ub <= budget and (best is None or cov > best[1]):
-                best = (float(t), cov, ub)
-    deferred = list(deferred_labels)
+            ub = clopper_pearson_upper(k, N, delta)
+            if ub > budget:
+                break                                    # fixed sequence: every looser threshold is untested
+            if sel.any():                                # a threshold that answers nothing is no policy
+                best = (float(t), int(sel.sum()) / N, ub, k / N)
+    ood_thr = float(ood_threshold) if math.isfinite(ood_threshold) else float(np.max(ood, initial=0.0))
     if best is None:
         return RoutingPolicy(None, ood_thr, 0.0, 1.0, 0.0, budget, delta, N, deferred)
-    t, cov, ub = best
-    return RoutingPolicy(t, ood_thr, cov, ub, cov * ub, budget, delta, N, deferred)
+    t, cov, ub, rate = best
+    return RoutingPolicy(t, ood_thr, cov, ub, rate, budget, delta, N, deferred)

@@ -15,7 +15,7 @@ your app ──► Jev                     your app ──► Jevstiller ──�
 
 Jev is fast, cheap and typed. It is also a ceiling: **1,200 requests per minute** per key, ~350 ms per answer, hosted only. Jevstiller is for the workload that outgrows that — bursts, backlogs, latency budgets in milliseconds, boxes with no egress, or simply not wanting every classification to depend on one external API.
 
-Against live Jev, in a replay of Banking77 (77 customer-support intents), the local model answered **70.6% of held-out messages at 99.4% agreement with Jev** (target 98%), from about 5,000 messages of traffic on, and kept Jev's accuracy (78.7% vs Jev's 78.55% on the dataset's labels). On CPU the student path ran at ~130 messages/s, 6.5× Jev's rate limit. On a GPU it runs at ~2,000/s.¹
+Against live Jev, in a replay of Banking77 (77 customer-support intents), the local model answered **70.7% of held-out messages at 99.45% agreement with Jev** (target 98%), taking over most live traffic from about 5,000 messages on, and kept Jev's accuracy (78.5% vs Jev's 78.5% on the dataset's labels). On CPU the student path ran at ~130 messages/s, 6.5× Jev's rate limit. On a GPU it runs at ~2,000/s.¹
 
 ## The contract
 
@@ -25,7 +25,7 @@ You set one number. Jevstiller returns the label Jev would have returned on at l
 target_agreement = 0.98      →  disagreement budget = 2% of all requests
 ```
 
-The routing threshold is chosen against a finite-sample upper bound (Clopper–Pearson) on a held-out, IID calibration set — not tuned by eye — and re-verified forever on the audit channel. If the audit shows the contract is broken, everything falls back to Jev automatically.
+The routing threshold is chosen on a held-out, IID calibration set so that, with 95% confidence, the share of requests the local model answers *and* gets different from Jev stays within the budget. It uses an exact finite-sample bound (Clopper–Pearson), testing candidate thresholds strictest-first. It is not tuned by eye, and it is re-verified forever on the audit channel. If the audit shows the contract is broken, everything falls back to Jev automatically.
 
 **Agreement with Jev is not accuracy.** If Jev is wrong, the student is wrong the same way. The status report says so next to every number. See [DESIGN.md §2](DESIGN.md).
 
@@ -65,6 +65,26 @@ Performance of one process (16 vCPU, bge-small on CPU, [docs/benchmarks.md](docs
 - **Memory:** ~300 MB with the encoder, plus a few MB per loaded task. Flat over a 20-minute soak with 18 task reloads a second.
 
 Operations: a TOML config, an admin API and CLI (`jevstiller admin ...`), Prometheus `/metrics`, `/readyz`, JSON logs, `jevstiller backup`, and a Docker image and Kubernetes manifest. Docs: [deploy](docs/deploy.md), [operations](docs/operations.md), [the proxy](docs/proxy.md), [configuration](docs/configuration.md), [security](docs/security.md).
+
+## How it compares
+
+As of September 2026:
+
+- **[stuntd](https://github.com/bladedevoff/stuntd)** is the closest project. It is also a local Jev-compatible proxy that learns a head per question (on the Laya encoder) and checks 2% of live traffic. The differences:
+  - **Guarantee:** Jevstiller picks its threshold with a finite-sample bound on disagreement over all requests; stuntd uses a point estimate on a holdout.
+  - **Automation:** Jevstiller trains, shadow-tests and promotes by itself; stuntd uses `stuntd train` / `stuntd enable`.
+  - **Training data:** Jevstiller learns from Jev's full probability distributions and gates unfamiliar inputs.
+  - **Question identity:** Jevstiller identifies a question by its exact content; stuntd uses its name.
+  - **Keys:** Jevstiller answers locally only for API keys Jev has accepted.
+  - **Deployment:** Jevstiller serves many tenants from one server, on CPU.
+  - **Where stuntd goes further:** it also speaks the OpenAI API, and can answer with no provider at all (zero-shot Laya).
+- **[Distil Labs](https://www.distillabs.ai/) and cloud "distillation"** (Amazon Bedrock, OpenAI, Azure) train a small replacement model from your traffic as a separate job, then swap the whole model. There is no per-request fallback to the large model, no bound, and no Jev API.
+- **Routers** (RouteLLM, Not Diamond, OpenRouter Auto) choose between existing models. **Semantic caches** (GPTCache, Portkey, [jevcache](https://github.com/hyperspaceai/jevcache)) reuse answers to near-identical inputs. Neither learns to answer new inputs.
+- **Open Jev-compatible models** (Laya, Kev, jeff) replace Jev outright, at lower zero-shot accuracy.
+- **Research:**
+  - OCaTS (EMNLP 2023), Cache & Distil (ACL 2024) and Online Cascade Learning (ICML 2024) train a student online from an LLM's answers, without a guarantee.
+  - BARGAIN (SIGMOD 2026) and vCache (ICLR 2026) guarantee agreement with the LLM, but without a student that keeps learning.
+  - Jevstiller combines the two, with a permanent audit and automatic fallback on top.
 
 ## Quickstart (library)
 

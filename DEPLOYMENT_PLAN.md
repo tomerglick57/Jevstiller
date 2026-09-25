@@ -66,7 +66,7 @@ The match is exact, never "similar". Jev reads its criteria literally, so one ch
 - [x] **P0.1** Run `JevTeacher` against live Jev on a handful of requests. Check the label/probs/confidence mapping, `usage.input_tokens`, `request_id`, and the cost math. *Done when:* `tests/test_jev_adapter.py` has a live-marked twin that passes.
   *Result:* `tests/test_live.py` (`JEVSTILLER_LIVE=1 pytest -m live`): `JevTeacher` maps labels, probabilities, the resolved model (`jev:jev-1.13.0`), tokens, cost and request ids correctly, and the proxy in front of live Jev works with the SDK. Both pass.
 - [x] **P0.2** Live benchmark: `experiments/run.py --dataset banking77 --teacher jev --encoder base` (and one smaller task). Record coverage, agreement with CI, Jev calls avoided, and $ spent. *Done when:* README numbers are replaced or confirmed, with the date and Jev model version.
-  *Result (2026-09-24, `jev-1.13.0`, bge-small CPU):* 70.6% held-out coverage at 99.40% agreement (target 98%). Audit channel 99.27% [98.13%, 99.80%]. 5,270 Jev calls for 11,083 messages, $0.38. The system's accuracy on the true labels was 78.7% vs Jev's 78.55%. See docs/benchmarks.md and DESIGN.md §15.5.
+  *Result (2026-09-24, `jev-1.13.0`, bge-small CPU):* 70.6% held-out coverage at 99.40% agreement (target 98%). Audit channel 99.27% [98.13%, 99.80%]. 5,270 Jev calls for 11,083 messages, $0.38. The system's accuracy on the true labels was 78.7% vs Jev's 78.55%. Re-run 2026-09-25 with the corrected calibration: 70.7% at 99.45%, with accuracy 78.5% for both the system and Jev. See docs/benchmarks.md and DESIGN.md §15.5.
 - [x] **P0.3** Record real wire samples (a 200, 401, 422, 429, and 529 if one can be provoked) as JSON fixtures for the proxy contract tests (P6.1). Redact keys.
   *Result:* `experiments/jev_profile.py` wrote `tests/fixtures/jev/` (choice 200, mixed choice+noul+score 200, 401, 422, models). Responses carry no keys, which was checked. `tests/test_live.py` replays them through the proxy: the SDK parses each identically direct and via the proxy. No 429 or 529 was provoked.
 - [x] **P0.4** Measure real Jev latency and 429 behaviour at our concurrency. Set the default per-key rate limit from that.
@@ -248,6 +248,13 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 5. Everything else, then the backlog.
 
 ## Backlog (after 1.0)
+
+- **Tighter, longer-lived guarantees** (from the 2026-09-25 prior-art review; the calibration flaws it found are fixed):
+  - Calibrate on post-deployment traffic with inverse-probability weights. Every teacher-labelled row has a known labelling probability: 1 for deferred rows, the audit rate for audit rows. Bound it with betting confidence intervals (BARGAIN, Active Statistical Inference).
+  - Anytime-valid monitoring (confidence sequences) instead of fixed-window checks.
+  - A `δ`-spending schedule across retrains.
+  - One learned deferral score (confidence + OOD) instead of two thresholds.
+- **Competitors to watch:** stuntd (a Jev/OpenAI local proxy; see README, "How it compares").
 
 - Forward only the questions the student couldn't answer (cheaper). Needs evidence that Jev answers questions independently, since DESIGN.md Appendix A notes "no structural invariants".
 - Distil `noul` (binary) and `score` (ordinal) questions.

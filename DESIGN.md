@@ -393,16 +393,31 @@ Input: a trained student, the calibration split (teacher-labelled, IID), the bud
 Output: a **routing policy** — the confidence threshold, the OOD threshold, and the numbers that justify them.
 
 ```text
-for each candidate threshold t (descending):
-    S_t = calib examples with confidence ≥ t
-    k   = disagreements with teacher in S_t
-    ub  = clopper_pearson_upper(k, |S_t|, δ)      # bound on e at this t
-    cov = |S_t| / |calib|                          # estimated c at this t
-    if cov · ub ≤ β: record (t, cov, ub)
-choose t with the largest cov
+N = |calib|
+for each candidate threshold t, strictest first (a fixed grid, dense near 1):
+    k  = calib examples the student would answer (confidence ≥ t, OOD score ≤ o) and gets wrong
+    ub = clopper_pearson_upper(k, N, δ)            # bound on P(answered and disagreeing), per request
+    if ub > β: stop                                 # every looser t is left untested
+    record t (if it answers anything)
+choose the last recorded t
 ```
 
-The policy is fitted at `(1 − fit_headroom) · β` (default 85% of the budget) and the shadow stage judges it at the full `β`. Without headroom, a threshold chosen to sit exactly on the budget fails the out-of-time re-test about half the time by construction (observed).
+Three things make the bound hold as stated: with probability at least `1 − δ`, the chosen policy's rate of answered-and-disagreeing requests is at most `β`.
+
+- **The loss is the contract itself.** Each calibration row scores 1 if the student would answer it *and* disagrees with the teacher. The rate of that over all rows is exactly "disagreement over all requests" (§4). This row-level indicator is a binomial, so Clopper–Pearson is exact.
+- **Fixed-sequence testing** (as in Learn Then Test, Angelopoulos et al.). The rate can only grow as the threshold loosens. So testing thresholds from strictest to loosest, each at `δ`, and stopping at the first failure controls the chance of a wrong choice at `δ`, with no multiple-testing penalty.
+- **The calibration rows only test.** The candidate thresholds are a fixed grid, and the OOD cutoff `o` is the `ood_quantile` of leave-one-out scores of the training reference. Neither depends on the rows the bound is computed on.
+
+**Corrected 2026-09-25.** The first version had two flaws, found by a prior-art review.
+
+- It bounded `coverage × UB(disagreement | answered)` and treated the estimated coverage as exact.
+- It kept the widest of ~200 thresholds that each passed at the full `δ`. That selection has no `δ`-level guarantee, because the selective rate isn't monotone in the threshold.
+
+In both versions the OOD cutoff was chosen on the same calibration rows.
+
+**Scope.** The guarantee holds for each version as it is promoted. Every retrain spends `δ` again, so over many versions some will miss. That is what the permanent audit is for (§7.8–7.9). It measures each deployed version on fresh traffic, raises the audit rate when agreement drops below target, and falls back to the teacher when the audit's own bound confirms a breach. The literature suggests tighter options: inverse-probability-weighted bounds on post-deployment rows (every teacher-labelled row has a known labelling probability), and anytime-valid monitoring (confidence sequences). Both are on the roadmap.
+
+The policy is fitted at `(1 − fit_headroom) · β` (default 85% of the budget). The shadow stage judges it at the full `β` with the same loss, over the calibration rows pooled with fresh shadow rows. That pooled test is a check for change over time, not an independent guarantee: the calibration rows were used to pick the threshold. Without headroom, a threshold chosen to sit exactly on the budget fails the out-of-time re-test about half the time by construction (observed).
 
 The policy is versioned together with the model it was fitted for. A model without a policy cannot be routed to.
 
@@ -811,9 +826,9 @@ plus the three curves of §15.1, the encoder-tier comparison table (coverage and
 
 Banking77, 11,083 messages replayed through the real Jev (`jev-1.13.0`), bge-small on CPU, target 98%. Full table in [docs/benchmarks.md](docs/benchmarks.md#banking77-against-live-jev).
 
-- **The guarantee held.** Held-out system agreement 99.40% against a 98% target; the live audit channel measured 99.27% with a 95% interval of [98.13%, 99.80%].
-- **The student took over most traffic.** It answered 70.6% of held-out messages, and ~65% of live traffic from message 5,000 on. Jev was called 5,270 times for 11,083 messages.
-- **Accuracy was preserved.** Against the dataset's true labels, Jev scores 78.55% and the combined system 78.7%. That answers §15.4's research question for this task: the distilled system lands where Jev does, and agreement with Jev remains the only thing the product claims.
+- **The guarantee held.** Held-out system agreement 99.45% against a 98% target; the live audit channel measured 99.51% with a 95% interval of [98.48%, 99.91%]. (Re-run 2026-09-25 with the corrected calibration of §7.6. The first run: 99.40%, and 70.6% coverage.)
+- **The student took over most traffic.** It answered 70.7% of held-out messages, and 60–67% of live traffic from message 5,000 on. Jev was called 5,454 times for 11,083 messages.
+- **Accuracy was preserved.** Against the dataset's true labels, Jev and the combined system both score 78.5%. That answers §15.4's research question for this task: the distilled system lands where Jev does, and agreement with Jev remains the only thing the product claims.
 - **Cost of the teacher.** Jev billed ~1,700 input tokens per call for this 77-class question (the class descriptions are sent every time), so the $3-per-million estimate of v2 is off by more than 20× for large taxonomies (§3).
 
 Questions still open from §15.4: `probs` vs `hard` targets, encoder tiers and the OOD check (CLINC150), all against live Jev rather than the oracle.

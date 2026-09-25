@@ -193,7 +193,7 @@ def test_progress_survives_unload_and_reload(tmp_path, teacher, world):
     retrained on every reload, and still reaches its drift checks."""
     m = TaskManager(tmp_path, teacher, HashEncoder(dim=512), _cfg(training="manual"),
                     admission=Admission(min_requests=1), max_loaded=0, janitor_interval_s=3600)
-    for _ in range(4):
+    for _ in range(12):                                  # enough calibration rows to certify the budget
         m.classify("acme", Q, LABELS, _texts(world, 200))
     key = m.tasks()[0].key
     e = m.engine(key)

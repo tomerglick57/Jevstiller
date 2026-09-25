@@ -122,8 +122,10 @@ def _serve(a: argparse.Namespace) -> None:
     log.info("jevstiller serving on %s:%d, upstream %s, tenancy %s, admin API %s", s.host, s.port, s.upstream,
              s.tenancy, "on" if s.admin_token else "off")
     # X-Forwarded-For is honoured only from proxies the operator lists (it decides allow_networks).
+    # Idle connections are kept 75 s, not uvicorn's 5 s: clients (httpx: 5 s) and load balancers (60 s) reuse
+    # them for about that long, and a server closing first drops the request in flight (37 in 1.15M in the soak).
     uvicorn.run(app, host=s.host, port=s.port, workers=1, log_level=s.log_level.lower(), access_log=False,
-                ssl_certfile=s.ssl_certfile, ssl_keyfile=s.ssl_keyfile, log_config=None,
+                ssl_certfile=s.ssl_certfile, ssl_keyfile=s.ssl_keyfile, log_config=None, timeout_keep_alive=75,
                 proxy_headers=bool(s.trust_forwarded_for),
                 forwarded_allow_ips=",".join(s.trust_forwarded_for) if s.trust_forwarded_for else None)
 

@@ -302,3 +302,46 @@ min_new_samples = 600
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         db.close()
         assert not list((d / "versions").glob(".staging-*"))      # half-built versions were cleaned up
+
+
+class Flaky(httpx.AsyncBaseTransport):
+    """The way to Jev, where the next `drops` requests find their pooled connection closed."""
+
+    def __init__(self):
+        self.inner, self.drops = httpx.AsyncHTTPTransport(), 0
+
+    async def handle_async_request(self, request):
+        if self.drops:
+            self.drops -= 1
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+        return await self.inner.handle_async_request(request)
+
+    async def aclose(self):
+        await self.inner.aclose()
+
+
+def test_a_connection_closed_by_jev_is_retried_once(tmp_path, world):
+    """A pooled connection the upstream just closed as idle (7 in 1.15M requests in the soak) costs no error."""
+    jev, flaky = ChaosJev(world), Flaky()
+    with serve(jev.app()) as upstream:
+        m = TaskManager(tmp_path, None, HashEncoder(dim=64), Config(training="manual"),
+                        admission=Admission(min_requests=1), janitor_interval_s=3600)
+        up = httpx.AsyncClient(base_url=upstream, transport=flaky, cookies=_no_cookies())
+        app = create_app(m, ProxySettings(upstream=upstream), KeyRegistry(b"s", 3600), client=up)
+        with serve(app) as proxy:
+            flaky.drops = 1
+            assert _source(client(proxy), "w1 w2") == "upstream"
+            assert app.state.proxy.metrics.upstream.value("retried") == 1
+            flaky.drops = 2                               # twice in a row: Jev really is unreachable
+            assert _source(client(proxy), "w3 w4") == 502
+        m.close()
+
+
+def test_idle_connections_are_kept_longer_than_clients_reuse_them(tmp_path, monkeypatch):
+    import uvicorn
+
+    from jevstiller import cli
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append(kw))
+    cli.main(["serve", "--data-dir", str(tmp_path), "--encoder", "hash", "--log-level", "warning"])
+    assert calls[0]["timeout_keep_alive"] >= 60           # httpx reuses for 5 s, load balancers ~60 s

@@ -16,19 +16,19 @@ A 5-class question with a one-sentence message used 400 input tokens (instructio
 
 ### Banking77 against live Jev
 
-`python experiments/run.py --dataset banking77 --teacher jev --encoder small --backend onnx --device cpu --tag live`
+`python experiments/run.py --dataset banking77 --teacher jev --encoder small --backend onnx --device cpu --tag live-bound`
 
-2026-09-24, `jev-latest` → `jev-1.13.0`, bge-small (ONNX, CPU), target agreement 98%, audit rate 2%. 11,083 replayed messages, with 2,000 held out and labelled by Jev for evaluation. All Jev answers are cached in `experiments/cache/banking77.jsonl`, so re-runs are free.
+Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-09-25 with the corrected calibration (joint-loss bound, fixed-sequence testing; DESIGN §7.6). The first run, with the flawed rule, got 70.6% coverage at 99.40% agreement, so the correction cost nothing here. bge-small (ONNX, CPU), target agreement 98%, audit rate 2%. 11,083 replayed messages, with 2,000 held out and labelled by Jev for evaluation. All Jev answers are cached in `experiments/cache/banking77.jsonl`, so re-runs are free.
 
 | Measure | Result |
 |---|---|
-| Held-out: share answered by the student (coverage) | **70.6%** |
-| Held-out: system agreement with Jev | **99.40%** (target 98%); selective disagreement 0.85% |
-| Live stream: audit-channel agreement | 99.27%, 95% interval [98.13%, 99.80%] → OK |
-| Live stream: student share | 0% for the first 1,000 messages, 46% at 3,000, ~65% from 5,000 on (52.4% cumulative) |
-| Jev calls | 5,270 for 11,083 messages (5,813 avoided) |
+| Held-out: share answered by the student (coverage) | **70.7%** |
+| Held-out: system agreement with Jev | **99.45%** (target 98%); selective disagreement 0.78% |
+| Live stream: audit-channel agreement | 99.51%, 95% interval [98.48%, 99.91%] (n = 412) → OK |
+| Live stream: student share | 0% for the first 1,000 messages, 45% at 3,000, 60% at 5,000, ~67% from 10,000 on (50.8% cumulative) |
+| Jev calls | 5,454 for 11,083 messages (5,629 avoided) |
 | Cost | $0.38 for the stream; Jev billed ~1,700 input tokens per call (77 class descriptions) |
-| Accuracy against the dataset's true labels | Jev 78.55%; the Jevstiller system 78.7% |
+| Accuracy against the dataset's true labels | Jev 78.5%; the Jevstiller system 78.5% |
 | Jev's own confidence | median 0.98; 11.8% of messages below 0.6 |
 | Jev latency | 291 ms mean |
 | Student path throughput (held-out, CPU) | 129 rows/s, encoder-bound at 7 ms/text on this machine (Jev's ceiling: 20 rows/s) |
@@ -57,7 +57,7 @@ The engine recorded one teacher answer it could not use (`teacher_errors: 1`), w
 
 ## Replays with a perfect ("oracle") teacher
 
-Upper bounds on distillation (the hidden labels play the teacher). `python experiments/run.py --dataset <d> --teacher oracle --encoder <tier>`
+Upper bounds on distillation (the hidden labels play the teacher). `python experiments/run.py --dataset <d> --teacher oracle --encoder <tier>`. Measured before the 2026-09-25 calibration correction. On the live Banking77 replay the correction changed coverage by +0.1 points, so these should be close, but they have not been re-run.
 
 | Dataset | Encoder | Held-out coverage | System agreement | Notes |
 |---|---|---|---|---|

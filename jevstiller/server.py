@@ -252,9 +252,18 @@ class Proxy:
             self._client_busy[i] += 1
             try:
                 headers = {k: v for k, v in request.headers.items() if k.lower() not in FORWARD_DROP}
-                req = self.clients[i].build_request(request.method, request.url.path, params=request.query_params,
-                                                    headers=headers, content=body)
-                resp = await self.clients[i].send(req)
+                for attempt in (0, 1):
+                    req = self.clients[i].build_request(request.method, request.url.path,
+                                                        params=request.query_params, headers=headers, content=body)
+                    try:
+                        resp = await self.clients[i].send(req)
+                        break
+                    except (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError):
+                        # Typically a pooled connection the upstream had just closed as idle (both sides
+                        # time out around 5 s by default): 7 in 1.15M requests in the soak. Once, at once.
+                        if attempt:
+                            raise
+                        self.metrics.upstream.inc("retried")
             finally:
                 self._client_busy[i] -= 1
         except httpx.TimeoutException:

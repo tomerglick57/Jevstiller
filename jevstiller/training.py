@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 from threadpoolctl import threadpool_limits
 
-from .calibrate import RoutingPolicy, fit_policy
+from .calibrate import RoutingPolicy, fit_policy, threshold_grid
 from .ood import KnnOOD
 from .student import LinearStudent
 
@@ -74,8 +74,10 @@ def _fit(X, Y, w, Xc, yc, budget, delta, ood_quantile, ood_k, epochs, l2, patien
             raise ValueError("deferred_labels needs labels")
         pred = np.array(labels, dtype=object)[Pc.argmax(axis=1)]
         eligible = ~np.isin(pred, deferred_labels)
-    policy = fit_policy(conf, agree, oodc, budget, delta, ood_quantile, eligible=eligible,
-                        deferred_labels=deferred_labels)
+    # the OOD cutoff comes from the training data, the candidates from a fixed grid: the calibration rows
+    # only test, which is what makes the bound hold (calibrate.fit_policy)
+    policy = fit_policy(conf, agree, oodc, budget, delta, ood_threshold=ood.threshold(ood_quantile, seed=seed),
+                        candidates=threshold_grid(Y.shape[1]), eligible=eligible, deferred_labels=deferred_labels)
     acc = policy.accepts(conf, oodc, pred)
     return Candidate(student, ood, policy, fit, float(agree.mean()), int(acc.sum()), int((acc & ~agree).sum()))
 

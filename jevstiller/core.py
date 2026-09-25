@@ -164,7 +164,8 @@ class Status:
         if self.policy:
             p = self.policy
             L.append(f"Policy: conf>={p['conf_threshold']:.3f} ood<={p['ood_threshold']:.3f}  "
-                     f"expected coverage {p['expected_coverage']:.1%}  disagreement ub {p['disagreement_ub']:.2%}")
+                     f"expected coverage {p['expected_coverage']:.1%}  disagreement bound {p['disagreement_ub']:.2%}"
+                     " of requests")
             if p.get("deferred_labels"):
                 L.append(f"  rare classes, always sent to the teacher: {', '.join(p['deferred_labels'])}")
         for e in self.events[-5:]:
@@ -732,12 +733,13 @@ class Jevstiller:
         acc = sh.policy.accepts(s_conf, s_ood, s_lab)
         # Pool the calibration rows (used to fit the policy) with the fresh shadow rows: both are IID
         # teacher-labelled traffic, and pooling keeps the test powered while adding out-of-time evidence.
+        # Same loss as the calibration: answered and disagreeing, over every row, bounded at the full budget.
         n = int(acc.sum()) + sh.meta.get("calib_accepted", 0)
         k = int((acc & (s_lab != t_lab)).sum()) + sh.meta.get("calib_disagree", 0)
         N_pool = N + sh.meta.get("n_calib", 0)
-        ub = clopper_pearson_upper(k, n, 1 - self.cfg.confidence)
+        ub = clopper_pearson_upper(k, N_pool, 1 - self.cfg.confidence)
         cov = n / N_pool
-        ok = cov * ub <= self.task.budget
+        ok = ub <= self.task.budget
         # not worse than production, compared on the same calibration rows (fresh shadow rows are too few)
         prod_cov = sh.meta.get("prod_calib_coverage")
         if ok and prod_cov is not None:
