@@ -20,3 +20,24 @@ def test_serve_without_the_encoder_extra_says_what_to_install(tmp_path, monkeypa
     with pytest.raises(SystemExit) as e:
         cli.main(["serve", "--data-dir", str(tmp_path), "--encoder", "small", "--backend", "onnx"])
     assert 'pip install "jevstiller[gpu]"' in str(e.value) and "--encoder hash" in str(e.value)
+
+
+def test_admin_cli_uses_the_servers_own_settings(tmp_path, monkeypatch):
+    """Next to the server (`docker exec ... jevstiller admin tasks`), no flags are needed: the token and the port come
+    from the same settings `jevstiller serve` reads."""
+    import httpx
+
+    from jevstiller import _cli as cli
+    (tmp_path / "admin-token").write_text("a-long-enough-admin-token\n")
+    (tmp_path / "c.toml").write_text(f'[server]\nport = 9999\nadmin_token_file = "{tmp_path / "admin-token"}"\n')
+    monkeypatch.setenv("JEVSTILLER_CONFIG", str(tmp_path / "c.toml"))
+    monkeypatch.delenv("JEVSTILLER_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("JEVSTILLER_ADMIN_URL", raising=False)
+    calls = []
+
+    def request(method, url, headers=None, **kw):
+        calls.append((url, headers["Authorization"]))
+        return httpx.Response(200, json=[])
+    monkeypatch.setattr(httpx, "request", request)
+    cli.main(["admin", "tasks"])
+    assert calls == [("http://127.0.0.1:9999/jevstiller/v1/tasks", "Bearer a-long-enough-admin-token")]

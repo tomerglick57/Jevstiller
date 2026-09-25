@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **`jevstiller admin` works next to the server without flags.** When no token or URL is given, it uses the server's own settings: the config file (`JEVSTILLER_CONFIG`), `JEVSTILLER_ADMIN_TOKEN_FILE` and the port. So `docker exec jevstiller jevstiller admin tasks` (or `docker compose exec`, or `kubectl exec`) just works.
+- The Kubernetes manifest passes its config file as `JEVSTILLER_CONFIG` instead of `--config`, so `kubectl exec ... jevstiller admin` finds the same settings.
+- Website: the getting-started page has install tabs (Docker, Compose, Kubernetes, pip), a "check it works" step with the expected output, and a screenshot of the status page.
+
 ## 0.3.2 — 2026-09-26
 
 - **One install command.** `pip install jevstiller` now includes everything most people need: the proxy, the default encoder (ONNX Runtime, CPU) and the Jev adapter. On a GPU machine, `pip install "jevstiller[gpu]"` adds PyTorch, which is used automatically when CUDA is available. ONNX Runtime is required only on platforms it ships for (x86-64 and ARM64); elsewhere `jevstiller serve` says what to do.

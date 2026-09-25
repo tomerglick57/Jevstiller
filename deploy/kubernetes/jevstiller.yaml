@@ -52,7 +52,10 @@ spec:
       containers:
         - name: jevstiller
           image: ghcr.io/tomerglick57/jevstiller:0.3.2
-          args: ["serve", "--config", "/etc/jevstiller/jevstiller.toml"]
+          args: ["serve"]
+          env:
+            # as a variable, not --config: `kubectl exec ... jevstiller admin` then finds the same settings
+            - {name: JEVSTILLER_CONFIG, value: /etc/jevstiller/jevstiller.toml}
           ports:
             - {name: http, containerPort: 8080}
           readinessProbe:

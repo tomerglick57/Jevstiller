@@ -26,7 +26,7 @@ Details:
 
 ## The admin API and CLI
 
-Enable it with `admin_token_file` (or `JEVSTILLER_ADMIN_TOKEN`). The CLI reads the token from `--token-file`, `--token` or `JEVSTILLER_ADMIN_TOKEN`, and the URL from `--url` or `JEVSTILLER_ADMIN_URL`.
+Enable it with `admin_token_file` (or `JEVSTILLER_ADMIN_TOKEN`). The CLI reads the token from `--token-file`, `--token` or `JEVSTILLER_ADMIN_TOKEN`, and the URL from `--url` or `JEVSTILLER_ADMIN_URL`. Without them it uses the server's own settings (the same config file and `JEVSTILLER_*` variables), so next to the server no flags are needed: `docker exec jevstiller jevstiller admin tasks`.
 
 ```bash
 jevstiller admin tasks                       # every task: key, tenant, model, classes, target, mode, last seen
