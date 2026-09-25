@@ -45,7 +45,7 @@ Python 3.10+. CPU works out of the box; a GPU only speeds up the encoder.
 Run Jevstiller next to your services and point the Jev SDK at it:
 
 ```bash
-docker build -t jevstiller . && docker run -d -p 8080:8080 -v jevstiller-data:/data jevstiller
+docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller:0.2.0
 # or: pip install "jevstiller[server,onnx]" && jevstiller serve --config deploy/jevstiller.toml
 ```
 

@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — unreleased
 
+The drop-in Jev proxy. Point `TYPESAFE_BASE_URL` at `jevstiller serve`, keep your services' own Jev keys, and the proxy learns each repeated `choice` question from Jev's answers, then answers it locally within the agreement budget you set, with a permanent audit to Jev and automatic fallback. First release on PyPI (`pip install "jevstiller[server,onnx]"`) and as a container image (`ghcr.io/tomerglick57/jevstiller`).
+
+**Upgrading from 0.1.0:** existing task directories and sample stores are migrated on open, and stored tasks are re-keyed automatically. `RoutingPolicy.disagreement_ub` now means the per-request bound (versions trained before keep their old numbers). Teacher failures are per item (`TeacherError`, or `errors="return"`).
+
+- **Packaging:** published to PyPI by the release workflow (trusted publishing; the built wheel must pass the test suite first), with the README's links pointing to GitHub. The container image is published to `ghcr.io/tomerglick57/jevstiller` for linux/amd64 and linux/arm64, with build provenance and an SBOM. The image installs dependencies at the versions in `uv.lock`, hash-checked. `deploy/smoke_test.py` checks any image end to end (non-root, read-only, no capabilities, offline start, forwarding, admin API, clean stop), and CI runs it on every image build. Dependabot keeps the pinned actions current.
 - **Security audit run 2** (2026-09-25; [docs/security.md](docs/security.md)): 15 findings, all fixed, with regression tests in `tests/test_audit_run2.py`. None exposed keys, other tenants' data or the admin API. Behaviour changes:
   - **Settings are stricter.** Values of the wrong type stop startup (`store_text = "false"` used to mean *true*). So do an empty secret, secret file or access-control variable (an empty `JEVSTILLER_ACCESS_TOKEN` used to switch the token off), `text_retention_days` / `idle_ttl_days` ≤ 0, a non-finite `key_ttl_s`, and `trust_forwarded_for` entries with host bits (`10.0.0.5/24`; uvicorn ignored them). `store_text = false` under `[engine]` now works (either one saying `false` wins). `JEVSTILLER_<LIST>=none` clears a list from the config file. The startup log names the access controls in effect and whether request text is stored. Credentials in `upstream` are redacted in logs and `jevstiller config`.
   - **Encoder backpressure can't latch.** One very large request (or one stalled encode) used to switch local answers off for every tenant until restart. The encoder now sees at most 32,768 characters of a text (model encoders read only 256 tokens anyway), and an idle encoder is never "overloaded". Embeddings of texts longer than that change once.

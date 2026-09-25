@@ -2,6 +2,7 @@ name: release
 # Push a tag vX.Y.Z on main to publish X.Y.Z to PyPI and create the GitHub release.
 # PyPI trusts this workflow directly (trusted publishing), so no PyPI token is stored anywhere.
 # One-time setup on pypi.org: publisher = tomerglick57/Jevstiller, workflow release.yml, environment pypi.
+# The container image is published by docker.yml from the same tag.
 on:
   push:
     tags: ["v*"]
@@ -17,7 +18,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.12"
-      - run: python -m pip install build twine
+      - run: python -m pip install "build==1.6.1" "twine==7.0.0"
       - run: python -m build
       - run: twine check --strict dist/*
 
@@ -29,6 +30,13 @@ jobs:
           /tmp/wheel-check/bin/pip install -q dist/*.whl
           installed=$(cd /tmp && /tmp/wheel-check/bin/python -c "import jevstiller; print(jevstiller.__version__)")
           [ "$installed" = "$version" ] || { echo "::error::jevstiller.__version__ is $installed, expected $version"; exit 1; }
+          grep -qE "^## $version — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md \
+            || { echo "::error::CHANGELOG.md needs a '## $version — YYYY-MM-DD' heading"; exit 1; }
+
+      - name: The built wheel passes the test suite (installed, not the source tree)
+        run: |
+          /tmp/wheel-check/bin/pip install -q "$(ls dist/*.whl)[jev,server]" pytest
+          cd /tmp && /tmp/wheel-check/bin/python -m pytest -q -p no:cacheprovider "$GITHUB_WORKSPACE/tests"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:

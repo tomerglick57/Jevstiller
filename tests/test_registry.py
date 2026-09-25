@@ -68,8 +68,8 @@ def test_unknown_version_and_state_are_rejected(tmp_path):
 def test_kill_during_save_and_promote(tmp_path):
     script = textwrap.dedent(f"""
         import sys
-        sys.path.insert(0, {os.getcwd()!r})
-        from tests.test_registry import _save
+        sys.path.insert(0, {os.path.dirname(os.path.abspath(__file__))!r})
+        from test_registry import _save
         from jevstiller.registry import Registry
         reg = Registry({str(tmp_path)!r})
         print("ready", flush=True)

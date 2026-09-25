@@ -1,16 +1,16 @@
 [project]
 name = "jevstiller"
-version = "0.1.0"
+version = "0.2.0"
 description = "Distill a repeated Jev classification task into a local model, on the fly — same answers, your hardware."
-readme = "README.md"
+dynamic = ["readme"]
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Tomer Glick" }]
 keywords = ["jev", "typesafe", "distillation", "classification", "mlops", "model-cascade", "knowledge-distillation"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -49,8 +49,19 @@ Design = "https://github.com/tomerglick57/Jevstiller/blob/main/DESIGN.md"
 Changelog = "https://github.com/tomerglick57/Jevstiller/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme>=24"]
 build-backend = "hatchling.build"
+
+# The README on PyPI: relative links (docs/..., DESIGN.md) point to the files on GitHub
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#|mailto:)([^)\s]+)\)'
+replacement = '](https://github.com/tomerglick57/Jevstiller/blob/main/\1)'
 
 [tool.hatch.build.targets.wheel]
 packages = ["jevstiller"]

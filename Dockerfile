@@ -8,16 +8,21 @@ ARG PYTHON=3.12
 FROM python:${PYTHON}-slim AS build
 ARG EXTRAS=server,onnx
 WORKDIR /src
-COPY pyproject.toml README.md LICENSE ./
+RUN pip install --no-cache-dir "uv==0.12.19"
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY jevstiller ./jevstiller
-RUN pip wheel --no-cache-dir --wheel-dir /wheels ".[${EXTRAS}]"
+# Dependencies at the versions in uv.lock, hash-checked; then the project itself
+RUN uv export --frozen --no-emit-project $(for e in $(echo "$EXTRAS" | tr ',' ' '); do printf -- '--extra %s ' "$e"; done) \
+      -o requirements.txt \
+ && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt \
+ && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
 FROM python:${PYTHON}-slim
 ARG PRELOAD_ENCODER=small
 RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin jevstiller \
  && mkdir -p /data /models && chown jevstiller:jevstiller /data && chmod 700 /data
 COPY --from=build /wheels /wheels
-RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
+RUN pip install --no-cache-dir --no-index /wheels/* && rm -rf /wheels
 ENV JEVSTILLER_DATA_DIR=/data \
     HF_HOME=/models \
     PYTHONUNBUFFERED=1
