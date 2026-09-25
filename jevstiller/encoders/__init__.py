@@ -16,8 +16,8 @@ class Encoder(Protocol):
         ...
 
 
-from .batching import BatchingEncoder  # noqa: E402
-from .hashing import HashEncoder  # noqa: E402
+from ._batching import BatchingEncoder  # noqa: E402
+from ._hashing import HashEncoder  # noqa: E402
 
 # tier -> (torch checkpoint, onnx repo)
 TIERS = {
@@ -33,10 +33,10 @@ def load_encoder(spec: str = "base", backend: str = "auto", device: str = "auto"
         dim = int(spec.split(":")[1]) if ":" in spec else 512
         return HashEncoder(dim=dim, **kw)
     if spec.startswith("torch:"):
-        from .hf import TorchEncoder
+        from ._hf import TorchEncoder
         return TorchEncoder(spec[6:], device=device, **kw)
     if spec.startswith("onnx:"):
-        from .onnx import OnnxEncoder
+        from ._onnx import OnnxEncoder
         return OnnxEncoder(spec[5:], device=device, **kw)
     if spec in TIERS:
         torch_name, onnx_repo = TIERS[spec]
@@ -47,9 +47,9 @@ def load_encoder(spec: str = "base", backend: str = "auto", device: str = "auto"
             except ImportError:
                 backend = "onnx"
         if backend == "torch":
-            from .hf import TorchEncoder
+            from ._hf import TorchEncoder
             return TorchEncoder(torch_name, device=device, **kw)
-        from .onnx import OnnxEncoder
+        from ._onnx import OnnxEncoder
         return OnnxEncoder(onnx_repo, device=device, **kw)
     raise ValueError(f"unknown encoder spec {spec!r}")
 

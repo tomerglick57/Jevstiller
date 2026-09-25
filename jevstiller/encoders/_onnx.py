@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .hf import default_pooling
+from ._hf import default_pooling
 
 
 class OnnxEncoder:

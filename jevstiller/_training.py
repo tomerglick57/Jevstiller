@@ -22,9 +22,9 @@ from pathlib import Path
 import numpy as np
 from threadpoolctl import threadpool_limits
 
-from .calibrate import RoutingPolicy, fit_policy, threshold_grid
-from .ood import KnnOOD
-from .student import LinearStudent
+from ._calibrate import RoutingPolicy, fit_policy, threshold_grid
+from ._ood import KnnOOD
+from ._student import LinearStudent
 
 FIT_PARAMS = ("budget", "delta", "ood_quantile", "ood_k", "epochs", "l2", "patience", "seed", "threads")
 
@@ -117,8 +117,8 @@ class FitResult:
 
 
 def run_fit_job(job: FitJob) -> FitResult:
-    from .registry import write_bundle
-    from .store import SampleStore
+    from ._registry import write_bundle
+    from ._store import SampleStore
 
     store = SampleStore(Path(job.store_path), read_only=True)
     try:

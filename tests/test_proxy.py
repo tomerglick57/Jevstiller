@@ -290,7 +290,7 @@ def test_saturated_encoder_forwards_instead_of_queueing(stack, world):
 def test_batching_encoder_estimates_its_wait():
     import threading
 
-    from jevstiller.encoders.batching import BatchingEncoder
+    from jevstiller.encoders._batching import BatchingEncoder
 
     class Slow(HashEncoder):
         def encode(self, texts):
@@ -313,7 +313,7 @@ def test_batching_encoder_estimates_its_wait():
 
 def test_upstream_connections_are_split_over_small_pools(tmp_path):
     """One httpx pool of 256 connections forwarded ~90 req/s at 256 callers; 16 pools of 16 ~840 (P6.4)."""
-    from jevstiller.server import UPSTREAM_POOL, Proxy
+    from jevstiller._server import UPSTREAM_POOL, Proxy
     m = TaskManager(tmp_path, None, HashEncoder(dim=64), Config(training="manual"), janitor_interval_s=3600)
     p = Proxy(m, ProxySettings(upstream="http://127.0.0.1:9", max_upstream_inflight=40), KeyRegistry(b"s", 3600))
     assert len(p.clients) == 3 == -(-40 // UPSTREAM_POOL) and len({id(c) for c in p.clients}) == 3

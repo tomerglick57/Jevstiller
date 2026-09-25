@@ -4,7 +4,7 @@ import time
 import pytest
 
 from jevstiller import Admission, Config, HashEncoder, TaskManager
-from jevstiller.manager import task_key
+from jevstiller._manager import task_key
 
 LABELS = ["billing", "technical", "cancellation", "sales", "other"]
 Q = "Which team handles this?"
@@ -162,7 +162,7 @@ def test_unloaded_engines_are_freed_without_the_cycle_collector(tmp_path, teache
     import weakref
     from concurrent.futures import ThreadPoolExecutor
 
-    from jevstiller.scheduler import TrainScheduler
+    from jevstiller._scheduler import TrainScheduler
     sched = TrainScheduler(pool_factory=lambda: ThreadPoolExecutor(1))
     m = TaskManager(tmp_path, teacher, HashEncoder(dim=256), _cfg(training=training, min_new_samples=500),
                     admission=Admission(min_requests=1), max_loaded=0, janitor_interval_s=3600, train_executor=sched)
@@ -243,7 +243,7 @@ def test_a_requested_maintenance_pass_does_not_pin_an_engine(tmp_path, teacher, 
     while (e._done < 1 or e._maint.locked()) and time.time() < deadline:
         time.sleep(0.01)                                  # until it has run; the worker then rests 60 s
     m.classify("acme", Q, LABELS, _texts(world, 3))       # so this pass stays requested, not running
-    assert not e.busy()
+    assert not e._busy()
     m.sweep()
     assert m.loaded() == []
     m.close()

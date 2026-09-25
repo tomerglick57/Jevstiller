@@ -38,7 +38,7 @@ all = ["jevstiller[jev,server,onnx,torch]"]
 dev = ["pytest>=7", "ruff>=0.4", "jevstiller[jev,server]"]
 
 [project.scripts]
-jevstiller = "jevstiller.cli:main"
+jevstiller = "jevstiller._cli:main"
 
 [project.urls]
 Homepage = "https://jevstiller.pages.dev"

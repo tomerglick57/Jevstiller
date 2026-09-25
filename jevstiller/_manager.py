@@ -33,12 +33,12 @@ from typing import Any
 
 from threadpoolctl import threadpool_limits
 
-from .core import Jevstiller, Result, Routed, TeacherError
+from ._core import Jevstiller, Result, Routed, TeacherError
+from ._registry import atomic_write_text
+from ._scheduler import TaskExecutor, TrainScheduler
+from ._store import SampleStore
+from ._task import Config, State, Task, canonical_json
 from .encoders import Encoder
-from .registry import atomic_write_text
-from .scheduler import TaskExecutor, TrainScheduler
-from .store import SampleStore
-from .task import Config, State, Task, canonical_json
 from .teachers import Teacher, TeacherOutput
 
 log = logging.getLogger("jevstiller")
@@ -228,7 +228,7 @@ class TaskManager:
         self._per_tenant: dict[str, int] = {}
         self._engines: OrderedDict[str, Jevstiller] = OrderedDict()
         self._inflight: dict[str, int] = {}
-        self._carry: dict[str, dict] = {}            # progress of unloaded engines (Jevstiller.carry)
+        self._carry: dict[str, dict] = {}            # progress of unloaded engines (Jevstiller._carry_state)
         self._key_locks: dict[str, threading.Lock] = {}
         self._dirty: set[str] = set()                   # last_seen changed since task.json was written
         self._written: dict[str, float] = {}
@@ -285,7 +285,7 @@ class TaskManager:
 
     def set_mode(self, key: str, mode: str | None) -> None:
         """Pin a task's mode ("auto", "teacher_only", "cascade"; None = config default). Persisted."""
-        from .task import MODES
+        from ._task import MODES
         if mode is not None and mode not in MODES:
             raise ValueError(f"mode must be one of {MODES} or null")
         with self._lock:
@@ -498,11 +498,11 @@ class TaskManager:
             e = Jevstiller(info.task(), self.teacher, self.root, encoder=self.encoder, config=cfg,
                            train_executor=ex, hash_key=self.hash_key)
             if isinstance(ex, TaskExecutor):               # weakly: a strong one makes a cycle that keeps
-                ex.priority = _weak(e.training_priority)    # an unloaded engine (and its arrays) until a GC
+                ex.priority = _weak(e._training_priority)    # an unloaded engine (and its arrays) until a GC
             with self._lock:
                 carry = self._carry.pop(key, None)
             if carry:
-                e.restore(carry)
+                e._restore_state(carry)
             with self._lock:
                 self._engines[key] = e
                 self._inflight[key] = self._inflight.get(key, 0) + 1
@@ -539,7 +539,7 @@ class TaskManager:
     def memory_mb(self) -> float:
         with self._lock:
             engines = list(self._engines.values())
-        return sum(e.footprint_bytes() for e in engines) / 2**20
+        return sum(e._footprint_bytes() for e in engines) / 2**20
 
     # ---- janitor ----------------------------------------------------------------
     def _janitor_loop(self, interval: float) -> None:
@@ -612,7 +612,7 @@ class TaskManager:
         """Unload the least recently used idle engine. False if none can be unloaded right now."""
         with self._lock:
             for key, e in self._engines.items():         # oldest first
-                if self._inflight.get(key, 0) == 0 and not e.busy():
+                if self._inflight.get(key, 0) == 0 and not e._busy():
                     klock = self._key_locks.setdefault(key, threading.Lock())
                     break
             else:
@@ -620,11 +620,11 @@ class TaskManager:
         with klock:
             with self._lock:
                 e = self._engines.get(key)
-                if e is None or self._inflight.get(key, 0) or e.busy():
+                if e is None or self._inflight.get(key, 0) or e._busy():
                     return True                          # changed under us; let the caller re-check
                 del self._engines[key]
                 self._inflight.pop(key, None)
-                self._carry[key] = e.carry()
+                self._carry[key] = e._carry_state()
                 self.unloads += 1
             e.close()
         return True

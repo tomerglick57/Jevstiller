@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **A defined public API** (P7.7). It is what `jevstiller`, `jevstiller.server`, `jevstiller.encoders`, `jevstiller.teachers` and `jevstiller.teachers.jev` export in `__all__`, recorded in `tests/public_api.txt` and checked by a test. Everything else is internal (docs/compatibility.md). For code that imported internals:
+  - Internal modules have a leading underscore: `jevstiller.core` → `jevstiller._core`, and likewise `manager`, `store`, `task`, `training`, `scheduler`, `registry`, `calibrate`, `ood`, `student`, `settings`, `admin`, `backup`, `metrics`, `cli`, the encoder and teacher implementations, and the proxy's internals (`jevstiller.server` keeps `create_app`, `ProxySettings`, `KeyRegistry` and `load_salt`).
+  - Import from `jevstiller` instead: `train_pool` (was `jevstiller.training`), `State`, `Routed`, `Routing` and `TaskInfo`.
+  - `Jevstiller(task, teacher, data_dir, *, encoder=..., config=..., train_executor=..., hash_key=...)`: the options are keyword-only.
+  - The engine's methods for the task manager are private: `carry`, `restore`, `training_priority`, `busy`, `footprint_bytes`.
+  - The `jevstiller` command and the proxy's HTTP behaviour are unchanged.
+
 ## 0.2.0 — 2026-09-25
 
 The drop-in Jev proxy. Point `TYPESAFE_BASE_URL` at `jevstiller serve`, keep your services' own Jev keys, and the proxy learns each repeated `choice` question from Jev's answers, then answers it locally within the agreement budget you set, with a permanent audit to Jev and automatic fallback. First release on PyPI (`pip install "jevstiller[server,onnx]"`) and as a container image (`ghcr.io/tomerglick57/jevstiller`).

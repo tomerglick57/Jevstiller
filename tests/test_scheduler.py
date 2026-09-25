@@ -104,7 +104,7 @@ def test_maintenance_keeps_running_while_training_waits(tmp_path, task, world, t
     for _ in range(10):
         js.classify_batch([t for t, _ in world.sample(200)])
         assert js.drain(timeout=10)                         # passes complete: nothing waits on the job
-    assert js._pending is not None and js.busy() and js.status().production is None
+    assert js._pending is not None and js._busy() and js.status().production is None
     assert any(e["kind"] == "training_queued" for e in js.status().events)
     gate.set()
     js._pending[0].result(timeout=120)                      # the job runs once the worker is free ...
@@ -133,7 +133,7 @@ def test_train_now_waits_for_a_queued_job(tmp_path, task, world, teacher):
 
 
 def test_failed_background_training_is_retried_later(tmp_path, task, world, teacher, monkeypatch):
-    import jevstiller.core as core
+    import jevstiller._core as core
     real, calls = core.run_fit_job, []
 
     def fails_once(job):

@@ -136,7 +136,7 @@ class ServeSettings:
     def validate(self) -> ServeSettings:
         import math
 
-        from .task import Config
+        from ._task import Config
         for f in fields(self):
             if (problem := _type_problem(f.name, getattr(self, f.name), f.type)) is not None:
                 raise ValueError(problem)

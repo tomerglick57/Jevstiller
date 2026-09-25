@@ -1,6 +1,6 @@
 import numpy as np
 
-from jevstiller.calibrate import clopper_pearson_upper, fit_policy
+from jevstiller._calibrate import clopper_pearson_upper, fit_policy
 
 
 def test_cp_zero_failures_matches_closed_form():
@@ -78,13 +78,13 @@ def test_scan_stops_at_the_first_failure():
 
 
 def test_threshold_grid_is_fixed_and_strictest_first():
-    from jevstiller.calibrate import threshold_grid
+    from jevstiller._calibrate import threshold_grid
     g = threshold_grid(5)
     assert (np.diff(g) < 0).all() and g[0] > 0.999 and abs(g[-1] - 0.2) < 1e-9
 
 
 def test_ood_threshold_comes_from_the_reference_itself():
-    from jevstiller.ood import KnnOOD
+    from jevstiller._ood import KnnOOD
     rng = np.random.default_rng(0)
     X = rng.normal(size=(400, 16)) + np.repeat(np.eye(16)[:2] * 6, 200, axis=0)
     X /= np.linalg.norm(X, axis=1, keepdims=True)

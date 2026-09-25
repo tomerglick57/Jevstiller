@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from jevstiller import Config, Jevstiller, SyntheticTeacher, SyntheticWorld, Task
-from jevstiller.training import train_pool
+from jevstiller._training import train_pool
 
 LABELS = ["billing", "technical", "cancellation", "sales", "other"]
 

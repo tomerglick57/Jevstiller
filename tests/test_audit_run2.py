@@ -17,9 +17,9 @@ from test_audit_fixes import Upstream, _body, _manager, _post
 from test_proxy import GOOD, LABELS, QUESTION, serve
 
 from jevstiller import Admission, Config, HashEncoder, TaskManager
-from jevstiller.encoders.batching import BatchingEncoder
-from jevstiller.server import KeyRegistry, ProxySettings, _retry_after_s, create_app, load_salt
-from jevstiller.settings import load
+from jevstiller._server import KeyRegistry, ProxySettings, _retry_after_s, create_app, load_salt
+from jevstiller._settings import load
+from jevstiller.encoders._batching import BatchingEncoder
 
 
 @pytest.fixture
@@ -137,7 +137,7 @@ def test_retention_holds_the_engine_it_redacts(tmp_path):
 
 
 def test_admin_calls_hold_the_engine(tmp_path):
-    from jevstiller.admin import Admin
+    from jevstiller._admin import Admin
     m = _manager(tmp_path)
     r = m.route("acme", "Q?", LABELS, ["w1 w2"])
     m.complete(r, [RuntimeError("no answer")] * len(r.routed.to_teacher), "jev")
@@ -160,7 +160,7 @@ def test_admin_calls_hold_the_engine(tmp_path):
 
 
 def test_store_close_waits_for_a_write_in_progress(tmp_path):
-    from jevstiller.store import SampleStore
+    from jevstiller._store import SampleStore
     s = SampleStore(tmp_path / "s.sqlite")
     closed = threading.Event()
     with s._write_lock:                                   # e.g. redact_text's UPDATE
@@ -211,7 +211,7 @@ def test_dot_segments_hidden_by_control_characters_are_rejected(tmp_path, up):
 def test_readyz_under_concurrent_probes(tmp_path, monkeypatch):
     import uvicorn
 
-    from jevstiller import cli
+    from jevstiller import _cli as cli
     apps = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: apps.append(app))
     cli.main(["serve", "--data-dir", str(tmp_path), "--encoder", "hash", "--log-level", "warning"])
@@ -231,7 +231,7 @@ def test_readyz_under_concurrent_probes(tmp_path, monkeypatch):
 
 # 7. before Python 3.14, the training pool forked the live server
 def test_training_workers_are_not_forked_from_the_server():
-    from jevstiller.training import train_pool
+    from jevstiller._training import train_pool
     pool = train_pool(1)
     try:
         assert pool._mp_context.get_start_method() in ("forkserver", "spawn")
@@ -295,8 +295,8 @@ def test_tenants_error_names_the_tenant_not_the_key(tmp_path):
 def test_upstream_credentials_are_redacted(tmp_path, monkeypatch, capsys):
     import uvicorn
 
-    from jevstiller import cli
-    from jevstiller.settings import redact_url
+    from jevstiller import _cli as cli
+    from jevstiller._settings import redact_url
     assert redact_url("https://u:pw@gw.example:8443/jev") == "https://***@gw.example:8443/jev"
     assert redact_url("https://api.typesafe.ai") == "https://api.typesafe.ai"
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
@@ -309,7 +309,7 @@ def test_upstream_credentials_are_redacted(tmp_path, monkeypatch, capsys):
 
 # 12. backup and restore ignored the 0600/0700 policy
 def test_backup_and_restore_are_owner_only(tmp_path):
-    from jevstiller.backup import backup, restore
+    from jevstiller._backup import backup, restore
     src = tmp_path / "data"
     load_salt(src)
     m = _manager(src)
@@ -372,7 +372,7 @@ def test_only_answered_questions_count_towards_admission(tmp_path, up):
 
 # 15. the admin CLI pasted names into URLs unescaped
 def test_admin_cli_escapes_names(monkeypatch):
-    from jevstiller import cli
+    from jevstiller import _cli as cli
     calls = []
 
     def request(method, url, **kw):

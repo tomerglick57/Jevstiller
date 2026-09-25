@@ -1,7 +1,7 @@
 """P5.1: config file, environment and flags, with precedence and validation."""
 import pytest
 
-from jevstiller.settings import load
+from jevstiller._settings import load
 
 TOML = """
 [server]

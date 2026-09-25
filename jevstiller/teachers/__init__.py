@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from ..task import State, Task
+from .._task import State, Task
 
 
 @dataclass
@@ -42,8 +42,8 @@ def peakedness(probs: dict[str, float]) -> float:
     return max(0.0, (k * max(probs.values()) - 1.0) / (k - 1.0))
 
 
-from .replay import CachedTeacher, ReplayTeacher  # noqa: E402
-from .synthetic import SyntheticTeacher, SyntheticWorld  # noqa: E402
+from ._replay import CachedTeacher, ReplayTeacher  # noqa: E402
+from ._synthetic import SyntheticTeacher, SyntheticWorld  # noqa: E402
 
 __all__ = ["Teacher", "TeacherOutput", "peakedness", "SyntheticTeacher", "SyntheticWorld", "ReplayTeacher",
            "CachedTeacher"]

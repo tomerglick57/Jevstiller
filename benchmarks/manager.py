@@ -25,8 +25,8 @@ from pathlib import Path
 import numpy as np
 
 from jevstiller import Admission, Config, HashEncoder, Jevstiller, SyntheticTeacher, SyntheticWorld, TaskManager
-from jevstiller.manager import TaskInfo, task_key
-from jevstiller.task import Task
+from jevstiller._manager import TaskInfo, task_key
+from jevstiller._task import Task
 
 LABELS = ["billing", "technical", "cancellation", "sales", "other"]
 Q = "Which team should handle this message?"

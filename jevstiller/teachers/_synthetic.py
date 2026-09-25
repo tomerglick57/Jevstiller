@@ -6,7 +6,7 @@ import math
 import random
 from collections.abc import Sequence
 
-from ..task import State, Task, state_text
+from .._task import State, Task, state_text
 from . import TeacherOutput, peakedness
 
 

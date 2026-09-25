@@ -68,7 +68,12 @@ Within a minor version, these stay compatible:
 - the settings: TOML keys, `JEVSTILLER_*` variables and flags;
 - the data directory format.
 
-The Python API (`Jevstiller`, `TaskManager` and the rest) may still change in a minor release until 1.0.
+**The Python API** (defined from 0.3.0; 0.2.0 had no declared boundary) is what these modules export in `__all__`:
+- `jevstiller`: the engine (`Jevstiller`, `Task`, `Config`, `Result`, `Status`, …), `TaskManager`, `TrainScheduler`, `train_pool`, the teacher and encoder protocols and the built-in ones;
+- `jevstiller.server`: `create_app`, `ProxySettings`, `KeyRegistry`, `load_salt`;
+- `jevstiller.encoders`, `jevstiller.teachers`, `jevstiller.teachers.jev` (`JevTeacher`).
+
+`tests/public_api.txt` records every public name, signature and dataclass field, and a test keeps it current. Modules and names starting with an underscore (`jevstiller._core`, …) are internal and can change in any release. Until 1.0 the Python API may still change in a minor release; each change is listed in the changelog.
 
 **Upgrades:** a newer version upgrades a data directory in place on first start: sample stores are migrated, and tasks are re-keyed if the key scheme changed. Back up first (`jevstiller backup`). Downgrading to an older version with an upgraded data directory isn't supported: restore the backup instead.
 

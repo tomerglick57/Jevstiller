@@ -18,8 +18,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from jevstiller import Admission, Config, HashEncoder, TaskManager
-from jevstiller.server import KeyRegistry, ProxySettings, _no_cookies, create_app
-from jevstiller.store import SampleStore
+from jevstiller._server import KeyRegistry, ProxySettings, _no_cookies, create_app
+from jevstiller._store import SampleStore
 
 ts = pytest.importorskip("typesafe_sdk")
 from test_proxy import GOOD, OTHER, FakeJev, ask, client, serve  # noqa: E402
@@ -340,7 +340,7 @@ def test_a_connection_closed_by_jev_is_retried_once(tmp_path, world):
 def test_idle_connections_are_kept_longer_than_clients_reuse_them(tmp_path, monkeypatch):
     import uvicorn
 
-    from jevstiller import cli
+    from jevstiller import _cli as cli
     calls = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append(kw))
     cli.main(["serve", "--data-dir", str(tmp_path), "--encoder", "hash", "--log-level", "warning"])

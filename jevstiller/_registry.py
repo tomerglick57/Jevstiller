@@ -10,9 +10,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .calibrate import RoutingPolicy
-from .ood import KnnOOD
-from .student import LinearStudent
+from ._calibrate import RoutingPolicy
+from ._ood import KnnOOD
+from ._student import LinearStudent
 
 STATES = ("candidate", "shadow", "production", "superseded", "rejected", "rolled_back")
 

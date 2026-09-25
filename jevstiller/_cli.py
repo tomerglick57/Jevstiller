@@ -54,7 +54,7 @@ def _logging(level: str, fmt: str) -> None:
 
 
 def _settings(a: argparse.Namespace):
-    from .settings import load
+    from ._settings import load
     cli = {k: v for k, v in vars(a).items() if k not in ("cmd", "config", "func") and v is not None}
     return load(a.config, cli)
 
@@ -62,12 +62,12 @@ def _settings(a: argparse.Namespace):
 def _serve(a: argparse.Namespace) -> None:
     import uvicorn
 
+    from ._manager import Admission, TaskManager
+    from ._scheduler import TrainScheduler
+    from ._server import KeyRegistry, ProxySettings, create_app, load_salt
+    from ._settings import redact_url
+    from ._task import Config
     from .encoders import BatchingEncoder, load_encoder
-    from .manager import Admission, TaskManager
-    from .scheduler import TrainScheduler
-    from .server import KeyRegistry, ProxySettings, create_app, load_salt
-    from .settings import redact_url
-    from .task import Config
 
     s = _settings(a)
     os.umask(0o077)                                     # task data is traffic: owner-only files and dirs
@@ -158,7 +158,7 @@ def _key_hash(a: argparse.Namespace) -> None:
     create a salt: a hash made with a different salt would never match the server's."""
     import getpass
 
-    from .server import KeyRegistry, load_salt
+    from ._server import KeyRegistry, load_salt
     try:
         salt = load_salt(a.data_dir, create=False)
     except (FileNotFoundError, ValueError) as e:
@@ -170,12 +170,12 @@ def _key_hash(a: argparse.Namespace) -> None:
 
 
 def _backup(a: argparse.Namespace) -> None:
-    from .backup import backup
+    from ._backup import backup
     print(json.dumps(backup(a.data_dir, a.out), indent=2))
 
 
 def _restore(a: argparse.Namespace) -> None:
-    from .backup import restore
+    from ._backup import restore
     print(json.dumps(restore(getattr(a, "from"), a.data_dir, force=a.force), indent=2))
 
 

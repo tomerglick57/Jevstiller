@@ -11,11 +11,11 @@ import time
 import numpy as np
 import pytest
 
-import jevstiller.registry as registry_mod
-from jevstiller.calibrate import RoutingPolicy
-from jevstiller.ood import KnnOOD
-from jevstiller.registry import Registry
-from jevstiller.student import LinearStudent
+import jevstiller._registry as registry_mod
+from jevstiller._calibrate import RoutingPolicy
+from jevstiller._ood import KnnOOD
+from jevstiller._registry import Registry
+from jevstiller._student import LinearStudent
 
 
 def _parts():
@@ -70,7 +70,7 @@ def test_kill_during_save_and_promote(tmp_path):
         import sys
         sys.path.insert(0, {os.path.dirname(os.path.abspath(__file__))!r})
         from test_registry import _save
-        from jevstiller.registry import Registry
+        from jevstiller._registry import Registry
         reg = Registry({str(tmp_path)!r})
         print("ready", flush=True)
         while True:

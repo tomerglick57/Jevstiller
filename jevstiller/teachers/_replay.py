@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from ..task import State, Task, state_text
+from .._task import State, Task, state_text
 from . import TeacherOutput
 
 

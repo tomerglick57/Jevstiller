@@ -28,8 +28,9 @@ Performance claims come from `benchmarks/` (see `benchmarks/README.md`); every n
 - `DESIGN.md` — why the loop is shaped the way it is. Read §5 (the guarantee) and §7.8 (the audit channel) before changing routing or calibration.
 - `DEPLOYMENT_PLAN.md` — what is done and what is next, with the measurements behind each decision.
 - `docs/` — the proxy (`proxy.md`), every setting (`configuration.md`), every measurement (`benchmarks.md`).
-- `jevstiller/core.py` — one task's loop (`route` / `complete`). `store.py` — the sample store. `calibrate.py` — the bound. `training.py` — the training job. `registry.py` — versions.
-- `jevstiller/manager.py` — many tasks in one process. `scheduler.py` — shared training. `server.py` / `cli.py` — the proxy.
+- `jevstiller/_core.py` — one task's loop (`route` / `complete`). `_store.py` — the sample store. `_calibrate.py` — the bound. `_training.py` — the training job. `_registry.py` — versions.
+- `jevstiller/_manager.py` — many tasks in one process. `_scheduler.py` — shared training. `_server.py` / `_cli.py` — the proxy.
+- **The public API** is `jevstiller.__all__` plus `jevstiller.server`, `jevstiller.encoders`, `jevstiller.teachers` and `jevstiller.teachers.jev`. Modules starting with `_` are internal. `tests/test_public_api.py` pins the public API against `tests/public_api.txt`: a change there is a deliberate one. Regenerate it with `python tests/test_public_api.py --update` and say what changed in `CHANGELOG.md`.
 - `experiments/` — replay runners; results land in `experiments/results/` (gitignored). `benchmarks/` — performance scripts.
 
 ## Rules that keep the guarantee honest

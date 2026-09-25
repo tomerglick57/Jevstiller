@@ -5,7 +5,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import pytest
 
-import jevstiller.core as core
+import jevstiller._core as core
 from jevstiller import Config, Jevstiller, TeacherError
 
 
@@ -155,7 +155,7 @@ def test_fit_caps_blas_threads(monkeypatch):
     import numpy as np
     from threadpoolctl import threadpool_info
 
-    import jevstiller.training as training
+    import jevstiller._training as training
     seen = []
     real = training._fit
 
@@ -186,7 +186,7 @@ def test_failed_fit_leaves_no_staging_dir(tmp_path, task, world, teacher, monkey
 def test_train_pool_runs_at_lower_priority():
     import os
 
-    from jevstiller.training import train_pool
+    from jevstiller._training import train_pool
     with train_pool(workers=1, niceness=5) as pool:
         child = pool.submit(os.nice, 0).result()
     assert child >= min(os.nice(0) + 5, 19)

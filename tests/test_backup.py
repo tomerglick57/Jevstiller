@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from jevstiller import Admission, Config, HashEncoder, TaskManager
-from jevstiller.backup import backup, restore
+from jevstiller._backup import backup, restore
 from jevstiller.server import load_salt
 
 LABELS = ["billing", "technical", "cancellation", "sales", "other"]

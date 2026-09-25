@@ -18,13 +18,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper
+from ._calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper
+from ._registry import Bundle, Registry
+from ._store import Record, SampleStore, text_hash
+from ._task import MODES, Config, State, Task, state_text
+from ._training import FitJob, run_fit_job
 from .encoders import Encoder, HashEncoder
-from .registry import Bundle, Registry
-from .store import Record, SampleStore, text_hash
-from .task import MODES, Config, State, Task, state_text
 from .teachers import Teacher, TeacherOutput
-from .training import FitJob, run_fit_job
 
 log = logging.getLogger("jevstiller")
 
@@ -199,7 +199,7 @@ class Jevstiller:
     x `config.train_threads`. Default (None): run the job in the maintenance thread (~1.11x, slower fits).
     """
 
-    def __init__(self, task: Task, teacher: Teacher, data_dir: str | Path,
+    def __init__(self, task: Task, teacher: Teacher, data_dir: str | Path, *,
                  encoder: Encoder | None = None, config: Config | None = None,
                  train_executor: Executor | None = None, hash_key: bytes | None = None):
         self.task = task
@@ -612,18 +612,18 @@ class Jevstiller:
                 return self._finish_train(raise_errors=True)
             return self._start_train(wait=True, raise_errors=True)
 
-    def carry(self) -> dict:
+    def _carry_state(self) -> dict:
         """In-memory progress worth keeping across an unload and reload of this task (TaskManager keeps it):
         audit answers towards the next drift check, and the recent rate of teacher calls."""
         with self._state:
             return {"audit_new": self._audit_new, "teacher_rate": self._teacher_rate}
 
-    def restore(self, carry: dict) -> None:
+    def _restore_state(self, carry: dict) -> None:
         with self._state:
             self._audit_new += carry.get("audit_new", 0)
             self._teacher_rate = carry.get("teacher_rate", self._teacher_rate)
 
-    def training_priority(self) -> float:
+    def _training_priority(self) -> float:
         """How much training this task could save: its recent rate of teacher calls (decayed, per minute)."""
         return self._teacher_rate.value()
 
@@ -916,14 +916,14 @@ class Jevstiller:
                 "student_agreement_all": float((pred == t).mean()) if len(t) else 0.0,
                 "accepted": acc, "student_label": pred, "student_conf": conf, "ood": ood}
 
-    def busy(self) -> bool:
+    def _busy(self) -> bool:
         """A maintenance pass (training, shadow judging, drift checks) is running, or a training job is queued or
         running. A pass that is only requested doesn't count: under steady traffic nearly every task has one
         requested, and counting it kept the manager from unloading anything (598 tasks loaded against
         `max_loaded = 50`, 2.7 GB, in benchmarks/manager.py). Closing drops it; the next load requests another."""
         return self._maint.locked() or self._pending is not None
 
-    def footprint_bytes(self) -> int:
+    def _footprint_bytes(self) -> int:
         """Memory held by the loaded versions (student heads and OOD references)."""
         n = 0
         for b in (self._prod, self._shadow):

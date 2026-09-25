@@ -27,7 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from .manager import TaskManager
+from ._manager import TaskManager
 
 PREFIX = "/jevstiller/v1"
 _KEY = re.compile(r"^[0-9a-f]{20}$")

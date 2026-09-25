@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from jevstiller import Config, Jevstiller, ReplayTeacher, SyntheticTeacher, SyntheticWorld, Task
-from jevstiller.task import state_text
+from jevstiller._task import state_text
 
 LABELS = ["billing", "technical", "cancellation", "sales", "other"]
 
@@ -115,7 +115,7 @@ def test_old_stores_are_migrated(tmp_path, task, teacher):
     d = tmp_path / task.name
     d.mkdir()
     db = sqlite3.connect(d / "samples.sqlite")
-    from jevstiller.store import _SCHEMA
+    from jevstiller._store import _SCHEMA
     db.executescript(_SCHEMA)                            # the 0.1.0 schema, without state_type
     db.close()
     js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual"))
@@ -215,7 +215,7 @@ def test_defer_rare_classes_trains_and_never_serves_them(tmp_path, task, world, 
 
 
 def test_policy_without_deferred_labels_loads_from_old_files(tmp_path):
-    from jevstiller.calibrate import RoutingPolicy
+    from jevstiller._calibrate import RoutingPolicy
     old = {"conf_threshold": 0.5, "ood_threshold": 0.9, "expected_coverage": 0.8, "disagreement_ub": 0.01,
            "expected_system_disagreement": 0.008, "budget": 0.02, "delta": 0.05, "n_calib": 100}
     (tmp_path / "policy.json").write_text(json.dumps(old))

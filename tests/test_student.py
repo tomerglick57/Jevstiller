@@ -1,7 +1,7 @@
 import numpy as np
 
-from jevstiller.ood import KnnOOD
-from jevstiller.student import LinearStudent
+from jevstiller._ood import KnnOOD
+from jevstiller._student import LinearStudent
 
 
 def test_linear_student_learns_soft_targets():

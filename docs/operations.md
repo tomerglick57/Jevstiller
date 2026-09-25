@@ -28,7 +28,7 @@ jevstiller admin delete-tenant <tenant>      # delete every task of a tenant
 jevstiller admin stats
 ```
 
-The same endpoints over HTTP are listed in `jevstiller/admin.py` (`/jevstiller/v1/...`, `Authorization: Bearer <admin token>`).
+The same endpoints over HTTP are listed in `jevstiller/_admin.py` (`/jevstiller/v1/...`, `Authorization: Bearer <admin token>`).
 
 ### Reading a status report
 

@@ -10,7 +10,7 @@ import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
-from ..task import State, Task
+from .._task import State, Task
 from . import TeacherOutput
 
 
@@ -90,3 +90,5 @@ class JevTeacher:
             return [self._safe(texts[0], task)]
         with ThreadPoolExecutor(max_workers=self.concurrency) as ex:
             return list(ex.map(lambda t: self._safe(t, task), texts))
+
+__all__ = ["JevTeacher"]

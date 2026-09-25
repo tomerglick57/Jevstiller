@@ -1,6 +1,6 @@
 import numpy as np
 
-from jevstiller.store import Record, SampleStore, split_for, text_hash
+from jevstiller._store import Record, SampleStore, split_for, text_hash
 
 
 def _rec(text, channel, **kw):

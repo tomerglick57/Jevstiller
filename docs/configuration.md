@@ -210,4 +210,4 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 
 ## Library: `ProxySettings` and `create_app`
 
-For embedding the proxy in your own ASGI stack: `jevstiller.server.create_app(manager, ProxySettings(...), KeyRegistry(salt, ttl), admin_token=..., metrics_public=..., ready=..., closers=[...])`. `ProxySettings` has the `[proxy]` fields above, with `tenant_map` in place of `tenants` and `max_body_bytes` in place of `max_body_mb`.
+For embedding the proxy in your own ASGI stack: `jevstiller.server.create_app(manager, ProxySettings(...), KeyRegistry(salt, ttl), admin_token=..., metrics_public=..., ready=..., closers=[...])`, with `manager` a `jevstiller.TaskManager`. `jevstiller.server` exports these four names (`create_app`, `ProxySettings`, `KeyRegistry`, `load_salt`); the rest of the proxy is internal. `ProxySettings` has the `[proxy]` fields above, with `tenant_map` in place of `tenants` and `max_body_bytes` in place of `max_body_mb`.

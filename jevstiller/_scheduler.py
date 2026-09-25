@@ -46,7 +46,7 @@ class TrainScheduler(Executor):
 
     def __init__(self, workers: int = 2, niceness: int = 10, max_retries: int = 2, retry_backoff_s: float = 30.0,
                  pool_factory: Callable[[], Executor] | None = None):
-        from .training import train_pool
+        from ._training import train_pool
         self.workers, self.max_retries, self.retry_backoff_s = workers, max_retries, retry_backoff_s
         self.pool_factory = pool_factory or (lambda: train_pool(workers, niceness))
         self.pool_restarts = 0

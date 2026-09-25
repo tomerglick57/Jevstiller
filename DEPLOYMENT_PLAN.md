@@ -237,7 +237,8 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
   *Result:* docs/compatibility.md (also on the website).
 - [x] **P7.6** Release automation: PyPI trusted publishing, GHCR image publishing on tag, CHANGELOG, versioning policy. Keep DESIGN.md in sync (it still says "HTTP server out of scope").
   *Result:* a `v*` tag runs release.yml (the built wheel must pass the test suite, then PyPI via trusted publishing and a GitHub release from the CHANGELOG section) and docker.yml (smoke test, then `ghcr.io/tomerglick57/jevstiller` for amd64/arm64 with provenance and an SBOM). Versioning policy in docs/compatibility.md. DESIGN.md already describes the proxy.
-- [ ] **P7.7** Public API stability pass on what the hosted repo will import (`Engine`, `TaskManager`, store/validator/metering protocols). Mark everything else private.
+- [x] **P7.7** Public API stability pass on what the hosted repo will import (`Engine`, `TaskManager`, store/validator/metering protocols). Mark everything else private.
+  *Result (2026-09-25):* the public API is the `__all__` of `jevstiller`, `jevstiller.server`, `jevstiller.encoders`, `jevstiller.teachers` and `jevstiller.teachers.jev`, pinned by `tests/test_public_api.py` against `tests/public_api.txt`. Every other module is `_`-prefixed. The engine's options are keyword-only, and its task-manager methods are private. The store, key-validator and metering hooks will be designed when the hosted repo exists and can say what it needs (backlog: "Hooks the hosted repo needs"); keyword-only parameters leave room to add them without breaking callers.
 
 ---
 

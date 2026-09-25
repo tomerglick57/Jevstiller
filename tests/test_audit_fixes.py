@@ -13,7 +13,7 @@ from starlette.routing import Route
 from test_proxy import GOOD, LABELS, QUESTION, serve
 
 from jevstiller import Admission, Config, HashEncoder, SyntheticTeacher, SyntheticWorld, Task, TaskManager
-from jevstiller.manager import task_key
+from jevstiller._manager import task_key
 from jevstiller.server import KeyRegistry, ProxySettings, create_app
 
 CRITERIA = QUESTION["criteria"]
@@ -194,7 +194,7 @@ def test_dot_segments_are_rejected(tmp_path, up):
 def test_cli_trusts_forwarded_for_only_when_configured(tmp_path, monkeypatch):
     import uvicorn
 
-    from jevstiller import cli
+    from jevstiller import _cli as cli
     calls = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append(kw))
     base = ["serve", "--data-dir", str(tmp_path), "--encoder", "hash", "--log-level", "warning"]
@@ -235,7 +235,7 @@ def test_task_key_uses_the_full_question_fingerprint(monkeypatch):
 def test_tasks_stored_under_old_keys_are_re_keyed(tmp_path):
     import hashlib
 
-    from jevstiller.task import canonical_json
+    from jevstiller._task import canonical_json
     t = SyntheticTeacher(SyntheticWorld(LABELS, seed=1))
     m = TaskManager(tmp_path, t, HashEncoder(dim=64), Config(training="manual"), admission=Admission(1),
                     janitor_interval_s=3600)
