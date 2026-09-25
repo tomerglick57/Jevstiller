@@ -3,7 +3,9 @@ title: Python API
 description: Task, Jevstiller, TaskManager, results and status, teachers, encoders and training executors.
 ---
 
-Everything below is importable from `jevstiller` unless noted. It documents 0.2.0. Until 1.0, the Python API may
+Everything below is importable from `jevstiller` unless noted. It documents 0.3.0. The public API is what
+`jevstiller`, `jevstiller.server`, `jevstiller.encoders` and `jevstiller.teachers` export; modules starting with
+`_` are internal. Until 1.0, the Python API may
 change in a minor release ([compatibility](/proxy/compatibility/#versions-and-upgrades)); the proxy's HTTP
 behaviour and its settings are what stay stable.
 
@@ -23,7 +25,7 @@ What is being classified: exactly what Jev is asked.
 ## `Jevstiller`: one task
 
 ```python
-Jevstiller(task, teacher, data_dir, encoder=None, config=None, train_executor=None, hash_key=None)
+Jevstiller(task, teacher, data_dir, *, encoder=None, config=None, train_executor=None, hash_key=None)
 ```
 
 - `teacher`: anything implementing the [`Teacher`](#teachers) protocol, usually `JevTeacher()`.
@@ -33,7 +35,7 @@ Jevstiller(task, teacher, data_dir, encoder=None, config=None, train_executor=No
   `"base"` for real use.
 - `config`: a [`Config`](/reference/configuration/#engine-config).
 - `train_executor`: where training runs. Default: a background thread per task (`Config.training`); pass a
-  process pool (`training.train_pool()`) or a `TrainScheduler` to share one across tasks.
+  process pool (`train_pool()`) or a `TrainScheduler` to share one across tasks.
 - `hash_key`: key for the per-row text hash (an HMAC), so a store kept with `store_text=False` holds no plain hash.
 
 ### Classifying
@@ -91,7 +93,7 @@ share one student. Engines load on demand and unload least-recently-used past `m
 | method | does |
 |---|---|
 | `classify(tenant, instructions, classes, states, model=None)` | like `Jevstiller.classify_batch`, for any question |
-| `route(...)` / `complete(routing, outputs)` | the split form, when the caller calls the teacher |
+| `route(..., caller=None)` / `complete(routing, outputs)` | the split form, when the caller calls the teacher; `caller` (e.g. an API key's hash) is counted against `max_new_tasks_per_caller` |
 | `tasks(tenant=None)` / `loaded()` | registered / loaded tasks |
 | `set_mode(key, mode)`, `set_target(key, target)` | persisted per task |
 | `delete(key)` / `delete_tenant(tenant)` | remove tasks and all their data |

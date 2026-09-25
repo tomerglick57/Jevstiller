@@ -1,12 +1,12 @@
 ---
 title: Roadmap
-description: What 0.2.0 shipped, what is next, and the longer-term backlog.
+description: What 0.2.0 and 0.3.0 shipped, what is next, and the longer-term backlog.
 ---
 
-## Shipped in 0.2.0
+## Shipped
 
-The self-hosted, drop-in Jev proxy: point `TYPESAFE_BASE_URL` at it, and every service keeps its code and its own
-Jev key.
+**0.2.0:** the self-hosted, drop-in Jev proxy. Point `TYPESAFE_BASE_URL` at it, and every service keeps its code
+and its own Jev key.
 
 ```text
  service A ─┐                         ┌──────── Jevstiller (one container) ────────┐
@@ -17,20 +17,25 @@ Jev key.
 
 - **Validated against live Jev:** Banking77, 70.7% held-out coverage at 99.45% agreement (target 98%).
 - **Many tasks, many tenants, one process:** training runs in the background, fair across tenants.
-- **Security:** keys are verified by Jev before any local answer and never stored. Two security audits, all
-  findings fixed.
+- **Security:** keys are verified by Jev before any local answer and never stored.
 - **Operations:** a TOML config, an admin API and CLI, Prometheus metrics, health checks, JSON logs, backup and
   restore.
 - **Packaging:** a hardened container image and a Kubernetes manifest.
-- **A sound guarantee:** a joint-loss bound with fixed-sequence testing, a permanent audit, and automatic
-  fallback. Teacher-model changes and silent drift are handled by themselves.
+
+**0.3.0:**
+- **A status page** at `/jevstiller/status`.
+- **A defined public Python API,** pinned by a test.
+- **A third security audit:** the audit channel now scores answers as they were served, calibration is split per
+  request, and there is a per-key quota on new tasks.
+- **Hash-pinned release builds.**
 
 ## Next
 
-- **A read-only status page** served by the proxy: tasks, share answered locally, agreement against target, events.
+- **A fourth security audit,** starting with HTTP path handling and forwarding.
+- **Admin controls on tasks that are loading:** a mode or target change during a load reaches the live engine.
 - **An in-process option** for teams that can't run a service: a `TypeSafeClient`-compatible wrapper over the same
   engine.
-- **A public API stability pass** ahead of 1.0.
+- **Hooks for a hosted version:** a pluggable store, an external key validator, metering.
 
 ## Later
 

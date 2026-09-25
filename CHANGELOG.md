@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-25
+
+A status page, a defined public Python API, and the fixes from a third security audit, including two in the checks behind the agreement guarantee.
+
+**Upgrading from 0.2.0:**
+- **Settings:** a blank `JEVSTILLER_*` value, an empty `JEVSTILLER_CONFIG` or `--config ""`, and a list of only commas now stop startup. Use `none` to clear a value.
+- **New-task quota:** each API key may create at most `max_new_tasks_per_key` (100) new tasks per `admit_window_s` (24 h). Raise it, or set `none`, if one service legitimately starts more.
+- **Readiness:** `/readyz` no longer includes `data_dir_writable`; watch `jevstiller_data_dir_writable` instead.
+- **Python API:**
+  - code that imported internal modules must import from `jevstiller` (or use the `_`-prefixed module);
+  - `Jevstiller`'s options after `data_dir` are keyword-only;
+  - `train_pool` is exported from `jevstiller`.
+- **Data directories** from 0.2.0 work as they are. Existing rows keep their calibration split; new rows are split per request.
 
 - **Security audit run 3** (2026-09-25; [docs/security.md](docs/security.md)): fixes with regression tests in `tests/test_audit_run3.py`.
   - **The audit now scores what was served.** The drift monitor, the status report and the status page measured agreement by re-scoring the audit window with the current production student, which had since been trained on most of those rows. That overstated agreement (about 1.6x less disagreement with default settings) and could miss a broken budget. The audit now uses each audit row's recorded answer from the version in production.

@@ -11,7 +11,7 @@ the base URL changes.
 ```bash
 export JEVSTILLER_ADMIN_TOKEN=$(openssl rand -hex 32)      # enables the admin API and /metrics
 docker run -d --name jevstiller -p 8080:8080 -v jevstiller-data:/data \
-  -e JEVSTILLER_ADMIN_TOKEN ghcr.io/tomerglick57/jevstiller:0.2.0
+  -e JEVSTILLER_ADMIN_TOKEN ghcr.io/tomerglick57/jevstiller:0.3.0
 curl -s localhost:8080/readyz
 ```
 

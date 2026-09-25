@@ -1,6 +1,6 @@
 [project]
 name = "jevstiller"
-version = "0.2.0"
+version = "0.3.0"
 description = "Distill a repeated Jev classification task into a local model, on the fly — same answers, your hardware."
 dynamic = ["readme"]
 requires-python = ">=3.10"
