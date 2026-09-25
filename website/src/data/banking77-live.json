@@ -1,0 +1,63 @@
+{
+ "source": "experiments/run.py --dataset banking77 --teacher jev --encoder small --target 0.98 (tag live-bound), replayed against live Jev (jev-1.13.0) on 2026-09-25; held-out evaluation slice of 2,000 messages. See docs/benchmarks.md.",
+ "target": 0.98,
+ "classes": 77,
+ "messages": 11083,
+ "held_out": 2000,
+ "points": [
+  {
+   "messages": 300,
+   "answered_locally": 0.0,
+   "agreement": null,
+   "student": null
+  },
+  {
+   "messages": 500,
+   "answered_locally": 0.0,
+   "agreement": null,
+   "student": null
+  },
+  {
+   "messages": 1000,
+   "answered_locally": 0.0,
+   "agreement": null,
+   "student": null
+  },
+  {
+   "messages": 2000,
+   "answered_locally": 0.4535,
+   "agreement": 0.9975,
+   "student": "student:v1"
+  },
+  {
+   "messages": 3000,
+   "answered_locally": 0.642,
+   "agreement": 0.9925,
+   "student": "student:v2"
+  },
+  {
+   "messages": 5000,
+   "answered_locally": 0.662,
+   "agreement": 0.9945,
+   "student": "student:v4"
+  },
+  {
+   "messages": 7500,
+   "answered_locally": 0.679,
+   "agreement": 0.9935,
+   "student": "student:v6"
+  },
+  {
+   "messages": 10000,
+   "answered_locally": 0.6895,
+   "agreement": 0.994,
+   "student": "student:v9"
+  },
+  {
+   "messages": 11083,
+   "answered_locally": 0.707,
+   "agreement": 0.9945,
+   "student": "student:v10"
+  }
+ ]
+}

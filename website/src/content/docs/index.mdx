@@ -16,6 +16,7 @@ hero:
 ---
 
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+import ResultsChart from '../../components/ResultsChart.astro';
 
 ```text
 before   your services ──► Jev
@@ -23,6 +24,14 @@ before   your services ──► Jev
 after    your services ──► Jevstiller ─┬─► local model   most requests, in milliseconds
          (one env var)                 └─► Jev           unsure, novel, or the 2% audit
 ```
+
+## What it looks like
+
+Every message goes to Jev at first. As Jev's answers come in, a student is trained, checked and promoted, and the
+share Jevstiller answers itself climbs, while agreement with Jev stays above the target. Local answers take
+~16 ms at the median, against Jev's ~300 ms, and accuracy on the dataset's own labels matched Jev's (78.5%).
+
+<ResultsChart />
 
 <CardGrid>
 	<Card title="No code changes" icon="rocket">
@@ -39,7 +48,7 @@ after    your services ──► Jevstiller ─┬─► local model   most requ
 	</Card>
 	<Card title="Self-hosted" icon="setting">
 		One container on CPU, for many services and tenants. Keys are never stored, only questions Jev accepted are
-		learned, and it has been through two security audits.
+		learned, and it has been through three security audits.
 	</Card>
 </CardGrid>
 
@@ -48,10 +57,6 @@ after    your services ──► Jevstiller ─┬─► local model   most requ
 Jev is fast, cheap and typed. It is also a ceiling: **1,200 requests a minute** per key, ~300 ms per answer,
 hosted only. Jevstiller is for the workload that outgrows that: bursts, backlogs, latency budgets in
 milliseconds, or not wanting every classification to depend on one external API.
-
-Against live Jev, in a replay of Banking77 (77 customer-support intents), the local model answered **70.7% of
-held-out messages at 99.45% agreement with Jev** (target 98%), on CPU, and kept Jev's accuracy on the dataset's
-labels. Local answers take ~16 ms at the median. [How that was measured →](/project/benchmarks/)
 
 <Aside type="caution" title="Agreement with Jev is not accuracy">
 If Jev is wrong, the student is wrong the same way. Every number Jevstiller reports is agreement with the

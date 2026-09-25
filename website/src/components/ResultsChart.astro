@@ -1,0 +1,166 @@
+---
+// One task learned live from Jev (Banking77 replay): how much is answered locally as it learns, and agreement
+// with Jev against the target. Rendered at build time as an inline SVG: no client-side JavaScript.
+import data from '../data/banking77-live.json';
+
+const W = 640, H = 340;
+const left = 58, right = 608;                       // plot area, x
+const top1 = 24, bottom1 = 190;                     // panel 1: answered locally, 0-100%
+const top2 = 236, bottom2 = 300;                    // panel 2: agreement, 97-100%
+const xMax = 11_500;
+const x = (m: number) => left + (m / xMax) * (right - left);
+const y1 = (v: number) => bottom1 - v * (bottom1 - top1);
+const aLo = 0.97, aHi = 1.0;
+const y2 = (v: number) => bottom2 - ((v - aLo) / (aHi - aLo)) * (bottom2 - top2);
+
+const pts = data.points;
+const local = pts.map((p) => [x(p.messages), y1(p.answered_locally)] as const);
+const localLine = [[x(0), y1(0)], ...local].map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(' ');
+const localArea = `${x(0)},${y1(0)} ${localLine} ${local.at(-1)![0].toFixed(1)},${y1(0)}`;
+const agree = pts.filter((p) => p.agreement != null).map((p) => [x(p.messages), y2(p.agreement!)] as const);
+const agreeLine = agree.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(' ');
+const firstStudent = pts.find((p) => p.student)!.messages;
+const learnEnd = x((pts.filter((p) => !p.student).at(-1)!.messages + firstStudent) / 2);
+const last = pts.at(-1)!;
+const agreements = pts.filter((p) => p.agreement != null).map((p) => p.agreement!);
+const pct = (v: number, d = 1) => `${(v * 100).toFixed(d)}%`;
+const xTicks = [0, 2500, 5000, 7500, 10000];
+const fmt = (n: number) => n.toLocaleString('en-US');
+---
+
+<figure class="results">
+	<svg viewBox={`0 0 ${W} ${H}`} role="img" aria-labelledby="rc-title rc-desc">
+		<title id="rc-title">One task, learned live from Jev</title>
+		<desc id="rc-desc">
+			Over {fmt(data.messages)} messages, the share answered locally rises from 0% to {pct(last.answered_locally)},
+			while agreement with Jev stays between {pct(Math.min(...agreements), 2)} and {pct(Math.max(...agreements), 2)}, above
+			the {pct(data.target, 0)} target.
+		</desc>
+
+		<!-- panel 1: answered locally -->
+		<rect class="learning" x={x(0)} y={top1} width={learnEnd - x(0)} height={bottom1 - top1} />
+		<text class="note" x={x(0) + 8} y={top1 + 16}>learning:</text>
+		<text class="note" x={x(0) + 8} y={top1 + 30}>all to Jev</text>
+		{[0, 0.25, 0.5, 0.75, 1].map((v) => (
+			<>
+				<line class="grid" x1={left} x2={right} y1={y1(v)} y2={y1(v)} />
+				<text class="tick" x={left - 8} y={y1(v) + 4} text-anchor="end">{pct(v, 0)}</text>
+			</>
+		))}
+		<polygon class="area" points={localArea} />
+		<polyline class="local" points={localLine} />
+		{local.map(([a, b]) => <circle class="local-pt" cx={a} cy={b} r="3.5" />)}
+		<text class="value local-text" x={local.at(-1)![0] - 4} y={local.at(-1)![1] - 12} text-anchor="end">
+			{pct(last.answered_locally)} answered locally
+		</text>
+		<text class="axis" x={left} y={top1 - 8}>Answered locally, without calling Jev</text>
+
+		<!-- panel 2: agreement -->
+		{[0.97, 0.98, 0.99, 1].map((v) => (
+			<>
+				<line class={v === data.target ? 'target' : 'grid'} x1={left} x2={right} y1={y2(v)} y2={y2(v)} />
+				<text class="tick" x={left - 8} y={y2(v) + 4} text-anchor="end">{pct(v, 0)}</text>
+			</>
+		))}
+		<text class="target-text" x={right} y={y2(data.target) - 6} text-anchor="end">target {pct(data.target, 0)}</text>
+		<polyline class="agree" points={agreeLine} />
+		{agree.map(([a, b]) => <circle class="agree-pt" cx={a} cy={b} r="3.5" />)}
+		<text class="axis" x={left} y={top2 - 12}>Agreement with Jev</text>
+		<text class="value agree-text" x={agree.at(-1)![0] - 4} y={agree.at(-1)![1] - 9} text-anchor="end">
+			{pct(last.agreement!, 2)}
+		</text>
+
+		<!-- shared x axis -->
+		{xTicks.map((m) => (
+			<text class="tick" x={x(m)} y={bottom2 + 18} text-anchor="middle">{fmt(m)}</text>
+		))}
+		<text class="axis" x={(left + right) / 2} y={H - 4} text-anchor="middle">messages seen</text>
+	</svg>
+	<figcaption>
+		A replay of Banking77 ({data.classes} customer-support intents) through Jevstiller against live Jev, on CPU with
+		the default encoder, target agreement {pct(data.target, 0)}. Both lines are measured on{' '}
+		{fmt(data.held_out)} held-out messages labelled by Jev. <a href="/project/benchmarks/">How it was measured →</a>
+	</figcaption>
+</figure>
+
+<style>
+	.results {
+		margin: 1.5rem 0 2.5rem;
+		max-width: 44rem;
+	}
+	svg {
+		width: 100%;
+		height: auto;
+		display: block;
+		font-family: var(--sl-font, system-ui, sans-serif);
+	}
+	.grid {
+		stroke: var(--sl-color-gray-5);
+		stroke-width: 1;
+	}
+	.target {
+		stroke: var(--sl-color-orange);
+		stroke-width: 1.5;
+		stroke-dasharray: 5 4;
+	}
+	.learning {
+		fill: var(--sl-color-gray-6);
+	}
+	.area {
+		fill: var(--sl-color-accent-low);
+		opacity: 0.6;
+	}
+	.local {
+		fill: none;
+		stroke: var(--sl-color-accent);
+		stroke-width: 2.5;
+		stroke-linejoin: round;
+	}
+	.local-pt {
+		fill: var(--sl-color-accent);
+	}
+	.agree {
+		fill: none;
+		stroke: var(--sl-color-green);
+		stroke-width: 2.5;
+		stroke-linejoin: round;
+	}
+	.agree-pt {
+		fill: var(--sl-color-green);
+	}
+	text {
+		fill: var(--sl-color-gray-3);
+		font-size: 12px;
+	}
+	.tick {
+		font-size: 11px;
+	}
+	.note {
+		font-size: 11px;
+		fill: var(--sl-color-gray-3);
+	}
+	.axis {
+		fill: var(--sl-color-gray-2);
+		font-size: 12.5px;
+		font-weight: 600;
+	}
+	.value {
+		font-size: 13px;
+		font-weight: 700;
+	}
+	.local-text {
+		fill: var(--sl-color-accent-high);
+	}
+	.agree-text {
+		fill: var(--sl-color-green-high);
+	}
+	.target-text {
+		fill: var(--sl-color-orange);
+		font-size: 11px;
+	}
+	figcaption {
+		margin-top: 0.5rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+</style>
