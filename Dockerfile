@@ -25,8 +25,9 @@ ENV JEVSTILLER_DATA_DIR=/data \
 RUN if [ -n "$PRELOAD_ENCODER" ]; then \
       python -c "from jevstiller import load_encoder; load_encoder('${PRELOAD_ENCODER}', backend='onnx', device='cpu')"; \
     fi && chmod -R a+rX /models
-# With a baked-in encoder, never contact the model hub at runtime (empty, i.e. off, when nothing was preloaded).
-ENV JEVSTILLER_ENCODER=${PRELOAD_ENCODER} \
+# With a baked-in encoder, never contact the model hub at runtime (empty, i.e. off, when nothing was preloaded:
+# then the default encoder downloads on first start).
+ENV JEVSTILLER_ENCODER=${PRELOAD_ENCODER:-small} \
     HF_HUB_OFFLINE=${PRELOAD_ENCODER:+1}
 USER jevstiller
 VOLUME /data

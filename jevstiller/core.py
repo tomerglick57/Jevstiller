@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import math
+import re
 import shutil
 import threading
 import time
@@ -96,6 +97,15 @@ class TrainReport:
     reason: str
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _inert(x) -> str:
+    """`x` as text with control characters escaped: class names come from callers, and the report is printed
+    to operators' terminals (`jevstiller admin status`), where escape sequences would run."""
+    return _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", str(x))
+
+
 @dataclass
 class Status:
     task: str
@@ -156,7 +166,7 @@ class Status:
             line = (f"Waiting for a first student: train {r['train'][0]:,}/{r['train'][1]:,}   "
                     f"calib {r['calib'][0]:,}/{r['calib'][1]:,}")
             if r["rare"]:
-                rare = ", ".join(f"{c} {n}" for c, n in sorted(r["rare"].items(), key=lambda kv: kv[1]))
+                rare = ", ".join(f"{_inert(c)} {n}" for c, n in sorted(r["rare"].items(), key=lambda kv: kv[1]))
                 line += f"\n  classes below {r['min_per_class']}: {rare}"
                 line += ("   (blocking: set Config.rare_classes='defer' to train without them)" if r["blocked_by_rare"]
                          else "   (will be deferred to the teacher)")
@@ -167,9 +177,10 @@ class Status:
                      f"expected coverage {p['expected_coverage']:.1%}  disagreement bound {p['disagreement_ub']:.2%}"
                      " of requests")
             if p.get("deferred_labels"):
-                L.append(f"  rare classes, always sent to the teacher: {', '.join(p['deferred_labels'])}")
+                L.append(f"  rare classes, always sent to the teacher: {', '.join(map(_inert, p['deferred_labels']))}")
         for e in self.events[-5:]:
-            L.append(f"  event: {e['kind']} " + " ".join(f"{k}={v}" for k, v in e.items() if k not in ('kind', 'ts')))
+            L.append(f"  event: {_inert(e['kind'])} "
+                     + " ".join(f"{_inert(k)}={_inert(v)}" for k, v in e.items() if k not in ('kind', 'ts')))
         return "\n".join(L)
 
 

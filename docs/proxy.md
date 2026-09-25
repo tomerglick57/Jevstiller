@@ -69,6 +69,7 @@ Extra headers on every `/v1/systemone` response:
   - A 2xx from any other path (`/v1/models`, a public schema) does not count.
   - A 401/403 from Jev on any path revokes the key at once.
   - Until a key is accepted, nothing is answered locally for it and no task is created from its requests. They are forwarded first and recorded only after Jev's successful answer.
+  - For any key, a new question counts towards becoming a task (`admit_after`) only when Jev answered it: questions Jev rejects never become tasks.
 - **Tenancy.**
   - `shared` (default): every key's tasks are shared, so all of a company's services benefit.
   - `per_key`: each key's tasks, data and students are separate.
@@ -79,15 +80,15 @@ Extra headers on every `/v1/systemone` response:
 | Situation | Proxy response |
 |---|---|
 | Jev returns any status | returned unchanged (body, `x-typesafe-request-id`, `retry-after*`) |
-| Jev returned 429 with `retry-after` | the proxy answers that key's forwarded requests with 429 + `retry-after` until then, without calling Jev (local answers continue) |
+| Jev returned 429 with `retry-after` | the proxy answers that key's forwarded requests with 429 + `retry-after` until then (at most 1 h), without calling Jev (local answers continue) |
 | Jev doesn't answer within `upstream_timeout_s` (9 s) | 504 |
-| Jev unreachable | 502 |
+| Jev unreachable, or the request can't be sent | 502 |
 | More than `max_upstream_inflight` (256) forwarded requests in flight | 503, `retry-after: 1` |
 | Requests arrive faster than the encoder can embed them: a local answer would wait more than `max_encoder_wait_ms` (200 ms) | forwarded to Jev as it is (not routed or recorded; `questions_total{outcome="overloaded"}`), so the proxy is never much slower than Jev. The encoder is the local path's ceiling: ~150–340 texts/s for bge-small on 16 CPU cores, far more on a GPU. |
 | Any error inside the proxy's own logic, or a body it can't parse | the request is forwarded instead |
 | Network not in `allow_networks` | 403 |
 | Missing or wrong `x-jevstiller-token` (when `access_token` is set) | 401 |
-| More than one `Authorization` header, or `.`/`..` path segments | 400 |
+| More than one `Authorization` header; `.`/`..` path segments; control characters or an encoded `?`/`#` in the path | 400 |
 | Body over `max_body_mb` (declared or streamed) | 413 |
 
 Errors the proxy generates use Jev's shape (`{"detail": "..."}` with a `jvs_` request id), so the SDK raises the usual `TypeSafeAPIError` subclasses and retries 429/5xx as it would against Jev.

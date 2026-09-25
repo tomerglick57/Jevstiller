@@ -432,14 +432,16 @@ class SampleStore:
         return {t: TeacherOutput(l, json.loads(p), c or 0.0, tok or 0, cost or 0.0) for t, l, p, c, tok, cost in rows}
 
     def close(self) -> None:
-        """Commit everything queued, stop the writer, close every connection."""
+        """Commit everything queued, stop the writer, close every connection. Waits for writes in progress
+        (e.g. text retention): closing a connection another thread is using crashes the process. Readers must
+        not overlap a close (the task manager holds an engine while anything uses it)."""
         with self._wcv:
             self._stopping = True
             self._wcv.notify_all()
             writer = self._writer
         if writer is not None:
             writer.join()
-        with self._conns_lock:
+        with self._write_lock, self._conns_lock:
             self._closed = True
             conns, self._conns = self._conns, []
         for c in conns:

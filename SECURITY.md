@@ -1,6 +1,6 @@
 # Security
 
-The threat model, what Jevstiller stores, how API keys are handled, how to restrict access to the proxy, and the results of the 2026-09-24 security audit are in [docs/security.md](docs/security.md).
+The threat model, what Jevstiller stores, how API keys are handled, how to restrict access to the proxy, and the results of the security audits (2026-09-24, 2026-09-25) are in [docs/security.md](docs/security.md).
 
 In short:
 - Jevstiller stores your traffic (request text, embeddings, Jev's answers) under `data_dir`. Treat that directory like a database of your traffic. Use `store_text = false` or `text_retention_days` if text must not be kept.

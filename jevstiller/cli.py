@@ -17,7 +17,9 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
+from urllib.parse import quote
 
 
 class JsonFormatter(logging.Formatter):
@@ -64,6 +66,7 @@ def _serve(a: argparse.Namespace) -> None:
     from .manager import Admission, TaskManager
     from .scheduler import TrainScheduler
     from .server import KeyRegistry, ProxySettings, create_app, load_salt
+    from .settings import redact_url
     from .task import Config
 
     s = _settings(a)
@@ -80,6 +83,14 @@ def _serve(a: argparse.Namespace) -> None:
     if s.tenants:
         log.info("tenants map: %d keys -> %d tenants; other keys use tenancy=%s",
                  len(s.tenants), len(set(s.tenants.values())), s.tenancy)
+    # the effective controls, so a setting that didn't take is visible in the first lines of the log
+    log.info("access: token %s, client networks %s, trusted proxies %s, /metrics %s",
+             "required" if s.access_token else "not required", ", ".join(s.allow_networks) or "any",
+             ", ".join(s.trust_forwarded_for) or "none",
+             "public" if s.metrics_public else "admin token" if s.admin_token else "off")
+    log.info("request text: %s", "not stored" if not s.store_text else
+             f"stored, blanked after {s.text_retention_days:g} days" if s.text_retention_days else
+             "stored until the task is deleted")
     salt = load_salt(data)
     encoder = BatchingEncoder(load_encoder(s.encoder, backend=s.backend, device=s.device))
     encoder.encode(["warm up"])
@@ -106,21 +117,29 @@ def _serve(a: argparse.Namespace) -> None:
                              max_body_bytes=int(s.max_body_mb * 2**20), max_questions=s.max_questions,
                              max_encoder_wait_ms=s.max_encoder_wait_ms)
 
+    import tempfile
+    checked = {"at": -1e9, "writable": True}
+
     def ready() -> dict[str, bool]:
-        probe = data / ".ready-probe"
-        try:
-            probe.write_bytes(b"ok")
-            probe.unlink()
-            writable = True
-        except OSError:
-            writable = False
-        return {"data_dir_writable": writable, "encoder": encoder.dim > 0}
+        # /readyz needs no token: write at most once a second, and to a file of this check's own (with one fixed
+        # name, concurrent probes deleted each other's file and reported the disk unwritable)
+        now = time.monotonic()
+        if now - checked["at"] >= 1.0:
+            try:
+                with tempfile.NamedTemporaryFile(dir=data, prefix=".ready-probe-") as f:
+                    f.write(b"ok")
+                    f.flush()
+                writable = True
+            except OSError:
+                writable = False
+            checked.update(at=now, writable=writable)
+        return {"data_dir_writable": checked["writable"], "encoder": encoder.dim > 0}
 
     app = create_app(manager, settings, KeyRegistry(salt, s.key_ttl_s), admin_token=s.admin_token,
                      metrics_public=s.metrics_public, ready=ready,
                      closers=[lambda: scheduler.shutdown(wait=True, cancel_futures=True), encoder.close])
-    log.info("jevstiller serving on %s:%d, upstream %s, tenancy %s, admin API %s", s.host, s.port, s.upstream,
-             s.tenancy, "on" if s.admin_token else "off")
+    log.info("jevstiller serving on %s:%d, upstream %s, tenancy %s, admin API %s", s.host, s.port,
+             redact_url(s.upstream), s.tenancy, "on" if s.admin_token else "off")
     # X-Forwarded-For is honoured only from proxies the operator lists (it decides allow_networks).
     # Idle connections are kept 75 s, not uvicorn's 5 s: clients (httpx: 5 s) and load balancers (60 s) reuse
     # them for about that long, and a server closing first drops the request in flight (37 in 1.15M in the soak).
@@ -168,17 +187,20 @@ def _admin(a: argparse.Namespace) -> None:
     if not token:
         raise SystemExit("an admin token is required (--token, --token-file or JEVSTILLER_ADMIN_TOKEN)")
     base = a.url.rstrip("/") + "/jevstiller/v1"
+    if a.action not in ("tasks", "stats") and not a.key:
+        raise SystemExit(f"`admin {a.action}` needs a {'tenant' if a.action == 'delete-tenant' else 'task key'}")
+    k = quote(a.key or "", safe="")                    # a name with # or ? must not address another tenant
     calls = {
         "tasks": ("GET", "/tasks", None),
-        "status": ("GET", f"/tasks/{a.key}", None),
-        "versions": ("GET", f"/tasks/{a.key}/versions", None),
-        "mode": ("POST", f"/tasks/{a.key}/mode", {"mode": a.value}),
-        "target": ("POST", f"/tasks/{a.key}/target", {"target_agreement": _num(a.value)}),
-        "train": ("POST", f"/tasks/{a.key}/train", None),
-        "promote": ("POST", f"/tasks/{a.key}/promote", {"version": a.value}),
-        "rollback": ("POST", f"/tasks/{a.key}/rollback", None),
-        "delete": ("DELETE", f"/tasks/{a.key}", None),
-        "delete-tenant": ("DELETE", f"/tenants/{a.key}", None),
+        "status": ("GET", f"/tasks/{k}", None),
+        "versions": ("GET", f"/tasks/{k}/versions", None),
+        "mode": ("POST", f"/tasks/{k}/mode", {"mode": a.value}),
+        "target": ("POST", f"/tasks/{k}/target", {"target_agreement": _num(a.value)}),
+        "train": ("POST", f"/tasks/{k}/train", None),
+        "promote": ("POST", f"/tasks/{k}/promote", {"version": a.value}),
+        "rollback": ("POST", f"/tasks/{k}/rollback", None),
+        "delete": ("DELETE", f"/tasks/{k}", None),
+        "delete-tenant": ("DELETE", f"/tenants/{k}", None),
         "stats": ("GET", "/stats", None),
     }
     method, path, body = calls[a.action]

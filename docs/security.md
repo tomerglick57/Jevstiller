@@ -26,7 +26,7 @@ Controls:
 - `store_text = false`: keep no request text at all.
 - `text_retention_days`: blank text older than N days. The old text is securely deleted: `secure_delete` plus a WAL truncate.
 - `jevstiller admin delete <key>` / `delete-tenant <tenant>`: remove a task or a tenant's tasks completely.
-- Back up the data directory as you would a database of your traffic (`jevstiller backup`).
+- Back up the data directory as you would a database of your traffic (`jevstiller backup`). Backups and restored data directories get the same modes (files 0600, directories 0700). Text retention doesn't reach backups: rotate them within the retention period.
 
 ## API keys
 
@@ -49,9 +49,11 @@ By default anyone who can reach the port can use it, with their own Jev key. Res
 | TLS | `ssl_certfile` / `ssl_keyfile`, or a reverse proxy in front |
 | `admin_token` / `admin_token_file` | Enables the admin API (`/jevstiller/v1/*`) and gates `/metrics`. Without it both are off (404). |
 
+An empty token, token file or access-control variable stops startup rather than switching the control off, and the startup log names the controls in effect.
+
 Always enforced, for every path:
 - a body limit (`max_body_mb`, 4 MiB), checked on the declared length and while streaming;
-- no `.`/`..` path segments;
+- no `.`/`..` path segments, and no control characters or encoded `?`/`#` in the path; forwarded paths must stay under the `upstream` URL's path;
 - at most `max_questions` (32) distinct questions routed per request;
 - task caps (`max_tasks` 10,000, `max_tasks_per_tenant` 1,000).
 
@@ -83,9 +85,40 @@ The audit also verified these properties:
 - Header CR/LF injection is impossible.
 - 500s carry no stack traces.
 
+Dependency floors were raised (`h11 >= 0.16`, `starlette >= 1.3.1`) and CI actions pinned by SHA in `40bced8`.
+
+## Security audit, 2026-09-25 (run 2)
+
+A second run against commit `a8b75d6` weighted toward what run 1 did not cover: the admin API, `/metrics`, settings, backup/restore, the CLI, the deployment files, and the proxy changes since run 1 (encoder backpressure, upstream pools and retry, keep-alive, task unloading, drift restarts, training caps). Eight reviewers, adversarial validation, and independent verification of every finding, all against local mocks. Fifteen findings were confirmed, and all are fixed with regression tests in `tests/test_audit_run2.py`.
+
+No finding lets a caller read another tenant's data, obtain keys, or reach the admin API. Keys, tenant isolation, admin authentication and request framing held under every probe.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 1 | Medium | One large request (or one stalled encode) latched encoder backpressure on: every request was forwarded unrouted, for every tenant, until restart | The encoder sees at most 32k characters of a text; an idle encoder is never "overloaded", so the estimate recovers |
+| 2 | Medium | A non-ASCII header byte made the proxy answer 500 and never release the tasks it routed: the loaded-engine cap stopped holding and the tasks could not be deleted until restart | Raw header bytes are forwarded; any forwarding failure is a 502; routed engines are released whatever happens (shielded from cancellation); `retry-after` must be finite and is capped at 1 h |
+| 3 | Medium | Closing a task's store while text retention (or an admin call) was using it crashed the process (SIGSEGV) | Retention and admin calls hold the engine like requests do; a store closes only after writes in progress |
+| 4 | Medium | Privacy settings were silently ignored: `store_text = false` under `[engine]`, quoted booleans (`"false"` is true), `text_retention_days = 0` | Every value is type-checked; either `store_text = false` wins; retention must be > 0; the startup log says whether text is stored |
+| 5 | Low | Run 1's dot-segment check was bypassable with a tab, CR or encoded `?`/`#` (e.g. `/.%09./x`), escaping a path prefix in `upstream` | Control characters and encoded `?`/`#` are rejected; the forwarded path must stay under the upstream path |
+| 6 | Low | Concurrent `/readyz` calls (no token needed) raced on one probe file and made readiness flap | A unique probe file per check, at most once a second |
+| 7 | Low | Before Python 3.14 (and in the Docker image), training workers were forked from the live server and held its sockets | Workers start with forkserver (spawn where there is none) |
+| 8 | Low | An empty token file or environment variable switched caller access control off, or wiped the file's allowlist | Empty values stop startup; the effective controls are logged |
+| 9 | Low | `key_ttl_s = inf` made every made-up key count as accepted | An unknown key is never accepted; `key_ttl_s` must be finite |
+| 10 | Low | `trust_forwarded_for` entries with host bits passed validation but were ignored by uvicorn, so `allow_networks` checked the load balancer | Validated strictly; uvicorn floor raised to 0.31 (CIDR support) |
+| 11 | Low | The tenants-file error printed the start of a raw key pasted in place of its hash; upstream credentials were logged and printed | Errors name the tenant; credentials in `upstream` are redacted |
+| 12 | Low | `backup` / `restore` ignored the 0600/0700 policy | Owner-only modes for backups and restored data dirs |
+| 13 | Low | Caller-chosen class names put terminal escape sequences into `jevstiller admin status` | Class names and event values are shown with control characters escaped |
+| 14 | Low | A caller could create tasks with questions Jev rejects, filling the tenant's task cap at no cost | Only questions Jev answered count towards admission |
+| 15 | Info | `jevstiller admin delete-tenant 'a#b'` deleted tenant `a` | Names are URL-escaped; the argument is required |
+
+Also fixed: duplicate `server`/`date` response headers; `ci.yml` runs with read-only permissions; `docker build --build-arg PRELOAD_ENCODER=` no longer breaks startup.
+
 **Open hardening items:**
 - No Host-header allowlist (DNS rebinding reaches an unauthenticated proxy from a browser; the access token stops it).
-- Raise dependency floors (`h11 >= 0.16`, `starlette >= 0.40`) and pin CI actions by SHA.
 - A key Jev revokes keeps local answers until one of its requests is forwarded again (at least the audit share) or `key_ttl_s` expires.
+- The one retry of a forwarded request can re-send a POST Jev already read (billed to the caller's own key).
+- No per-key fairness for upstream connections or engine loads; no rate limit on admin-token failures.
+- The Kubernetes manifest has no NetworkPolicy, and docker-compose publishes on all interfaces: restrict both to your network.
+- If Jev ever accepted a second credential (a query `api_key`, an `x-api-key` header), a 2xx earned with it would accept the bearer too; today Jev and its SDK use only the bearer.
 
-One audit run finds only part of what several runs find. The admin API, metrics and settings code were added after it and should be covered by the next run.
+One audit run finds only part of what several runs find. Run 2's availability and key-handling reviews were cut short, so a third run should weight toward availability and resource limits.

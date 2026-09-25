@@ -410,7 +410,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.1" },
     { name = "transformers", marker = "extra == 'torch'", specifier = ">=4.36" },
     { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.7.1" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.29" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.31" },
 ]
 provides-extras = ["jev", "server", "onnx", "gpu", "torch", "all", "dev"]
 

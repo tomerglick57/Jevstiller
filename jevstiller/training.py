@@ -11,6 +11,7 @@ whether it runs in a thread or another process. `threads` caps it.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import threading
 import time
@@ -193,6 +194,10 @@ def train_pool(workers: int = 2, niceness: int = 10) -> ProcessPoolExecutor:
     the scheduler always prefers serving threads: training soaks up idle CPU instead of competing for it.
     Budget roughly `workers * Config.train_threads` cores for training.
 
-    Like any process pool, it re-imports the main module in each worker: create it under
-    `if __name__ == "__main__":` in scripts."""
-    return ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(niceness, os.getpid()))
+    Workers start from a fresh interpreter (forkserver, or spawn where there is none), never by forking the
+    server: before Python 3.14, Linux's default fork copied the live, multi-threaded server into each worker,
+    its sockets included (security audit run 2). Like any such pool, it re-imports the main module in each
+    worker: create it under `if __name__ == "__main__":` in scripts."""
+    method = "forkserver" if "forkserver" in multiprocessing.get_all_start_methods() else "spawn"
+    return ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context(method), initializer=_init_worker,
+                               initargs=(niceness, os.getpid()))

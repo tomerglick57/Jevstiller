@@ -29,7 +29,9 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
+import re
 import secrets
 import threading
 import time
@@ -60,7 +62,8 @@ SYSTEM_ONE = "/v1/systemone"
 REQUEST_ID = "x-typesafe-request-id"
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
               "transfer-encoding", "upgrade", "host", "content-length"}
-RESPONSE_DROP = HOP_BY_HOP | {"content-encoding"}         # httpx hands us the decoded body
+RESPONSE_DROP = HOP_BY_HOP | {"content-encoding",         # httpx hands us the decoded body
+                              "server", "date"}           # uvicorn sets its own: no duplicate headers
 PROXY_TOKEN_HEADER = "x-jevstiller-token"
 FORWARD_DROP = HOP_BY_HOP | {PROXY_TOKEN_HEADER}          # the proxy's own credential never reaches Jev
 KNOWN_FIELDS = {"state", "model", "questions"}
@@ -69,6 +72,7 @@ PROBE_PATHS = ("/healthz", "/readyz")                     # GET/HEAD need no acc
 ALL_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 MAX_DETAIL_QUESTIONS = 64                                 # beyond this, x-jevstiller-detail is a summary
 UPSTREAM_POOL = 16                                        # connections per upstream client (see Proxy)
+MAX_RETRY_AFTER_S = 3600.0                                # an upstream back-off longer than this is capped
 
 
 @dataclass
@@ -112,7 +116,8 @@ class KeyRegistry:
 
     def verified(self, kh: str | None) -> bool:
         with self._lock:
-            return kh is not None and time.monotonic() - self._verified.get(kh, -1e18) < self.ttl_s
+            t = self._verified.get(kh) if kh is not None else None
+            return t is not None and time.monotonic() - t < self.ttl_s
 
     def accept(self, kh: str | None) -> None:
         if kh:
@@ -152,12 +157,15 @@ def load_salt(data_dir: str | Path, create: bool = True) -> bytes:
 
 
 def _retry_after_s(headers: Mapping[str, str]) -> float:
+    """The upstream's requested back-off in seconds: 0 if absent or unparseable, at most MAX_RETRY_AFTER_S."""
     try:
         if "retry-after-ms" in headers:
-            return float(headers["retry-after-ms"]) / 1000
-        return float(headers.get("retry-after", 0))
+            s = float(headers["retry-after-ms"]) / 1000
+        else:
+            s = float(headers.get("retry-after", 0))
     except ValueError:
         return 0.0
+    return min(s, MAX_RETRY_AFTER_S) if math.isfinite(s) and s > 0 else 0.0
 
 
 def _bearer(request: Request) -> str | None:
@@ -175,6 +183,22 @@ def _error(status: int, detail: str, retry_after: float | None = None) -> JSONRe
 def _peakedness(probs: Mapping[str, float]) -> float:
     k = len(probs)
     return 1.0 if k < 2 else max(0.0, (k * max(probs.values()) - 1.0) / (k - 1.0))
+
+
+def _under(path: str, base: str) -> bool:
+    """`path` is `base` or below it (no dot segments can remain in an httpx-merged path)."""
+    return not base or path == base or path.startswith(base + "/")
+
+
+def _usable(a: Any) -> bool:
+    """Jev's answer to one question is a usable choice answer."""
+    return isinstance(a, dict) and a.get("type") == "choice" and isinstance(a.get("probabilities"), dict)
+
+
+def _answered(answer: Mapping, groups: Mapping[str, list[str]]) -> set[str]:
+    """The specs whose question Jev answered usably."""
+    answers = answer.get("answers") or {}
+    return {spec for spec, names in groups.items() if _usable(answers.get(names[0]))}
 
 
 def _no_cookies() -> CookieJar:
@@ -221,6 +245,7 @@ class Proxy:
         # httpcore's pool does work per connection per waiting request on every event: one pool of 256 forwarded
         # ~90 req/s at 256 callers, 16 pools of 16 ~840 (Jev's own ceiling with 290 ms answers: ~880).
         n = max(1, settings.max_upstream_inflight)
+        self._base_path = httpx.URL(settings.upstream).path.rstrip("/")   # forwarded paths must stay under it
         self.clients = [client] if client is not None else [
             httpx.AsyncClient(base_url=settings.upstream.rstrip("/"), timeout=settings.upstream_timeout_s,
                               cookies=_no_cookies(), limits=httpx.Limits(max_connections=UPSTREAM_POOL,
@@ -251,10 +276,14 @@ class Proxy:
             i = min(range(len(self.clients)), key=self._client_busy.__getitem__)
             self._client_busy[i] += 1
             try:
-                headers = {k: v for k, v in request.headers.items() if k.lower() not in FORWARD_DROP}
+                # raw bytes: header values may hold any byte h11 accepts (obs-text); httpx would encode str
+                # values as ASCII and fail on them
+                headers = [(k, v) for k, v in request.headers.raw if k.decode("latin-1").lower() not in FORWARD_DROP]
                 for attempt in (0, 1):
                     req = self.clients[i].build_request(request.method, request.url.path,
                                                         params=request.query_params, headers=headers, content=body)
+                    if not _under(req.url.path, self._base_path):
+                        return _error(400, "invalid path (jevstiller)")
                     try:
                         resp = await self.clients[i].send(req)
                         break
@@ -273,6 +302,12 @@ class Proxy:
             log.warning("upstream unreachable: %s", type(e).__name__)
             self.metrics.upstream.inc("unreachable")
             return _error(502, "upstream API unreachable (jevstiller)")
+        except Exception:
+            # e.g. httpx.InvalidURL: a request the proxy could not send is a bad gateway, never a 500 that
+            # skips the caller's cleanup
+            log.exception("forwarding failed")
+            self.metrics.upstream.inc("error")
+            return _error(502, "could not forward the request (jevstiller)")
         finally:
             self._upstream_slots += 1
         self.metrics.upstream_latency.observe(time.perf_counter() - t0)
@@ -354,10 +389,12 @@ class Proxy:
             if answer is not None:
                 self.keys.accept(kh)
             if answer is not None and not self._overloaded():       # record it, unless the encoder is saturated
-                routings, _ = await self._route(groups, specs, tenant, req)
+                routings, _ = await self._route(groups, specs, tenant, req, answered=_answered(answer, groups))
                 if routings is not None:                # None: routing failed and released everything
-                    self._defer_all(routings, "key_unverified")
-                    await self._finish(routings, groups, answer, resp, (time.perf_counter() - t0) * 1000)
+                    try:
+                        self._defer_all(routings, "key_unverified")
+                    finally:
+                        await self._finish(routings, groups, answer, resp, (time.perf_counter() - t0) * 1000)
                     log_rec["tasks"] = [r.key for r in routings.values()][:8]
             return self._upstream_reply(resp, {n: "key_unverified" for g in groups.values() for n in g}, t0,
                                         log_rec)
@@ -383,13 +420,23 @@ class Proxy:
             return resp
 
         # to the teacher: the whole request, with the caller's key
-        self._defer_all(routings, "co_deferred")
         t_up = time.perf_counter()
-        resp = await self.forward(request, body, kh)
-        answer = _systemone_answer(resp)
-        if answer is not None:
-            self.keys.accept(kh)                        # refresh
-        await self._finish(routings, groups, answer, resp, (time.perf_counter() - t_up) * 1000)
+        answer = resp = None
+        try:                                            # whatever happens, the routed engines are released
+            self._defer_all(routings, "co_deferred")
+            resp = await self.forward(request, body, kh)
+            answer = _systemone_answer(resp)
+            if answer is not None:
+                self.keys.accept(kh)                    # refresh
+        finally:
+            admitted = await self._finish(routings, groups, answer, resp, (time.perf_counter() - t_up) * 1000)
+        if admitted and answer is not None:             # this answer made them tasks: record it as their first row
+            more, _ = await self._route({s: groups[s] for s in admitted}, specs, tenant, req, answered=set(admitted))
+            if more:
+                try:
+                    self._defer_all(more, "co_deferred")
+                finally:
+                    await self._finish(more, groups, answer, resp, (time.perf_counter() - t_up) * 1000)
         reasons = {}
         for spec, names in groups.items():
             r = routings.get(spec)
@@ -407,7 +454,12 @@ class Proxy:
         enc = self.manager.encoder
         wait = getattr(enc, "expected_wait_s", None)
         per = getattr(enc, "time_per_text_s", None)
+        pending = getattr(enc, "pending", None)
         if not limit or not callable(wait):
+            return False
+        if callable(pending) and pending() == 0 and self._routing == 0:
+            # An idle encoder is not backed up, whatever it measured last. Letting this request through also
+            # refreshes the estimate: one slow batch used to latch the gate shut until restart (audit run 2).
             return False
         # requests already routing wait for a worker thread before they reach the encoder's queue
         ahead = max(wait(), (self._routing + 1) * per()) if callable(per) else wait()
@@ -453,9 +505,13 @@ class Proxy:
         access_log.info(json.dumps(rec, separators=(",", ":")))
 
     async def _route(self, groups: Mapping[str, list[str]], specs: Mapping[str, dict], tenant: str,
-                     req: dict) -> tuple[dict[str, Routing] | None, list[str]]:
+                     req: dict, answered: set[str] | None = None) -> tuple[dict[str, Routing] | None, list[str]]:
         """Route each distinct question once. Returns (routings by spec, specs that can't be tasks), or
-        (None, []) if routing failed unexpectedly (everything routed so far is released)."""
+        (None, []) if routing failed unexpectedly (everything routed so far is released).
+
+        `answered`: the specs Jev has already answered usably (the unverified-key path routes after Jev's
+        answer). Otherwise Jev hasn't answered yet, and questions that aren't tasks yet are not counted towards
+        admission here: `_finish` counts those Jev answers (a question Jev rejects never becomes a task)."""
         routings: dict[str, Routing] = {}
         unsupported: list[str] = []
         self._routing += 1
@@ -472,9 +528,11 @@ class Proxy:
             for spec in groups:
                 q = specs[spec]
                 try:
+                    admit = answered is not None and spec in answered
                     routings[spec] = await anyio.to_thread.run_sync(
-                        lambda q=q: self.manager.route(tenant, q.get("instructions"), q["criteria"], [req["state"]],
-                                                       req["model"], stexts=stexts, X=X))
+                        lambda q=q, admit=admit: self.manager.route(
+                            tenant, q.get("instructions"), q["criteria"], [req["state"]], req["model"],
+                            stexts=stexts, X=X, admit=admit))
                 except ValueError:
                     unsupported.append(spec)            # not a valid task (e.g. one class): Jev decides
         except Exception:
@@ -510,9 +568,18 @@ class Proxy:
             return RuntimeError(f"no usable teacher answer: {e}")
 
     async def _finish(self, routings: Mapping[str, Routing], groups: Mapping[str, list[str]], answer: dict | None,
-                      resp: httpx.Response | Response | None, latency_ms: float) -> None:
+                      resp: httpx.Response | Response | None, latency_ms: float) -> list[str]:
         """Complete every routing (always: it releases the engine) with Jev's answer to its question, or an
-        error, which is not recorded."""
+        error, which is not recorded. Questions not admitted yet count towards admission only if Jev answered
+        them usably; returns the specs that became tasks just now. Shielded from cancellation: an engine that is
+        never released stays loaded and undeletable."""
+        with anyio.CancelScope(shield=True):
+            return await self._finish_all(routings, groups, answer, resp, latency_ms)
+
+    async def _finish_all(self, routings: Mapping[str, Routing], groups: Mapping[str, list[str]],
+                          answer: dict | None, resp: httpx.Response | Response | None,
+                          latency_ms: float) -> list[str]:
+        admitted: list[str] = []
         try:
             tokens = int((answer or {}).get("usage", {}).get("input_tokens") or 0) // max(1, len(routings))
         except Exception:
@@ -521,14 +588,21 @@ class Proxy:
         rid = resp.headers.get(REQUEST_ID) if resp is not None else None
         answers = (answer or {}).get("answers") or {}
         for spec, r in routings.items():
-            if r.engine is None:
-                continue
             first = groups[spec][0]
+            if r.engine is None:
+                if r.uncounted and _usable(answers.get(first)):
+                    try:
+                        if await anyio.to_thread.run_sync(self.manager.observe, r):
+                            admitted.append(spec)
+                    except Exception:
+                        log.exception("admission count for task %s failed", r.key)
+                continue
             out = self._teacher_output(answers.get(first), r.task.labels, tokens, latency_ms, rid, model)
             try:
                 await anyio.to_thread.run_sync(self.manager.complete, r, [out] * len(r.routed.to_teacher), "jev")
             except Exception:
                 log.exception("recording task %s failed", r.key)
+        return admitted
 
     async def _local_response(self, req: dict, groups: Mapping[str, list[str]],
                               routings: Mapping[str, Routing]) -> Response:
@@ -567,6 +641,9 @@ class Proxy:
 
 class _TooLarge(Exception):
     pass
+
+
+_BAD_PATH_CHARS = re.compile(r"[\x00-\x1f\x7f?#]")
 
 
 class AccessMiddleware:
@@ -617,7 +694,9 @@ class AccessMiddleware:
         if sum(1 for k, _ in raw if k.lower() == b"authorization") > 1:
             return await self._refuse("duplicate_auth", 400, "more than one Authorization header",
                                       scope, receive, send)
-        if any(seg in (".", "..") for seg in path.split("/")):
+        if any(seg in (".", "..") for seg in path.split("/")) or _BAD_PATH_CHARS.search(path):
+            # control characters, ? and # (decoded from %xx) would be dropped or split off when the path is
+            # rebuilt into a URL, turning a harmless-looking segment into ".." upstream (audit run 2)
             return await self._refuse("path", 400, "invalid path", scope, receive, send)
         limit = self.settings.max_body_bytes
         lengths = [v for k, v in raw if k.lower() == b"content-length"]

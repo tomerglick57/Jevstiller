@@ -115,7 +115,7 @@ A task's target is `Task.target_agreement` (default 0.98). The disagreement budg
 
 ## `jevstiller serve` settings
 
-One source, three layers. Precedence, lowest to highest: built-in defaults < a TOML file (`--config`, or `JEVSTILLER_CONFIG`) < `JEVSTILLER_<NAME>` environment variables < command-line flags. Unknown keys and invalid values stop startup with an error. `jevstiller config` prints the effective settings (secrets redacted). A complete example is `deploy/jevstiller.toml`.
+One source, three layers. Precedence, lowest to highest: built-in defaults < a TOML file (`--config`, or `JEVSTILLER_CONFIG`) < `JEVSTILLER_<NAME>` environment variables < command-line flags. Unknown keys and invalid values stop startup with an error. That includes a value of the wrong type (`store_text = "false"` is a string, not a boolean), an empty secret, secret file or access-control variable (an unset `JEVSTILLER_ACCESS_TOKEN=` in a compose file), and a retention period of 0 or less: a security or privacy setting either takes effect or stops startup. `jevstiller serve` logs the effective access controls and whether request text is stored. `jevstiller config` prints the effective settings (secrets and credentials in `upstream` redacted). A complete example is `deploy/jevstiller.toml`.
 
 ```toml
 [server]
@@ -146,7 +146,7 @@ mode = "teacher_only"
 Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `JEVSTILLER_ADMIN_TOKEN_FILE`, `JEVSTILLER_STORE_TEXT=false`, …
 - Booleans accept `1/0/true/false/yes/no/on/off`.
 - Lists are comma-separated.
-- `none` unsets an optional value.
+- `none` unsets an optional value, or clears a list set in the file (`JEVSTILLER_ALLOW_NETWORKS=none`). An empty value is an error for secrets, secret files, `allow_networks`, `trust_forwarded_for` and `tenants_file`.
 - `[engine]`, `[tasks]` and `tenants` are file-only.
 
 ### [server]
@@ -171,10 +171,10 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 | `max_upstream_inflight` | `256` | | Concurrent forwarded requests; beyond → 503 `retry-after: 1`. |
 | `tenancy` | `shared` | `--tenancy` | `shared`: one tenant, every key shares tasks. `per_key`: tasks separate per API key. |
 | `tenants` / `tenants_file` | `{}` | `--tenants-file` | Key hash → tenant name (hashes from `jevstiller key-hash`; must be 32 lowercase hex). Unlisted keys follow `tenancy`. |
-| `key_ttl_s` | `3600` | | How long a key stays accepted after Jev last answered a systemone request with it. |
+| `key_ttl_s` | `3600` | | How long a key stays accepted after Jev last answered a systemone request with it. Finite, ≥ 0. |
 | `access_token` / `access_token_file` | none | `--access-token`, `--access-token-file` | Callers must send `x-jevstiller-token`. Never forwarded. |
 | `allow_networks` | `[]` (all) | `--allow-network` (repeat) | Client CIDRs allowed to use the proxy. |
-| `trust_forwarded_for` | `[]` | `--trust-forwarded-for` (repeat) | Proxies whose `X-Forwarded-For` is trusted for `allow_networks`. Empty: the TCP peer is used. |
+| `trust_forwarded_for` | `[]` | `--trust-forwarded-for` (repeat) | Proxies whose `X-Forwarded-For` is trusted for `allow_networks`: addresses or networks without host bits (`10.0.0.5`, `10.0.0.0/24`; `10.0.0.5/24` is an error, since uvicorn would silently ignore it). Empty: the TCP peer is used. |
 | `max_body_mb` | `4.0` | `--max-body-mb` | Larger bodies get 413 (declared or streamed). |
 | `max_questions` | `32` | `--max-questions` | Distinct choice questions routed per request; more → forwarded unrouted. |
 | `max_encoder_wait_ms` | `200` | `--max-encoder-wait-ms` | If a local answer would wait longer than this for the shared encoder (traffic beyond its capacity), forward the request to Jev instead. `0` never forwards for this reason (requests queue). |
@@ -190,9 +190,9 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 | `admit_after` / `admit_window_s` | `50` / `86400` | `--admit-after` | Requests (one per distinct question per request) within the window before a question becomes a task. |
 | `max_tasks` | `10000` | `--max-tasks` | Global task cap (`task_limit`). |
 | `max_tasks_per_tenant` | `1000` | `--max-tasks-per-tenant` | (`tenant_task_limit`) |
-| `idle_ttl_days` | none | | Delete tasks unused this long. |
-| `text_retention_days` | none | `--text-retention-days` | Securely blank stored request text older than this (hourly). |
-| `store_text` | `true` | `--no-store-text` | `false`: keep only an HMAC and the embedding of each request. |
+| `idle_ttl_days` | none | | Delete tasks unused this long (> 0). |
+| `text_retention_days` | none | `--text-retention-days` | Securely blank stored request text older than this (hourly; > 0). |
+| `store_text` | `true` | `--no-store-text` | `false`: keep only an HMAC and the embedding of each request. `store_text = false` under `[engine]` works too: either one saying `false` wins. |
 | `train_workers` | `2` | `--train-workers` | Training processes (low priority). Budget ≈ workers × `Config.train_threads` cores. |
 | `blas_threads` | `1` | | BLAS threads for serving (process-wide). |
 

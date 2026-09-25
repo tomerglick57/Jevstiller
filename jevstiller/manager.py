@@ -14,6 +14,7 @@ directory. `load` cost on an LRU miss is measured by `benchmarks/manager.py`.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -24,7 +25,7 @@ import threading
 import time
 import weakref
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,9 @@ class Routing:
     engine: Jevstiller | None       # None: not admitted (or over the tenant cap); pass through
     routed: Routed | None
     reason: str | None              # why it passes through
+    tenant: str | None = None
+    model: str | None = None
+    uncounted: bool = False         # a new question not counted towards admission yet (see TaskManager.observe)
 
     @property
     def local(self) -> bool:
@@ -331,16 +335,21 @@ class TaskManager:
 
     def route(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
               states: Sequence[State], model: str | None = None, stexts: Sequence[str] | None = None,
-              X: Any = None) -> Routing:
+              X: Any = None, admit: bool = True) -> Routing:
         """First half of a request whose teacher call the caller makes itself (the proxy): find or admit the
         task and let its engine decide. Always follow with `complete` (it releases the engine). A task that
         is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher.
-        `X` may be a callable returning the embeddings: it is only called if an engine needs them."""
+        `X` may be a callable returning the embeddings: it is only called if an engine needs them.
+
+        `admit=False`: the teacher hasn't answered yet, so a new question is not counted towards admission
+        here (`uncounted` is set); call `observe` once the teacher answered it usably. Otherwise a caller could
+        create tasks with questions the teacher rejects, at no cost (security audit run 2)."""
         key, task = self.resolve(tenant, instructions, classes, model)
         if key not in self._index:
-            reason = self._admit(key, tenant, task, len(states), model)
+            reason = self._admit(key, tenant, task, len(states), model, count=admit)
             if reason:
-                return Routing(key, task, None, None, reason)
+                return Routing(key, task, None, None, reason, tenant, model,
+                               uncounted=not admit and reason == "not_admitted")
         engine = self._acquire(key)
         try:
             routed = engine.route(states, stexts, X() if callable(X) else X)
@@ -360,27 +369,72 @@ class TaskManager:
         finally:
             self._release(routing.key)
 
+    def observe(self, routing: Routing) -> bool:
+        """Count one usable teacher answer towards admitting an `uncounted` routing's task. True if the task
+        is (now) registered: later requests for it are routed to its engine."""
+        if not routing.uncounted:
+            return routing.key in self._index
+        return self._admit(routing.key, routing.tenant or "", routing.task, 1, routing.model) is None
+
     def engine(self, key: str) -> Jevstiller:
-        """The loaded engine for `key` (loading it if needed). For admin use: the manager may unload it later."""
+        """The loaded engine for `key` (loading it if needed). The manager may unload and close it at any time
+        afterwards: to use it, hold it (`hold`)."""
         e = self._acquire(key)
         self._release(key)
         return e
 
-    def _admit(self, key: str, tenant: str, task: Task, n: int, model: str | None = None) -> str | None:
-        """None when `key` is (now) a registered task, else why its requests are passed through."""
+    @contextlib.contextmanager
+    def hold(self, key: str) -> Iterator[Jevstiller]:
+        """The engine for `key`, loaded if needed and kept open (not unloaded, closed or deleted) until the block
+        exits. For admin calls: unlike a request, it doesn't count as use of the task (idle TTL, LRU order)."""
+        e = self._acquire(key, touch=False)
+        try:
+            yield e
+        finally:
+            self._release(key)
+
+    @contextlib.contextmanager
+    def _hold_loaded(self, key: str) -> Iterator[Jevstiller | None]:
+        """The engine for `key` if it is loaded (else None), kept open until the block exits. Loads nothing and
+        doesn't count as use (for maintenance, e.g. text retention)."""
+        with self._lock:
+            e = self._engines.get(key)
+            if e is not None:
+                self._inflight[key] = self._inflight.get(key, 0) + 1
+        try:
+            yield e
+        finally:
+            if e is not None:
+                self._release(key)
+
+    def _cap_reason(self, tenant: str) -> str | None:
+        """Why a new task of `tenant` can't be registered now (a task cap), or None. Call with `_lock` held."""
+        if self.max_tasks is not None and len(self._index) >= self.max_tasks:
+            return "task_limit"
+        if self.max_tasks_per_tenant is not None and self._per_tenant.get(tenant, 0) >= self.max_tasks_per_tenant:
+            if tenant not in self._limit_logged:
+                self._limit_logged.add(tenant)
+                log.warning("tenant %r reached max_tasks_per_tenant=%d; new tasks are passed through",
+                            tenant, self.max_tasks_per_tenant)
+            return "tenant_task_limit"
+        return None
+
+    def _admit(self, key: str, tenant: str, task: Task, n: int, model: str | None = None,
+               count: bool = True) -> str | None:
+        """None when `key` is (now) a registered task, else why its requests are passed through. With
+        `count=False`, the requests are not counted towards admission (so a new task is never registered)."""
+        if not count:
+            with self._lock:
+                if key in self._index:
+                    return None
+                return self._cap_reason(tenant) or "not_admitted"
         if not self.admission.observe(key, n):
             return "not_admitted"
         with self._lock:
             if key in self._index:
                 return None
-            if self.max_tasks is not None and len(self._index) >= self.max_tasks:
-                return "task_limit"
-            if self.max_tasks_per_tenant is not None and self._per_tenant.get(tenant, 0) >= self.max_tasks_per_tenant:
-                if tenant not in self._limit_logged:
-                    self._limit_logged.add(tenant)
-                    log.warning("tenant %r reached max_tasks_per_tenant=%d; new tasks are passed through",
-                                tenant, self.max_tasks_per_tenant)
-                return "tenant_task_limit"
+            if (reason := self._cap_reason(tenant)) is not None:
+                return reason
             now = time.time()
             info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now,
                             model)
@@ -413,13 +467,14 @@ class TaskManager:
         return results  # type: ignore[return-value]
 
     # ---- loading ----------------------------------------------------------------
-    def _acquire(self, key: str) -> Jevstiller:
+    def _acquire(self, key: str, touch: bool = True) -> Jevstiller:
         with self._lock:
             e = self._engines.get(key)
             if e is not None:
-                self._engines.move_to_end(key)
+                if touch:
+                    self._engines.move_to_end(key)
+                    self._touch(key)
                 self._inflight[key] = self._inflight.get(key, 0) + 1
-                self._touch(key)
                 return e
             info = self._index.get(key)
             if info is None:
@@ -431,9 +486,10 @@ class TaskManager:
                     raise KeyError(f"unknown task {key}")
                 e = self._engines.get(key)
                 if e is not None:
-                    self._engines.move_to_end(key)
+                    if touch:
+                        self._engines.move_to_end(key)
+                        self._touch(key)
                     self._inflight[key] = self._inflight.get(key, 0) + 1
-                    self._touch(key)
                     return e
             ex = self.train_executor
             if isinstance(ex, TrainScheduler):              # jobs carry the task's tenant and priority
@@ -450,7 +506,8 @@ class TaskManager:
             with self._lock:
                 self._engines[key] = e
                 self._inflight[key] = self._inflight.get(key, 0) + 1
-                self._touch(key)
+                if touch:
+                    self._touch(key)
                 self.loads += 1
                 over = len(self._engines) > self.max_loaded
         if over:
@@ -530,17 +587,16 @@ class TaskManager:
         cutoff = time.time() - self.text_retention_s
         total = 0
         for info in self.tasks():
-            with self._lock:
-                engine = self._engines.get(info.key)
             try:
-                if engine is not None:
-                    total += engine.store.redact_text(cutoff)
-                elif (self.root / info.key / "samples.sqlite").exists():
-                    store = SampleStore(self.root / info.key / "samples.sqlite")
-                    try:
-                        total += store.redact_text(cutoff)
-                    finally:
-                        store.close()
+                with self._hold_loaded(info.key) as engine:  # an unload closing its store under us: SIGSEGV
+                    if engine is not None:
+                        total += engine.store.redact_text(cutoff)
+                    elif (self.root / info.key / "samples.sqlite").exists():
+                        store = SampleStore(self.root / info.key / "samples.sqlite")
+                        try:
+                            total += store.redact_text(cutoff)
+                        finally:
+                            store.close()
             except Exception:
                 log.exception("text retention failed for task %s", info.key)
         if total:

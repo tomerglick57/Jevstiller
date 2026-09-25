@@ -71,6 +71,17 @@ class Admin:
         key = request.path_params.get("key", "")
         return key if _KEY.match(key) and key in {i.key for i in self.manager.tasks()} else None
 
+    async def _with_engine(self, key: str, fn: Callable[[Any], Any]) -> Any:
+        """`fn(engine)` in a worker thread with the task's engine held open throughout (an unload or delete
+        closing it under a running call crashed the process: security audit run 2). None if the task is gone."""
+        def run():
+            try:
+                with self.manager.hold(key) as engine:
+                    return fn(engine)
+            except KeyError:                                # deleted meanwhile
+                return None
+        return await anyio.to_thread.run_sync(run)
+
     async def _body(self, request: Request) -> dict:
         try:
             body = await request.json()
@@ -93,9 +104,10 @@ class Admin:
             return denied
         if (key := self._key(request)) is None:
             return _err(404, "unknown task")
-        engine = await anyio.to_thread.run_sync(self.manager.engine, key)
-        st = await anyio.to_thread.run_sync(engine.status)
-        info = next(i for i in self.manager.tasks() if i.key == key)
+        st = await self._with_engine(key, lambda e: e.status())
+        info = next((i for i in self.manager.tasks() if i.key == key), None)
+        if st is None or info is None:
+            return _err(404, "unknown task")
         return _ok({"info": info, "status": st, "report": st.report()})
 
     async def versions(self, request: Request) -> Response:
@@ -103,8 +115,8 @@ class Admin:
             return denied
         if (key := self._key(request)) is None:
             return _err(404, "unknown task")
-        engine = await anyio.to_thread.run_sync(self.manager.engine, key)
-        return _ok(engine.versions())
+        versions = await self._with_engine(key, lambda e: e.versions())
+        return _ok(versions) if versions is not None else _err(404, "unknown task")
 
     async def mode(self, request: Request) -> Response:
         if (denied := self.authorized(request)) is not None:
@@ -137,12 +149,11 @@ class Admin:
             return denied
         if (key := self._key(request)) is None:
             return _err(404, "unknown task")
-        engine = await anyio.to_thread.run_sync(self.manager.engine, key)
         try:
-            report = await anyio.to_thread.run_sync(engine.train_now)
+            report = await self._with_engine(key, lambda e: e.train_now())
         except Exception as e:
             return _err(500, f"training failed: {type(e).__name__}")
-        return _ok(report)
+        return _ok(report) if report is not None else _err(404, "unknown task")
 
     async def promote(self, request: Request) -> Response:
         if (denied := self.authorized(request)) is not None:
@@ -150,9 +161,9 @@ class Admin:
         if (key := self._key(request)) is None:
             return _err(404, "unknown task")
         version = (await self._body(request)).get("version")
-        engine = await anyio.to_thread.run_sync(self.manager.engine, key)
         try:
-            await anyio.to_thread.run_sync(engine.promote, str(version))
+            if await self._with_engine(key, lambda e: e.promote(str(version)) or True) is None:
+                return _err(404, "unknown task")
         except ValueError as e:
             return _err(422, str(e))
         return _ok({"key": key, "production": version})
@@ -162,9 +173,10 @@ class Admin:
             return denied
         if (key := self._key(request)) is None:
             return _err(404, "unknown task")
-        engine = await anyio.to_thread.run_sync(self.manager.engine, key)
-        target = await anyio.to_thread.run_sync(engine.rollback)
-        return _ok({"key": key, "production": target})
+        target = await self._with_engine(key, lambda e: (e.rollback(),))
+        if target is None:
+            return _err(404, "unknown task")
+        return _ok({"key": key, "production": target[0]})
 
     async def delete_task(self, request: Request) -> Response:
         if (denied := self.authorized(request)) is not None:

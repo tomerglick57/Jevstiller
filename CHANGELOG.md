@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Security audit run 2** (2026-09-25; [docs/security.md](docs/security.md)): 15 findings, all fixed, with regression tests in `tests/test_audit_run2.py`. None exposed keys, other tenants' data or the admin API. Behaviour changes:
+  - **Settings are stricter.** Values of the wrong type stop startup (`store_text = "false"` used to mean *true*). So do an empty secret, secret file or access-control variable (an empty `JEVSTILLER_ACCESS_TOKEN` used to switch the token off), `text_retention_days` / `idle_ttl_days` ≤ 0, a non-finite `key_ttl_s`, and `trust_forwarded_for` entries with host bits (`10.0.0.5/24`; uvicorn ignored them). `store_text = false` under `[engine]` now works (either one saying `false` wins). `JEVSTILLER_<LIST>=none` clears a list from the config file. The startup log names the access controls in effect and whether request text is stored. Credentials in `upstream` are redacted in logs and `jevstiller config`.
+  - **Encoder backpressure can't latch.** One very large request (or one stalled encode) used to switch local answers off for every tenant until restart. The encoder now sees at most 32,768 characters of a text (model encoders read only 256 tokens anyway), and an idle encoder is never "overloaded". Embeddings of texts longer than that change once.
+  - **Admission counts only questions Jev answered.** A caller could create tasks with questions Jev rejects. The request whose answer admits a task is recorded as its first row.
+  - **Forwarding never fails with a 500 or leaks a routed task:** header bytes are forwarded raw (a UTF-8 `User-Agent` used to give a 500 and pin the task in memory until restart); any forwarding failure is a 502; `retry-after` is capped at 1 h.
+  - **No more crash when a store closes under text retention** (SIGSEGV): retention and admin calls hold the task's engine; admin calls don't count as use of the task.
+  - Paths with control characters or an encoded `?`/`#` are rejected (400). They could escape a path prefix in `upstream`.
+  - `/readyz` no longer flaps under concurrent probes.
+  - Training workers start with forkserver on every Python version (they were forked from the server before 3.14).
+  - `jevstiller backup` / `restore` write owner-only files; `jevstiller admin` URL-escapes names and requires the key argument; class names are escaped in `admin status`.
+  - Also: no duplicate `server`/`date` headers; `ci.yml` has read-only permissions; `--build-arg PRELOAD_ENCODER=` works; `uvicorn>=0.31`.
 - **The agreement guarantee is now sound** (found by a prior-art review, 2026-09-25). The threshold rule used to bound `coverage × UB(disagreement | answered)`, treating the estimated coverage as exact. It kept the widest of ~200 thresholds that each passed at the full `δ`, which has no `δ`-level guarantee. And it chose the OOD cutoff on the same calibration rows. Now:
   - the rate of *answered and disagreeing* requests over all calibration rows is bounded directly (exact Clopper–Pearson);
   - thresholds from a fixed grid are tested strictest-first, stopping at the first failure (fixed-sequence testing, as in Learn Then Test);
