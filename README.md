@@ -32,10 +32,8 @@ The routing threshold is chosen on a held-out, IID calibration set so that, with
 ## Install
 
 ```bash
-pip install "jevstiller[onnx]"         # the drop-in proxy (`jevstiller serve`) with its default encoder (CPU)
-pip install jevstiller                 # the proxy and the library, without a model encoder (`--encoder hash`)
-pip install "jevstiller[jev,onnx]"     # plus the Jev adapter, for using the library directly
-pip install "jevstiller[jev,torch]"    # PyTorch encoders (CUDA if available)
+pip install jevstiller                 # everything: the proxy (`jevstiller serve`), the encoder, the Jev adapter
+pip install "jevstiller[gpu]"          # on a GPU machine: adds PyTorch, used automatically when CUDA is present
 ```
 
 Python 3.10+. CPU works out of the box; a GPU only speeds up the encoder.
@@ -46,7 +44,7 @@ Run Jevstiller next to your services and point the Jev SDK at it:
 
 ```bash
 docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller:0.3.1
-# or: pip install "jevstiller[onnx]" && jevstiller serve --config deploy/jevstiller.toml
+# or: pip install jevstiller && jevstiller serve --config deploy/jevstiller.toml
 ```
 
 ```bash

@@ -38,7 +38,7 @@ class JevTeacher:
         try:
             from typesafe_sdk import RetryPolicy, TypeSafeClient  # type: ignore
         except ImportError as e:  # pragma: no cover
-            raise ImportError("pip install 'jevstiller[jev]' to use JevTeacher") from e
+            raise ImportError("JevTeacher needs typesafe-sdk, part of `pip install jevstiller`") from e
         self.model = model
         self.name = f"jev:{model}"
         self.price_per_mtok = price_per_mtok

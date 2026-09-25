@@ -27,24 +27,26 @@ TIERS = {
 }
 
 
-_EXTRA = {"onnxruntime": "onnx", "tokenizers": "onnx", "huggingface_hub": "onnx", "torch": "torch",
-          "transformers": "torch"}
+_HINT = {
+    # part of `pip install jevstiller` where ONNX Runtime ships wheels; missing means no build for this platform
+    "onnxruntime": "ONNX Runtime isn't installed (it has no build for every platform). Use PyTorch instead "
+                   "(pip install \"jevstiller[gpu]\"), or the hash encoder (--encoder hash), which needs nothing",
+    "torch": "the PyTorch encoders need pip install \"jevstiller[gpu]\"",
+    "transformers": "the PyTorch encoders need pip install \"jevstiller[gpu]\"",
+}
 
 
 def _missing(err: ModuleNotFoundError) -> Exception:
     """A missing optional package, as an error that says what to install."""
-    extra = _EXTRA.get((err.name or "").split(".")[0])
-    if extra is None:
-        return err
-    return ImportError(f"this encoder needs {err.name}: pip install \"jevstiller[{extra}]\" (or use the hash "
-                       f"encoder, which needs nothing)")
+    hint = _HINT.get((err.name or "").split(".")[0])
+    return ImportError(f"this encoder needs {err.name}: {hint}") if hint else err
 
 
 def load_encoder(spec: str = "base", backend: str = "auto", device: str = "auto", **kw) -> Encoder:
     """spec: 'hash' | 'hash:<dim>' | a tier name | 'torch:<hf model>' | 'onnx:<hf repo>'.
 
-    The model encoders need an extra (`jevstiller[onnx]`, `[gpu]` or `[torch]`); without it this raises an
-    ImportError that says which."""
+    The ONNX encoders come with `pip install jevstiller` (where ONNX Runtime has a build); the PyTorch ones need
+    `jevstiller[gpu]`. A missing backend raises an ImportError that says what to install."""
     try:
         return _load(spec, backend, device, **kw)
     except ModuleNotFoundError as e:

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **One install command.** `pip install jevstiller` now includes everything most people need: the proxy, the default encoder (ONNX Runtime, CPU) and the Jev adapter. On a GPU machine, `pip install "jevstiller[gpu]"` adds PyTorch, which is used automatically when CUDA is available. ONNX Runtime is required only on platforms it ships for (x86-64 and ARM64); elsewhere `jevstiller serve` says what to do.
+  - The `[server]`, `[onnx]`, `[jev]`, `[torch]` and `[all]` extras still work (the first three are now empty, the others mean `[gpu]`).
+  - `[gpu]` used to mean ONNX Runtime for CUDA, which can't be installed next to the CPU ONNX Runtime; it now means PyTorch.
+  - The Docker image's `EXTRAS` build argument defaults to nothing; a GPU image uses `EXTRAS=gpu`.
+
 ## 0.3.1 — 2026-09-25
 
 - **`pip install jevstiller` now includes the proxy.** Its dependencies (Starlette, uvicorn, httpx, anyio, h11) are part of the plain install. Before, `jevstiller serve` failed with `No module named 'uvicorn'` unless you had installed `jevstiller[server]`. The `server` extra still exists (empty), so existing install commands keep working.

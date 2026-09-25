@@ -6,7 +6,7 @@ What Jevstiller works with, what callers see, and what a version number promises
 
 | | Tested with |
 |---|---|
-| TypeSafe SDK | `typesafe-sdk` 0.7.1, the current release, with both sync and async clients. CI runs the unmodified SDK against the proxy over real HTTP. 0.7.1 is also the floor of the `jev` extra. |
+| TypeSafe SDK | `typesafe-sdk` 0.7.1, the current release, with both sync and async clients. CI runs the unmodified SDK against the proxy over real HTTP. 0.7.1 is also the version `pip install jevstiller` requires at least (for the Jev adapter). |
 | Jev | `jev-1.13.0`, which `jev-latest` resolved to on 2026-09-24 and 2026-09-25: a live replay ([benchmarks](benchmarks.md)) and recorded wire responses (`tests/fixtures/jev/`) that every test run replays through the proxy |
 | Other clients | Anything that speaks Jev's HTTP API. The proxy doesn't depend on the SDK; the SDK only needs `TYPESAFE_BASE_URL` (or `base_url=`) pointed at it. |
 
@@ -56,6 +56,7 @@ Errors the proxy produces itself (a 429 while Jev's `retry-after` lasts, 502/503
 | Linux | Tested (CI, and the container image) |
 | macOS | Expected to work; not tested in CI |
 | Windows | Not tested. Run the container, or use WSL. |
+| Install | `pip install jevstiller` includes the proxy, the default encoder (ONNX Runtime, CPU) and the Jev adapter. ONNX Runtime ships for x86-64 and ARM64 on Linux, macOS and Windows; elsewhere (32-bit ARM, Alpine/musl) use the container image, `jevstiller[gpu]` (PyTorch), or `--encoder hash`. On a GPU: `pip install "jevstiller[gpu]"`. |
 | Container image | `ghcr.io/tomerglick57/jevstiller`, linux/amd64 and linux/arm64, CPU (ONNX Runtime). For a GPU, build on a CUDA base image ([deploy](deploy.md)). |
 | Replicas | One process per data directory, and one replica per deployment. Several processes on one data directory are not supported. |
 

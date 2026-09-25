@@ -6,7 +6,7 @@
 ARG PYTHON=3.12
 
 FROM python:${PYTHON}-slim AS build
-ARG EXTRAS=server,onnx
+ARG EXTRAS=
 WORKDIR /src
 # Every tool and package is hash-checked: the build tools from build-requirements.txt, the dependencies from
 # uv.lock. The project is built with those tools (no build isolation, so nothing unpinned is fetched), into its

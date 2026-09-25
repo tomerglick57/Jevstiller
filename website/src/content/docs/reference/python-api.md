@@ -115,7 +115,7 @@ request id, and the model that answered.
 
 | teacher | use |
 |---|---|
-| `jevstiller.teachers.jev.JevTeacher` | real Jev via `typesafe-sdk` (`jev` extra). Reads `TYPESAFE_API_KEY`; `model="jev-1.13.0"`, `timeout=10`, and it rate-limits itself to 1,100 requests a minute. |
+| `jevstiller.teachers.jev.JevTeacher` | real Jev via `typesafe-sdk`. Reads `TYPESAFE_API_KEY`; `model="jev-1.13.0"`, `timeout=10`, and it rate-limits itself to 1,100 requests a minute. |
 | `SyntheticTeacher` | deterministic fake for tests and demos; pair it with `SyntheticWorld` |
 | `ReplayTeacher` | serves recorded answers, for offline experiments |
 | `CachedTeacher` | wraps a live teacher and saves every answer to a JSONL file, so re-runs are free |

@@ -147,7 +147,7 @@ def test_without_a_student_a_failed_candidate_backs_off(tmp_path, task, world, t
     """With no production student for the current data, a candidate that didn't make it is retried after 25% more
     data (capped at min_new_samples), not every 100 rows: a hard task would otherwise train non-stop."""
     js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual", min_new_samples=10**6))
-    for _ in range(4):
+    for _ in range(5):                                   # ~200 calibration rows (a random 20% per request) >= 150
         js.classify_batch([t for t, _ in world.sample(200)])
     assert js._should_train()
     js.train_now()

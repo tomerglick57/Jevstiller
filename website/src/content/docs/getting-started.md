@@ -18,7 +18,7 @@ curl -s localhost:8080/readyz
 The image runs on CPU with the encoder built in, and needs no network except to Jev. Without Docker:
 
 ```bash
-pip install "jevstiller[onnx]"                       # Python 3.10+
+pip install jevstiller                               # Python 3.10+; on a GPU machine: "jevstiller[gpu]"
 jevstiller serve --data-dir ./jevstiller-data
 ```
 
@@ -84,7 +84,7 @@ The engine inside the proxy is also a library, for a single task in your own pro
 
 ```python
 from jevstiller import Jevstiller, Task, load_encoder
-from jevstiller.teachers.jev import JevTeacher      # pip install "jevstiller[jev,onnx]"
+from jevstiller.teachers.jev import JevTeacher
 
 task = Task("support_router", "Which team should handle this customer message?",
             {"billing": "Charges, invoices, refunds", "technical": "Bugs, errors, things not working",

@@ -23,8 +23,8 @@ About the image:
 To build it yourself: `docker build -t jevstiller .`. Every package in the build is hash-checked: the dependencies from `uv.lock`, and the build tools (the build backend, `build`, `uv`) from `build-requirements.txt`. The project is built without build isolation, so nothing unpinned is fetched. Build arguments: `PRELOAD_ENCODER=base` (or empty, which downloads on first start), `EXTRAS=server,onnx`, `PYTHON=3.12`.
 
 **GPU:**
-1. Build on a CUDA base image with `--build-arg EXTRAS=server,gpu`, e.g. start from `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` and install Python 3.12.
-2. Run with `--gpus all` and `JEVSTILLER_DEVICE=cuda`.
+1. Build on a CUDA base image with `--build-arg EXTRAS=gpu` (adds PyTorch), e.g. start from `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` and install Python 3.12.
+2. Run with `--gpus all`. With CUDA available, the encoder runs on PyTorch automatically.
 
 The encoder is the only GPU user. On CPU, bge-small encodes about 1.6–7 ms per text. Measured student-path throughput on CPU is about 130 messages/s, 6.5× Jev's rate limit.
 
@@ -53,7 +53,7 @@ More than one replica is not supported. Each task's state is a local SQLite file
 ### pip
 
 ```bash
-pip install "jevstiller[onnx]"      # the proxy, plus ONNX Runtime for the default encoder
+pip install jevstiller              # on a GPU machine: pip install "jevstiller[gpu]"
 jevstiller serve --config jevstiller.toml
 ```
 

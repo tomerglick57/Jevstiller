@@ -21,7 +21,9 @@ classifiers = [
   "Topic :: Software Development :: Libraries",
   "Operating System :: OS Independent",
 ]
-# The proxy's dependencies are part of the plain install, so `pip install jevstiller && jevstiller serve` works.
+# `pip install jevstiller` is everything most people need: the proxy, the default encoder (ONNX Runtime, CPU) and
+# the Jev adapter. ONNX Runtime is required only where it ships wheels (x86-64 and ARM64); elsewhere the proxy
+# still installs and says what to do (the hash encoder, or PyTorch). GPUs: `jevstiller[gpu]`, which adds PyTorch.
 # Floors: no known advisories at these versions (pip-audit, 2026-09-25); CI tests the lowest ones.
 dependencies = [
     "numpy>=1.24",
@@ -32,16 +34,21 @@ dependencies = [
     "anyio>=4.14.2",
     "httpx>=0.27",
     "tomli>=2; python_version < '3.11'",
+    "onnxruntime>=1.16; platform_machine in 'x86_64 AMD64 aarch64 arm64 ARM64'",
+    "tokenizers>=0.15",
+    "huggingface_hub>=0.20",
+    "typesafe-sdk>=0.7.1",
 ]
 
 [project.optional-dependencies]
-jev = ["typesafe-sdk>=0.7.1"]
-server = []                     # kept so `jevstiller[server,...]` still works; its packages are now in the core
-onnx = ["onnxruntime>=1.16", "tokenizers>=0.15", "huggingface_hub>=0.20"]
-gpu = ["onnxruntime-gpu>=1.16", "tokenizers>=0.15", "huggingface_hub>=0.20"]
-torch = ["torch>=2.1", "transformers>=4.36"]
-all = ["jevstiller[jev,server,onnx,torch]"]
-dev = ["pytest>=7", "ruff>=0.4", "jevstiller[jev,server]"]
+gpu = ["torch>=2.1", "transformers>=4.36"]      # PyTorch encoders; picked automatically when CUDA is available
+dev = ["pytest>=7", "ruff>=0.4"]
+# Kept so older install commands still work; their packages are now in the plain install (or in `gpu`).
+server = []
+onnx = []
+jev = []
+torch = ["jevstiller[gpu]"]
+all = ["jevstiller[gpu]"]
 
 [project.scripts]
 jevstiller = "jevstiller._cli:main"
