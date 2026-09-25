@@ -1,5 +1,5 @@
 name: website
-# Builds website/ and deploys it to Cloudflare Pages (project "jevstiller").
+# Builds website/ (with pages generated from docs/ and README.md) and deploys it to Cloudflare Pages (project "jevstiller").
 #   push to main          -> production, https://jevstiller.pages.dev
 #   PR from this repo     -> preview, https://<branch>.jevstiller.pages.dev
 #   PR from a fork        -> build only (forks get no secrets)
@@ -7,9 +7,9 @@ name: website
 on:
   push:
     branches: [main]
-    paths: ["website/**", ".github/workflows/website.yml"]
+    paths: ["website/**", "docs/**", "README.md", ".github/workflows/website.yml"]
   pull_request:
-    paths: ["website/**", ".github/workflows/website.yml"]
+    paths: ["website/**", "docs/**", "README.md", ".github/workflows/website.yml"]
   workflow_dispatch:
 
 permissions:

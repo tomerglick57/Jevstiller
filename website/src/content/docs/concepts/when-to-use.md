@@ -10,11 +10,11 @@ In rough order of importance:
 1. **Throughput beyond the rate limit.** Jev allows 1,200 requests a minute per key, a ceiling of about 1.7M
    classifications a day. A backlog of 100k messages takes 83 minutes through Jev; the student does it in under
    a minute.
-2. **Latency.** ~350 ms per Jev answer becomes single-digit milliseconds for the requests the student handles.
+2. **Latency.** ~300 ms per Jev answer becomes ~16 ms at the median (CPU) for the requests the student handles.
 3. **Availability.** The student keeps answering through Jev outages, rate-limit storms, and restricted network
    egress.
-4. **Cost**, last. Jev is cheap (about $3 per million short messages), so savings only matter at very high
-   volume.
+4. **Cost**, last. Jev is cheap (about $17 per million short support messages with a 5-class question), so
+   savings only matter at very high volume.
 
 The warm-up costs nothing extra: the requests were going to Jev anyway, and each answer becomes a training row.
 The ongoing Jev cost is the audit slice plus whatever the student passes on.
@@ -29,9 +29,10 @@ The ongoing Jev cost is the audit slice plus whatever the student passes on.
 ## Not a fit
 
 - **Changing class lists.** Adding or removing a class means retraining from scratch today.
-- **Non-text input.**
+- **Images or audio.** The state can be text or a JSON object/array; nothing else.
 - **Low volume.** If you'll never collect a few thousand examples, the student never gets trained.
-- **One-off calls.** It only pays off on repetition.
+- **One-off calls.** It only pays off on repetition. Questions built fresh for every request (dynamic criteria) never
+  become tasks: a question must be asked `admit_after` times (50 by default) first.
 
 ## Latency caveat
 

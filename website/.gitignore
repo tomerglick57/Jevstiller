@@ -22,3 +22,9 @@ pnpm-debug.log*
 
 # wrangler local state
 .wrangler/
+
+# generated from ../docs/*.md and ../README.md by scripts/sync-docs.mjs (npm's prebuild/predev)
+src/content/docs/proxy/
+src/content/docs/reference/configuration.md
+src/content/docs/project/benchmarks.md
+src/content/docs/concepts/comparison.md

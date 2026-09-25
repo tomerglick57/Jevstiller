@@ -3,10 +3,13 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "predev": "node scripts/sync-docs.mjs",
     "dev": "astro dev",
+    "prebuild": "node scripts/sync-docs.mjs",
     "build": "astro build",
-    "preview": "astro build && wrangler pages dev",
-    "deploy": "astro build && wrangler pages deploy --branch main",
+    "preview": "npm run build && wrangler pages dev",
+    "deploy": "npm run build && wrangler pages deploy --branch main",
     "astro": "astro"
   },
   "dependencies": {

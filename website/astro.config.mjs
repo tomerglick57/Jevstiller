@@ -11,7 +11,7 @@ export default defineConfig({
 		starlight({
 			title: 'Jevstiller',
 			description:
-				'Distill a repeated Jev classification task into a local model, on the fly. Same answers, your hardware.',
+				'A drop-in proxy for Jev that learns your repeated classification questions and answers them locally, within an agreement budget you set.',
 			social: [{ icon: 'github', label: 'GitHub', href: repo }],
 			editLink: { baseUrl: `${repo}/edit/main/website/` },
 			customCss: ['./src/styles/custom.css'],
@@ -24,13 +24,24 @@ export default defineConfig({
 						{ label: 'How it works', slug: 'concepts/how-it-works' },
 						{ label: 'The guarantee', slug: 'concepts/guarantee' },
 						{ label: 'When to use it', slug: 'concepts/when-to-use' },
+						{ label: 'How it compares', slug: 'concepts/comparison' },
+					],
+				},
+				{
+					label: 'Run the proxy',
+					items: [
+						{ label: 'The drop-in proxy', slug: 'proxy/overview' },
+						{ label: 'Deploy', slug: 'proxy/deploy' },
+						{ label: 'Operations', slug: 'proxy/operations' },
+						{ label: 'Security', slug: 'proxy/security' },
+						{ label: 'Compatibility', slug: 'proxy/compatibility' },
 					],
 				},
 				{
 					label: 'Reference',
 					items: [
-						{ label: 'Python API', slug: 'reference/python-api' },
 						{ label: 'Configuration', slug: 'reference/configuration' },
+						{ label: 'Python API', slug: 'reference/python-api' },
 					],
 				},
 				{

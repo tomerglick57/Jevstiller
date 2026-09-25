@@ -34,7 +34,8 @@ A change that touches any of these needs a test.
 ## This website
 
 The site lives in `website/` and is built with [Starlight](https://starlight.astro.build). Pages are Markdown
-files in `website/src/content/docs/`.
+files in `website/src/content/docs/`. The pages under *Run the proxy*, *Configuration*, *Benchmarks* and *How it
+compares* are generated at build time from `docs/*.md` and the README: edit those, not the generated copies.
 
 ```bash
 cd website

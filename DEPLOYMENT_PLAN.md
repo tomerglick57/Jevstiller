@@ -233,8 +233,10 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
   *Result:* docs/operations.md: health, admin CLI, status reports, metrics and alerts, logs, data, common situations.
 - [x] **P7.4** `docs/security.md` + update `SECURITY.md`: key handling, what is stored, tenancy guarantees, threat model.
   *Result:* docs/security.md: threat model, what is stored, keys, access controls, audit results; SECURITY.md points to it.
-- [ ] **P7.5** Compatibility statement: supported `typesafe-sdk` versions and Jev API surface; what is forwarded vs served locally; the "agreement ≠ accuracy" note.
-- [ ] **P7.6** Release automation: PyPI trusted publishing, GHCR image publishing on tag, CHANGELOG, versioning policy. Keep DESIGN.md in sync (it still says "HTTP server out of scope").
+- [x] **P7.5** Compatibility statement: supported `typesafe-sdk` versions and Jev API surface; what is forwarded vs served locally; the "agreement ≠ accuracy" note.
+  *Result:* docs/compatibility.md (also on the website).
+- [x] **P7.6** Release automation: PyPI trusted publishing, GHCR image publishing on tag, CHANGELOG, versioning policy. Keep DESIGN.md in sync (it still says "HTTP server out of scope").
+  *Result:* a `v*` tag runs release.yml (the built wheel must pass the test suite, then PyPI via trusted publishing and a GitHub release from the CHANGELOG section) and docker.yml (smoke test, then `ghcr.io/tomerglick57/jevstiller` for amd64/arm64 with provenance and an SBOM). Versioning policy in docs/compatibility.md. DESIGN.md already describes the proxy.
 - [ ] **P7.7** Public API stability pass on what the hosted repo will import (`Engine`, `TaskManager`, store/validator/metering protocols). Mark everything else private.
 
 ---
