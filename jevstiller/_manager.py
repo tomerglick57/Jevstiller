@@ -24,7 +24,7 @@ import shutil
 import threading
 import time
 import weakref
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Executor
 from dataclasses import dataclass
@@ -116,6 +116,7 @@ class Routing:
     tenant: str | None = None
     model: str | None = None
     uncounted: bool = False         # a new question not counted towards admission yet (see TaskManager.observe)
+    caller: str | None = None       # who asked (the proxy: the caller's key hash), for the per-caller task quota
 
     @property
     def local(self) -> bool:
@@ -202,7 +203,8 @@ class TaskManager:
                  idle_ttl_s: float | None = None, train_executor: Executor | None = None,
                  janitor_interval_s: float = 5.0, blas_threads: int | None = 1,
                  text_retention_s: float | None = None, max_tasks: int | None = 10_000,
-                 hash_key: bytes | None = None, task_overrides: Mapping[str, Mapping[str, Any]] | None = None):
+                 hash_key: bytes | None = None, task_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+                 max_new_tasks_per_caller: int | None = 100):
         if blas_threads:
             # Serving runs many small matrix products from many threads; BLAS's default of one thread per
             # core for each of them oversubscribes the CPU (1 thread: 2.4x throughput, 4x lower p99 in
@@ -219,6 +221,8 @@ class TaskManager:
         self.max_loaded, self.max_memory_mb = max_loaded, max_memory_mb
         self.admission = admission if admission is not None else Admission()
         self.max_tasks_per_tenant, self.idle_ttl_s = max_tasks_per_tenant, idle_ttl_s
+        self.max_new_tasks_per_caller = max_new_tasks_per_caller
+        self._caller_admits: OrderedDict[str, deque[float]] = OrderedDict()   # caller -> when it admitted tasks
         self.text_retention_s = text_retention_s
         self._retention_at = 0.0
         self.train_executor = train_executor
@@ -335,7 +339,7 @@ class TaskManager:
 
     def route(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
               states: Sequence[State], model: str | None = None, stexts: Sequence[str] | None = None,
-              X: Any = None, admit: bool = True) -> Routing:
+              X: Any = None, admit: bool = True, caller: str | None = None) -> Routing:
         """First half of a request whose teacher call the caller makes itself (the proxy): find or admit the
         task and let its engine decide. Always follow with `complete` (it releases the engine). A task that
         is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher.
@@ -343,13 +347,17 @@ class TaskManager:
 
         `admit=False`: the teacher hasn't answered yet, so a new question is not counted towards admission
         here (`uncounted` is set); call `observe` once the teacher answered it usably. Otherwise a caller could
-        create tasks with questions the teacher rejects, at no cost (security audit run 2)."""
+        create tasks with questions the teacher rejects, at no cost (security audit run 2).
+
+        `caller` identifies who asked (the proxy passes the caller's key hash): each caller may create at most
+        `max_new_tasks_per_caller` tasks per admission window, so one caller can't fill a shared tenant's task
+        cap (security audit run 3)."""
         key, task = self.resolve(tenant, instructions, classes, model)
         if key not in self._index:
-            reason = self._admit(key, tenant, task, len(states), model, count=admit)
+            reason = self._admit(key, tenant, task, len(states), model, count=admit, caller=caller)
             if reason:
                 return Routing(key, task, None, None, reason, tenant, model,
-                               uncounted=not admit and reason == "not_admitted")
+                               uncounted=not admit and reason == "not_admitted", caller=caller)
         engine = self._acquire(key)
         try:
             routed = engine.route(states, stexts, X() if callable(X) else X)
@@ -374,7 +382,8 @@ class TaskManager:
         is (now) registered: later requests for it are routed to its engine."""
         if not routing.uncounted:
             return routing.key in self._index
-        return self._admit(routing.key, routing.tenant or "", routing.task, 1, routing.model) is None
+        return self._admit(routing.key, routing.tenant or "", routing.task, 1, routing.model,
+                           caller=routing.caller) is None
 
     def engine(self, key: str) -> Jevstiller:
         """The loaded engine for `key` (loading it if needed). The manager may unload and close it at any time
@@ -407,8 +416,30 @@ class TaskManager:
             if e is not None:
                 self._release(key)
 
-    def _cap_reason(self, tenant: str) -> str | None:
-        """Why a new task of `tenant` can't be registered now (a task cap), or None. Call with `_lock` held."""
+    def _caller_quota_left(self, caller: str | None, now: float) -> bool:
+        """Whether `caller` may create another task in this admission window. Call with `_lock` held."""
+        if caller is None or self.max_new_tasks_per_caller is None:
+            return True
+        seen = self._caller_admits.get(caller)
+        if seen is None:
+            return self.max_new_tasks_per_caller > 0
+        while seen and now - seen[0] > self.admission.window_s:
+            seen.popleft()
+        return len(seen) < self.max_new_tasks_per_caller
+
+    def _note_caller(self, caller: str | None, now: float) -> None:
+        if caller is None or self.max_new_tasks_per_caller is None:
+            return
+        self._caller_admits.setdefault(caller, deque()).append(now)
+        self._caller_admits.move_to_end(caller)
+        while len(self._caller_admits) > self.admission.max_tracked:
+            self._caller_admits.popitem(last=False)
+
+    def _cap_reason(self, tenant: str, caller: str | None = None) -> str | None:
+        """Why a new task of `tenant` asked by `caller` can't be registered now (a task cap or the caller's
+        quota), or None. Call with `_lock` held."""
+        if not self._caller_quota_left(caller, time.time()):
+            return "caller_task_limit"
         if self.max_tasks is not None and len(self._index) >= self.max_tasks:
             return "task_limit"
         if self.max_tasks_per_tenant is not None and self._per_tenant.get(tenant, 0) >= self.max_tasks_per_tenant:
@@ -420,22 +451,23 @@ class TaskManager:
         return None
 
     def _admit(self, key: str, tenant: str, task: Task, n: int, model: str | None = None,
-               count: bool = True) -> str | None:
+               count: bool = True, caller: str | None = None) -> str | None:
         """None when `key` is (now) a registered task, else why its requests are passed through. With
         `count=False`, the requests are not counted towards admission (so a new task is never registered)."""
         if not count:
             with self._lock:
                 if key in self._index:
                     return None
-                return self._cap_reason(tenant) or "not_admitted"
+                return self._cap_reason(tenant, caller) or "not_admitted"
         if not self.admission.observe(key, n):
             return "not_admitted"
         with self._lock:
             if key in self._index:
                 return None
-            if (reason := self._cap_reason(tenant)) is not None:
+            if (reason := self._cap_reason(tenant, caller)) is not None:
                 return reason
             now = time.time()
+            self._note_caller(caller, now)
             info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now,
                             model)
             (self.root / key).mkdir(parents=True, exist_ok=True, mode=0o700)

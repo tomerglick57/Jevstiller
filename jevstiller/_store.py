@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import random
 import sqlite3
 import threading
 import time
@@ -32,15 +33,18 @@ TEACHER_CHANNELS = IID_CHANNELS + ("deferred",)
 
 
 def text_hash(text: str, key: bytes | None = None) -> str:
-    """64-bit id of a text: fixes its calibration split and keys replays. With `key` (the deployment salt)
+    """64-bit id of a text: keys replays and dedup. With `key` (the deployment salt)
     it is an HMAC, so a store kept with store_text=False holds no plain hash of the text."""
     if key:
         return hmac.new(key, text.encode(), hashlib.sha256).hexdigest()[:16]
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def split_for(text_h: str, calib_fraction: float) -> str:
-    return "calib" if int(text_h[:8], 16) % 10_000 < calib_fraction * 10_000 else "train"
+def split_for(draw: float, calib_fraction: float) -> str:
+    """The split of one request, from a uniform draw in [0, 1). Per request, not per text: the guarantee is over
+    requests, and splitting by text made a heavily repeated input dominate the calibration set, which broke the
+    bound on the real traffic mix (security audit run 3)."""
+    return "calib" if draw < calib_fraction else "train"
 
 
 @dataclass
@@ -124,8 +128,8 @@ class Store(Protocol):
     def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0): ...
     def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None,
                        since_id: int = 0): ...
-    def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int,
-                     teacher_model: str | None = None, since_id: int = 0): ...
+    def audit_served(self, task_version: str, version: str, limit: int, teacher_model: str | None = None,
+                     since_id: int = 0): ...
     def redact_text(self, older_than_ts: float) -> int: ...
     def latest_teacher_model(self, task_version: str) -> str | None: ...
     def max_id(self) -> int: ...
@@ -151,6 +155,8 @@ class SampleStore:
         self.path = Path(path)
         self.read_only = read_only
         self.calib_fraction = calib_fraction
+        # the per-request calibration draw: seeded from the path, so a replay into the same place splits the same way
+        self._split_rng = random.Random(hashlib.sha256(str(self.path).encode()).digest())
         self.busy_timeout_s = busy_timeout_s
         self.write_behind = write_behind
         self.max_pending, self.max_batch = max_pending, max_batch
@@ -265,7 +271,7 @@ class SampleStore:
         rows = []
         for r in recs:
             h = r.text_hash or text_hash(r.text)
-            split = split_for(h, self.calib_fraction) if r.channel in IID_CHANNELS else "train"
+            split = split_for(self._split_rng.random(), self.calib_fraction) if r.channel in IID_CHANNELS else "train"
             emb = r.embedding.astype(np.float32).tobytes() if r.embedding is not None else None
             rows.append((r.ts, r.task_version, r.text, h, r.encoder_id, emb,
                          r.served_by, r.routing_reason, r.channel, split, r.latency_ms, r.weight,
@@ -346,18 +352,21 @@ class SampleStore:
             f"AND channel IN ({','.join('?' * len(ch))})", (shadow_version, task_version, *lin_args, *ch)).fetchall()
         return rows
 
-    def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int, teacher_model: str | None = None,
+    def audit_served(self, task_version: str, version: str, limit: int, teacher_model: str | None = None,
                      since_id: int = 0):
-        """Embeddings and teacher labels of the most recent audit rows, whichever student scored them."""
+        """The most recent audit rows served while `version` was in production: what that student said at the
+        time (label, confidence, OOD score) and the teacher's label. Scoring these rows as served, not re-scored by
+        a model that may since have trained on them, keeps the audit an out-of-sample estimate."""
         lin, lin_args = _lineage(teacher_model, since_id)
         rows = self.db.execute(
-            f"SELECT embedding, teacher_label FROM samples WHERE task_version=? AND encoder_id=?{lin} "
-            f"AND channel='audit' AND teacher_label IS NOT NULL AND embedding IS NOT NULL ORDER BY id DESC LIMIT ?",
-            (task_version, encoder_id, *lin_args, limit)).fetchall()
-        if not rows:
-            return np.zeros((0, dim), np.float32), np.array([], dtype=object)
-        X = np.frombuffer(b"".join(r[0] for r in rows), dtype=np.float32).reshape(len(rows), dim)
-        return X, np.array([r[1] for r in rows], dtype=object)
+            f"SELECT student_label, student_confidence, ood_score, teacher_label FROM samples "
+            f"WHERE task_version=? AND student_version=?{lin} AND channel='audit' AND teacher_label IS NOT NULL "
+            f"AND student_label IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (task_version, version, *lin_args, limit)).fetchall()
+        return (np.array([r[0] for r in rows], dtype=object),
+                np.array([r[1] if r[1] is not None else 0.0 for r in rows], np.float64),
+                np.array([r[2] if r[2] is not None else np.inf for r in rows], np.float64),
+                np.array([r[3] for r in rows], dtype=object))
 
     def counts(self, task_version: str, teacher_model: str | None = None, since_id: int = 0) -> dict:
         """Totals over every teacher; the labelled counts (what training can use) over one lineage if given."""

@@ -19,6 +19,9 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+MAX_TEXT_CHARS = 32_768  # of a state's text: what the encoder reads and what the store keeps (far beyond 256 tokens)
+
+
 def state_text(state: State) -> str:
     """The text the encoder sees and the store keeps. Strings are unchanged."""
     if isinstance(state, str):

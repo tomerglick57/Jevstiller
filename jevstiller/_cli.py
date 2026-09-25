@@ -107,6 +107,7 @@ def _serve(a: argparse.Namespace) -> None:
         target_agreement=s.target_agreement, max_loaded=s.max_loaded, max_memory_mb=s.max_memory_mb,
         admission=Admission(min_requests=s.admit_after, window_s=s.admit_window_s),
         max_tasks_per_tenant=s.max_tasks_per_tenant, max_tasks=s.max_tasks,
+        max_new_tasks_per_caller=s.max_new_tasks_per_key,
         idle_ttl_s=s.idle_ttl_days * 86400 if s.idle_ttl_days else None,
         text_retention_s=s.text_retention_days * 86400 if s.text_retention_days else None,
         train_executor=scheduler, blas_threads=s.blas_threads, hash_key=salt, task_overrides=s.tasks)
@@ -120,9 +121,9 @@ def _serve(a: argparse.Namespace) -> None:
     import tempfile
     checked = {"at": -1e9, "writable": True}
 
-    def ready() -> dict[str, bool]:
-        # /readyz needs no token: write at most once a second, and to a file of this check's own (with one fixed
-        # name, concurrent probes deleted each other's file and reported the disk unwritable)
+    def writable() -> bool:
+        # at most once a second, to a file of this check's own (with one fixed name, concurrent probes deleted
+        # each other's file and reported the disk unwritable)
         now = time.monotonic()
         if now - checked["at"] >= 1.0:
             try:
@@ -133,11 +134,19 @@ def _serve(a: argparse.Namespace) -> None:
             except OSError:
                 writable = False
             checked.update(at=now, writable=writable)
-        return {"data_dir_writable": checked["writable"], "encoder": encoder.dim > 0}
+        return checked["writable"]
+
+    def ready() -> dict[str, bool]:
+        # A full data dir is not a reason to stop serving: records are dropped (and counted), answers go on.
+        # Failing readiness on it took the only replica out of the Service (security audit run 3), so it is
+        # a metric (jevstiller_data_dir_writable) instead.
+        return {"encoder": encoder.dim > 0}
 
     app = create_app(manager, settings, KeyRegistry(salt, s.key_ttl_s), admin_token=s.admin_token,
                      metrics_public=s.metrics_public, ready=ready,
                      closers=[lambda: scheduler.shutdown(wait=True, cancel_futures=True), encoder.close])
+    app.state.metrics.gauge("jevstiller_data_dir_writable", "1 if the data directory accepts writes (0: disk full?)",
+                            fn=lambda: [((), 1.0 if writable() else 0.0)])
     log.info("jevstiller serving on %s:%d, upstream %s, tenancy %s, admin API %s", s.host, s.port,
              redact_url(s.upstream), s.tenancy, "on" if s.admin_token else "off")
     # X-Forwarded-For is honoured only from proxies the operator lists (it decides allow_networks).
@@ -244,6 +253,7 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--max-loaded", type=int)
         p.add_argument("--max-tasks", type=int)
         p.add_argument("--max-tasks-per-tenant", type=int)
+        p.add_argument("--max-new-tasks-per-key", type=int, help="tasks one API key may create per admission window")
         p.add_argument("--max-questions", type=int, help="distinct choice questions routed per request")
         p.add_argument("--max-encoder-wait-ms", type=float,
                        help="forward to Jev when a local answer would wait longer than this for the encoder (0: never)")

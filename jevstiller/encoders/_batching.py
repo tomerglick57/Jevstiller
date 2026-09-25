@@ -9,7 +9,7 @@ from concurrent.futures import Future
 
 import numpy as np
 
-MAX_CHARS = 32_768        # characters of each text the encoder sees: far beyond a 256-token window
+from .._task import MAX_TEXT_CHARS as MAX_CHARS  # characters of each text the encoder sees
 
 
 class BatchingEncoder:

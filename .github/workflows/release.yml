@@ -11,16 +11,39 @@ permissions:
   contents: read
 
 jobs:
+  # Build with hash-pinned tools only, and hand the files on at once: nothing else runs in this job, so no other
+  # package can touch dist/ before it is uploaded (security audit run 3). The next jobs check and test those files.
   build:
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.hash.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --require-hashes -r build-requirements.txt
+      - run: python -m build --no-isolation
+      - id: hash
+        run: echo "sha256=$(cd dist && sha256sum * | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: dist
+          path: dist/
+
+  test:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.12"
-      - run: python -m pip install "build==1.6.1" "twine==7.0.0"
-      - run: python -m build
-      - run: twine check --strict dist/*
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: dist
+          path: dist/
+      - run: python -m pip install "twine==7.0.0" && twine check --strict dist/*
 
       - name: Tag, pyproject version, and installed __version__ must agree
         run: |
@@ -38,13 +61,8 @@ jobs:
           /tmp/wheel-check/bin/pip install -q "$(ls dist/*.whl)[jev,server]" pytest
           cd /tmp && /tmp/wheel-check/bin/python -m pytest -q -p no:cacheprovider "$GITHUB_WORKSPACE/tests"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: dist
-          path: dist/
-
   publish:
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -56,6 +74,12 @@ jobs:
         with:
           name: dist
           path: dist/
+      - name: Publish exactly the files the build job produced
+        env:
+          EXPECTED: ${{ needs.build.outputs.sha256 }}
+        run: |
+          got=$(cd dist && sha256sum * | sha256sum | cut -d' ' -f1)
+          [ "$got" = "$EXPECTED" ] || { echo "::error::dist/ changed after the build job ($got != $EXPECTED)"; exit 1; }
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
   github-release:

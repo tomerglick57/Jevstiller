@@ -312,13 +312,13 @@ teacher_input_tokens, teacher_cost_usd, teacher_request_id          # null if no
 student_version, student_probs, student_confidence, ood_score           # null if no student ran
 served_by (teacher|student), routing_reason
 channel  (bootstrap | fallback | audit | deferred | student)
-split    (train | calib)               # assigned at insert by hash(text_hash); fixed forever
+split    (train | calib)               # assigned at insert, per request (an independent draw)
 latency_ms, teacher_cost
 ```
 
 Two rules that keep the guarantee valid:
 
-- **Split is assigned once, by hash, at insertion.** A text is always in the same split across every retrain. No leakage, no reshuffling drift.
+- **Split is assigned once per request, at insertion,** by an independent draw, and never reshuffled. The guarantee is over requests, so calibration must be a sample of requests. It used to be assigned by text hash (every copy of a text in one split), which made a heavily repeated input dominate the calibration set and broke the bound on the real traffic mix (security audit run 3). Copies of a text can now be in both splits; since future traffic repeats them too, that is the distribution the bound should describe.
 - **Only `channel ∈ {bootstrap, audit, fallback}` records are eligible for `calib`** (all three are sent to the teacher regardless of the student). Deferred records are informative for *training* (they are exactly the hard cases) but are not IID and must never influence the threshold. That includes rows the proxy sends to Jev only because another question in the same request needed it (`co_deferred`).
 - **Training, calibration, shadow and audit statistics read one teacher lineage only** (§7.12).
 
@@ -451,7 +451,7 @@ A fixed fraction of *all* requests (`audit_rate`, default 2%) is sent to Jev reg
 - drift metrics computed on the deferred stream measure the router, not the world;
 - the production agreement rate cannot be measured at all without an unbiased sample.
 
-The audit channel is therefore, simultaneously: the unbiased production estimate of `A` (with a confidence interval), the source of fresh IID calibration data, the drift monitor's input, and a steady trickle of unbiased training data. Its cost is `audit_rate × teacher cost` — a permanent floor on Jev usage, and the price of the guarantee.
+The audit channel is therefore, simultaneously: the unbiased production estimate of `A` (with a confidence interval; scored with what the production student answered when each audit request was served, never re-scored by a student that has since trained on it: audit rows are training data, and re-scoring them overstated agreement, security audit run 3), the source of fresh IID calibration data, the drift monitor's input, and a steady trickle of unbiased training data. Its cost is `audit_rate × teacher cost` — a permanent floor on Jev usage, and the price of the guarantee.
 
 `audit_rate` is raised automatically (to `audit_rate_shadow`) while a candidate is in shadow — so the candidate is judged on fresh traffic within a few thousand requests instead of starving behind a 2% trickle — and (to `audit_rate_elevated`) while the drift monitor is suspicious. It drops back on promotion.
 
@@ -605,7 +605,7 @@ Matching is exact on purpose: Jev reads its criteria literally, so a "similar" q
       fail -> reject, back to 1 with more data.
       pass -> promote; mode = cascade.
 5.  Steady state: audit 2% -> Jev; confident -> student; low-confidence/OOD -> Jev.
-    All Jev answers enter the store (audit -> train|calib by hash; deferred -> train only).
+    All Jev answers enter the store (audit -> train|calib by a per-request draw; deferred -> train only).
 6.  Retrain on trigger -> candidate -> shadow -> promote if better.
 7.  Drift: audit_rate up -> retrain -> promote, or teacher_only if the contract cannot be met.
 8.  Repeat.

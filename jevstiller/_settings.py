@@ -120,6 +120,7 @@ class ServeSettings:
     admit_window_s: float = 86400.0
     max_tasks: int | None = 10000
     max_tasks_per_tenant: int | None = 1000
+    max_new_tasks_per_key: int | None = 100     # tasks one API key may create per admit_window_s
     idle_ttl_days: float | None = None
     text_retention_days: float | None = None
     store_text: bool = True
@@ -175,6 +176,9 @@ class ServeSettings:
             unknown = set(o) - {"target_agreement", "mode"}
             if unknown:
                 raise ValueError(f"[tasks.{key!r}]: unknown keys {sorted(unknown)}")
+        for name in ("max_tasks", "max_tasks_per_tenant", "max_new_tasks_per_key"):
+            if (v := getattr(self, name)) is not None and v < 0:
+                raise ValueError(f"{name} must be >= 0 (or none: no limit)")
         for name in ("max_loaded", "admit_after", "train_workers", "max_questions", "max_encoder_wait_ms", "port"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
@@ -195,11 +199,12 @@ class ServeSettings:
                                  f"10.0.0.0/24 or 10.0.0.5): {net!r}") from None
         if not all(isinstance(v, str) and v.strip() for v in self.tenants.values()):
             raise ValueError("tenants: every tenant name must be a non-empty string")
-        bad = [k for k in self.tenants if not re.fullmatch(r"[0-9a-f]{32}", k)]
+        bad = [i for i, k in enumerate(self.tenants, 1) if not re.fullmatch(r"[0-9a-f]{32}", k)]
         if bad:
-            # name the tenant, never the key: the likely mistake is a raw API key pasted in place of its hash
-            raise ValueError(f"tenants: {len(bad)} keys are not key hashes from `jevstiller key-hash` "
-                             f"(32 lowercase hex), e.g. the one for tenant {self.tenants[bad[0]]!r}")
+            # name the entry by position only: the likely mistakes are a raw API key in place of its hash, on
+            # either side of the map, so neither side may be printed (security audits runs 2 and 3)
+            raise ValueError(f"tenants: {len(bad)} of {len(self.tenants)} entries don't map a key hash from "
+                             f"`jevstiller key-hash` (32 lowercase hex) to a tenant name; the first is entry #{bad[0]}")
         return self
 
     def resolve_secrets(self) -> ServeSettings:
@@ -207,9 +212,14 @@ class ServeSettings:
         for name in SECRETS:
             path = getattr(self, f"{name}_file")
             if path and not getattr(self, name):
-                value = Path(path).read_text().strip()
+                try:
+                    value = Path(path).read_text().strip()
+                except OSError as e:
+                    # not the path itself: a secret pasted where its file's path belongs would be printed
+                    raise ValueError(f"{name}_file: can't read that file ({e.strerror or type(e).__name__}); it "
+                                     f"must be the path of a file that holds the {name}") from None
                 if not value:
-                    raise ValueError(f"{name}_file {path} is empty")
+                    raise ValueError(f"{name}_file: the file is empty")
                 setattr(self, name, value)
         if self.tenants_file:
             import json
@@ -236,7 +246,8 @@ SECTIONS = {
               "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_questions",
               "max_encoder_wait_ms", "tenants", "tenants_file", "price_per_mtok"),
     "manager": ("target_agreement", "max_loaded", "max_memory_mb", "admit_after", "admit_window_s", "max_tasks",
-                "max_tasks_per_tenant", "idle_ttl_days", "text_retention_days", "store_text", "train_workers",
+                "max_tasks_per_tenant", "max_new_tasks_per_key", "idle_ttl_days", "text_retention_days", "store_text",
+                "train_workers",
                 "blas_threads"),
     "encoder": ("spec", "backend", "device"),
 }
@@ -246,10 +257,11 @@ _FIELDS = {f.name: f for f in fields(ServeSettings)}
 def _coerce(name: str, raw: str) -> Any:
     """Parse an environment string into the type of settings field `name`."""
     t = str(_FIELDS[name].type)
-    if name in NO_EMPTY and not raw.strip():
+    if not raw.strip():
+        # a set-but-blank variable (an unset `${VAR}` in a template) must not silently reset a setting
         raise ValueError(f"JEVSTILLER_{name.upper()} is set but empty; unset it (or set 'none' to clear the "
                          f"config file's value)")
-    if raw.strip().lower() in ("", "none", "null") and "None" in t:
+    if raw.strip().lower() in ("none", "null") and "None" in t:
         return None
     if raw.strip().lower() in ("none", "null") and t.startswith("list"):
         return []
@@ -264,7 +276,11 @@ def _coerce(name: str, raw: str) -> Any:
     if t.startswith("float"):
         return float(raw)
     if t.startswith("list"):
-        return [x.strip() for x in raw.split(",") if x.strip()]
+        items = [x.strip() for x in raw.split(",") if x.strip()]
+        if not items:                                   # "," or " , ": as blank as ""
+            raise ValueError(f"JEVSTILLER_{name.upper()} has no values; unset it (or set 'none' to clear the "
+                             f"config file's value)")
+        return items
     return raw
 
 
@@ -304,7 +320,10 @@ def load(config_path: str | Path | None = None, cli: dict[str, Any] | None = Non
     """Defaults < file (`config_path`, or JEVSTILLER_CONFIG) < environment < `cli` (None values ignored)."""
     env = os.environ if environ is None else environ
     merged: dict[str, Any] = {}
-    path = config_path or env.get("JEVSTILLER_CONFIG")
+    path = config_path if config_path is not None else env.get("JEVSTILLER_CONFIG")
+    if path is not None and not str(path).strip():
+        # an empty path used to mean "no file", silently dropping every setting in it, access controls included
+        raise ValueError("the config file path (--config or JEVSTILLER_CONFIG) is empty; unset it to run without one")
     if path:
         merged.update(from_file(path))
     merged.update(from_env(env))

@@ -89,7 +89,7 @@ module jevstiller
       field to_teacher: list[int]
       field t0: float
       property local
-  class jevstiller.Routing(key: 'str', task: 'Task', engine: 'Jevstiller | None', routed: 'Routed | None', reason: 'str | None', tenant: 'str | None' = None, model: 'str | None' = None, uncounted: 'bool' = False) -> None
+  class jevstiller.Routing(key: 'str', task: 'Task', engine: 'Jevstiller | None', routed: 'Routed | None', reason: 'str | None', tenant: 'str | None' = None, model: 'str | None' = None, uncounted: 'bool' = False, caller: 'str | None' = None) -> None
       field key: str
       field task: Task
       field engine: Jevstiller | None
@@ -98,6 +98,7 @@ module jevstiller
       field tenant: str | None
       field model: str | None
       field uncounted: bool
+      field caller: str | None
       property local
   jevstiller.State = str | dict | list
   class jevstiller.Status(task: 'str', task_version: 'str', mode: 'str', audit_rate: 'float', production: 'str | None', shadow: 'str | None', requests: 'int', served_by_student: 'int', served_by_teacher: 'int', channels: 'dict', student_share: 'float', teacher_share: 'float', audit_n: 'int', audit_agreement: 'float | None', audit_agreement_lb: 'float | None', audit_agreement_ub: 'float | None', target_agreement: 'float', teacher_calls: 'int', teacher_calls_avoided: 'int', teacher_cost_usd: 'float', teacher_cost_avoided_usd: 'float', labelled_train: 'int', labelled_calib: 'int', policy: 'dict | None', events: 'list' = <factory>, teacher_errors: 'int' = 0, teacher_model: 'str | None' = None, readiness: 'dict | None' = None) -> None
@@ -155,7 +156,7 @@ module jevstiller
       field model: str | None
       field mode: str | None
       def task(self) -> 'Task'
-  class jevstiller.TaskManager(data_dir: 'str | Path', teacher: 'Teacher', encoder: 'Encoder', config: 'Config | None' = None, *, target_agreement: 'float' = 0.98, max_loaded: 'int' = 64, max_memory_mb: 'float | None' = None, admission: 'Admission | None' = None, max_tasks_per_tenant: 'int | None' = None, idle_ttl_s: 'float | None' = None, train_executor: 'Executor | None' = None, janitor_interval_s: 'float' = 5.0, blas_threads: 'int | None' = 1, text_retention_s: 'float | None' = None, max_tasks: 'int | None' = 10000, hash_key: 'bytes | None' = None, task_overrides: 'Mapping[str, Mapping[str, Any]] | None' = None)
+  class jevstiller.TaskManager(data_dir: 'str | Path', teacher: 'Teacher', encoder: 'Encoder', config: 'Config | None' = None, *, target_agreement: 'float' = 0.98, max_loaded: 'int' = 64, max_memory_mb: 'float | None' = None, admission: 'Admission | None' = None, max_tasks_per_tenant: 'int | None' = None, idle_ttl_s: 'float | None' = None, train_executor: 'Executor | None' = None, janitor_interval_s: 'float' = 5.0, blas_threads: 'int | None' = 1, text_retention_s: 'float | None' = None, max_tasks: 'int | None' = 10000, hash_key: 'bytes | None' = None, task_overrides: 'Mapping[str, Mapping[str, Any]] | None' = None, max_new_tasks_per_caller: 'int | None' = 100)
       def apply_retention(self) -> 'int'
       def classify(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', states: 'Sequence[State]', *, teacher: 'Teacher | None' = None, errors: 'str' = 'raise', model: 'str | None' = None) -> 'list[Result]'
       def close(self) -> 'None'
@@ -168,7 +169,7 @@ module jevstiller
       def memory_mb(self) -> 'float'
       def observe(self, routing: 'Routing') -> 'bool'
       def resolve(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', model: 'str | None' = None) -> 'tuple[str, Task]'
-      def route(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', states: 'Sequence[State]', model: 'str | None' = None, stexts: 'Sequence[str] | None' = None, X: 'Any' = None, admit: 'bool' = True) -> 'Routing'
+      def route(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', states: 'Sequence[State]', model: 'str | None' = None, stexts: 'Sequence[str] | None' = None, X: 'Any' = None, admit: 'bool' = True, caller: 'str | None' = None) -> 'Routing'
       def set_mode(self, key: 'str', mode: 'str | None') -> 'None'
       def set_target(self, key: 'str', target_agreement: 'float') -> 'None'
       def sweep(self) -> 'None'

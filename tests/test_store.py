@@ -1,6 +1,6 @@
 import numpy as np
 
-from jevstiller._store import Record, SampleStore, split_for, text_hash
+from jevstiller._store import Record, SampleStore, split_for
 
 
 def _rec(text, channel, **kw):
@@ -9,11 +9,13 @@ def _rec(text, channel, **kw):
                   teacher_label="a", teacher_probs={"a": 0.7, "b": 0.3}, **kw)
 
 
-def test_split_is_deterministic_and_proportional():
-    hs = [text_hash(f"text {i}") for i in range(20000)]
-    frac = np.mean([split_for(h, 0.2) == "calib" for h in hs])
-    assert 0.18 < frac < 0.22
-    assert split_for(text_hash("x"), 0.2) == split_for(text_hash("x"), 0.2)
+def test_split_is_per_request_and_proportional(tmp_path):
+    """Copies of one text are split independently, like any other requests (security audit run 3)."""
+    s = SampleStore(tmp_path / "s.sqlite", calib_fraction=0.2)
+    s.insert([_rec("the same text", "audit") for _ in range(5000)])
+    frac = s.counts("tv")["labelled_calib"] / 5000
+    assert 0.17 < frac < 0.23
+    assert split_for(0.1, 0.2) == "calib" and split_for(0.3, 0.2) == "train"
 
 
 def test_deferred_never_enters_calib(tmp_path):

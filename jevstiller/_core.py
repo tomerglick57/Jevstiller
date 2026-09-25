@@ -21,7 +21,7 @@ import numpy as np
 from ._calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper
 from ._registry import Bundle, Registry
 from ._store import Record, SampleStore, text_hash
-from ._task import MODES, Config, State, Task, state_text
+from ._task import MAX_TEXT_CHARS, MODES, Config, State, Task, state_text
 from ._training import FitJob, run_fit_job
 from .encoders import Encoder, HashEncoder
 from .teachers import Teacher, TeacherOutput
@@ -392,7 +392,10 @@ class Jevstiller:
         results: list[Result | None] = [None] * n
         to_teacher: list[int] = []
         for i in range(n):
-            r = Record(text=stexts[i] if self.cfg.store_text else "", text_hash=text_hash(stexts[i], self.hash_key),
+            # the stored text is cut like the encoder's input: a 4 MB state was stored whole, once per task in the
+            # request, locally answered ones included (security audit run 3). The hash covers the whole text.
+            r = Record(text=stexts[i][:MAX_TEXT_CHARS] if self.cfg.store_text else "",
+                       text_hash=text_hash(stexts[i], self.hash_key),
                        task_version=self.task.version, encoder_id=self.encoder.id,
                        embedding=X[i], served_by="teacher", routing_reason="", channel="",
                        state_type="text" if isinstance(texts[i], str) else "json")
@@ -772,14 +775,14 @@ class Jevstiller:
             self.store.event("rejected", reason="shadow evaluation", **detail)
 
     def _audit_stats(self, prod: Bundle):
-        """System agreement on the recent audit window, re-scored with the given production model."""
-        X, t_lab = self.store.audit_window(self.task.version, self.encoder.id, self.encoder.dim, self.cfg.drift_window,
-                                           self._teacher_model, self._since_id)
+        """System agreement on the recent audit window: the audit rows served while `prod` was in production,
+        scored as they were served. Re-scoring them with `prod` itself measured it on rows it had since been
+        trained on (audit rows are training data), which overstated agreement (security audit run 3)."""
+        s_lab, conf, ood, t_lab = self.store.audit_served(self.task.version, prod.name, self.cfg.drift_window,
+                                                          self._teacher_model, self._since_id)
         N = len(t_lab)
         if N == 0:
             return 0, None, None, None
-        P, conf, ood = self._run(prod, X)
-        s_lab = np.array([self.labels[i] for i in P.argmax(axis=1)], dtype=object)
         acc = prod.policy.accepts(conf, ood, s_lab)
         k = int((acc & (s_lab != t_lab)).sum())
         d = 1 - self.cfg.confidence

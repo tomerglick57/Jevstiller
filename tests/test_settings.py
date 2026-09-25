@@ -86,7 +86,7 @@ def test_bad_tenants_file(tmp_path):
 
 def test_tenant_map_keys_must_be_key_hashes(tmp_path):
     (tmp_path / "t.json").write_text('{"tsk_raw_key_by_mistake": "acme"}')
-    with pytest.raises(ValueError, match="key hashes"):
+    with pytest.raises(ValueError, match="key hash"):
         load(cli={"tenants_file": str(tmp_path / "t.json")}, environ={})
     with pytest.raises(ValueError, match="network"):
         load(cli={"allow_networks": ["10.0.0.0/33"]}, environ={})

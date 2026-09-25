@@ -289,7 +289,7 @@ def test_tenants_error_names_the_tenant_not_the_key(tmp_path):
     (tmp_path / "t.json").write_text(json.dumps({raw: "acme"}))
     with pytest.raises(ValueError) as e:
         load(environ={"JEVSTILLER_TENANTS_FILE": str(tmp_path / "t.json")})
-    assert "acme" in str(e.value) and raw[:12] not in str(e.value)
+    assert "entry #1" in str(e.value) and raw[:12] not in str(e.value)
 
 
 def test_upstream_credentials_are_redacted(tmp_path, monkeypatch, capsys):

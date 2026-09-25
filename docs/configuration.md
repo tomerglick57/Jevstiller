@@ -99,6 +99,7 @@ A task's target is `Task.target_agreement` (default 0.98). The disagreement budg
 | `admission` | `Admission()` | `Admission(min_requests=50, window_s=86400, max_tracked=100_000)`: a question becomes a task only after this many requests in the window. Earlier requests go to the teacher unrecorded (`not_admitted`). |
 | `max_tasks` | `10000` | Beyond this many tasks, new questions stay pass-through (`task_limit`). |
 | `max_tasks_per_tenant` | `None` | Beyond this, new tasks of that tenant stay pass-through (`tenant_task_limit`). (`jevstiller serve` defaults to 1,000.) |
+| `max_new_tasks_per_caller` | `100` | Tasks one `caller` (the proxy: an API key's hash) may create per admission window (`caller_task_limit`). |
 | `idle_ttl_s` | `None` | Delete tasks unused this long (off by default). |
 | `text_retention_s` | `None` | Securely blank stored request text older than this, in every task, about hourly. |
 | `hash_key` | `None` | Key for the per-row text hash (HMAC); `jevstiller serve` passes the deployment salt. |
@@ -146,7 +147,7 @@ mode = "teacher_only"
 Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `JEVSTILLER_ADMIN_TOKEN_FILE`, `JEVSTILLER_STORE_TEXT=false`, …
 - Booleans accept `1/0/true/false/yes/no/on/off`.
 - Lists are comma-separated.
-- `none` unsets an optional value, or clears a list set in the file (`JEVSTILLER_ALLOW_NETWORKS=none`). An empty value is an error for secrets, secret files, `allow_networks`, `trust_forwarded_for` and `tenants_file`.
+- `none` unsets an optional value, or clears a list set in the file (`JEVSTILLER_ALLOW_NETWORKS=none`). An empty value (`JEVSTILLER_X=`, or a list of only commas) is an error for every variable, and so is an empty `JEVSTILLER_CONFIG` or `--config ""`: a blank variable from an unset template placeholder must not silently reset a setting.
 - `[engine]`, `[tasks]` and `tenants` are file-only.
 
 ### [server]
@@ -190,6 +191,7 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 | `admit_after` / `admit_window_s` | `50` / `86400` | `--admit-after` | Requests (one per distinct question per request) within the window before a question becomes a task. |
 | `max_tasks` | `10000` | `--max-tasks` | Global task cap (`task_limit`). |
 | `max_tasks_per_tenant` | `1000` | `--max-tasks-per-tenant` | (`tenant_task_limit`) |
+| `max_new_tasks_per_key` | `100` | `--max-new-tasks-per-key` | New tasks one API key may create per `admit_window_s` (24 h); beyond it, its new questions stay pass-through (`caller_task_limit`). Keeps one caller from filling a shared tenant's task cap. `none`: no limit. |
 | `idle_ttl_days` | none | | Delete tasks unused this long (> 0). |
 | `text_retention_days` | none | `--text-retention-days` | Securely blank stored request text older than this (hourly; > 0). |
 | `store_text` | `true` | `--no-store-text` | `false`: keep only an HMAC and the embedding of each request. `store_text = false` under `[engine]` works too: either one saying `false` wins. |

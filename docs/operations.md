@@ -5,7 +5,7 @@
 | Check | Healthy |
 |---|---|
 | `GET /healthz` | `{"ok": true}` (the process answers) |
-| `GET /readyz` | 200 `{"ready": true, "checks": {"manager", "data_dir_writable", "encoder"}}`; 503 names the failing check |
+| `GET /readyz` | 200 `{"ready": true, "checks": {"manager", "encoder"}}`; 503 names the failing check |
 | `jevstiller admin stats` | tasks, loaded, training queue, request counters |
 | `/jevstiller/status` | the status page, in a browser (below) |
 | `/metrics` | see below |
@@ -89,7 +89,7 @@ Useful alerts:
 - **Upstream errors:** `upstream_responses_total{status=~"5xx|timeout|unreachable"}` rising means Jev is struggling. Callers see Jev's errors for forwarded requests; local answers continue.
 - **Queued training:** `training_jobs{state="queued"}` growing for hours means training can't keep up. Raise `train_workers` or cores.
 - **Refusals:** `rejected_total` rising means misconfigured callers (token, network) or abuse.
-- **Readiness:** `/readyz` failing `data_dir_writable` usually means the disk is full.
+- **Disk full:** the proxy keeps answering, and requests are not recorded (`jevstiller_store_dropped_records_total` rises, `jevstiller_data_dir_writable` is 0). Readiness doesn't fail on it, so a full disk never takes the proxy out of service.
 - **Dropped records:** any increase in `store_dropped_records_total` means the disk is full or failing. Requests are still answered, but nothing new is learned, and a task's audit statistics go stale.
 - **Loads:** `jevstiller admin stats` shows `loads`. If it climbs by more than a few per minute, there are more active tasks than `max_loaded`: raise it.
 

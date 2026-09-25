@@ -157,7 +157,7 @@ The full reasoning — including the five loop bugs the first real replay found 
 
 Alpha. Validated against live Jev (above).
 - **Proxy:** the drop-in proxy works end to end with the unmodified TypeSafe SDK.
-- **Security:** two security audits (12 and 15 findings, all fixed: [docs/security.md](docs/security.md)).
+- **Security:** three security audits (12, 15 and 8 findings, all fixed: [docs/security.md](docs/security.md)).
 - **Deployment:** it runs as a hardened container.
 - **Tested under failure and load:**
   - Jev down, slow or rate limiting.

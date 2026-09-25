@@ -1,0 +1,6 @@
+# Tools that build the release artifacts (the wheel, the sdist, the image), pinned with hashes:
+# regenerate with  uv pip compile build-requirements.in --universal --python-version 3.10 --generate-hashes -o build-requirements.txt
+build
+hatchling
+hatch-fancy-pypi-readme
+uv==0.12.19

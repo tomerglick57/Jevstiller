@@ -121,4 +121,35 @@ Also fixed: duplicate `server`/`date` response headers; `ci.yml` runs with read-
 - The Kubernetes manifest has no NetworkPolicy, and docker-compose publishes on all interfaces: restrict both to your network.
 - If Jev ever accepted a second credential (a query `api_key`, an `x-api-key` header), a 2xx earned with it would accept the bearer too; today Jev and its SDK use only the bearer.
 
-One audit run finds only part of what several runs find. Run 2's availability and key-handling reviews were cut short, so a third run should weight toward availability and resource limits.
+## Security audit, 2026-09-25 (run 3)
+
+Run 3 audited `42820ab` and was weighted toward availability, keys and tenants, the completeness of run 2's fixes, and the code added since: the status page, the public API boundary, the release pipeline, and the website build. Everything was reproduced locally against mock upstreams. Regression tests are in `tests/test_audit_run3.py`.
+
+No finding exposes keys, other tenants' data or the admin API. Bearer parsing, revocation, `per_key` isolation, admin and status-page authentication and escaping, and the absence of keys from every log and response held. The two most important findings are about the guarantee itself, not about an attacker.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 1 | Medium | The audit re-scored its window with the current student, which had since trained on most of those rows, so it overstated agreement and could miss a broken budget | Audit rows are scored as served |
+| 2 | Medium | Calibration was a sample of distinct texts, so a heavily repeated input could break the bound on the real traffic mix | Split per request |
+| 3 | Medium | Request text was stored whole, once per task in the request (local answers included), with no cap; a full disk failed readiness | Stored text cut to 32,768 characters; readiness no longer depends on disk space (a metric reports it) |
+| 4 | Low | One key could fill a shared tenant's task cap (the rest of run 2 #14) | `max_new_tasks_per_key` (100 per window) |
+| 5 | Low | A blank `JEVSTILLER_CONFIG` skipped the config file, access controls included; blank values reset settings (the rest of run 2 #8) | Blank values stop startup; `none` clears |
+| 6 | Low | Two malformed requests (a non-ASCII Basic credential, a URL httpx can't build) got a 500 and a logged traceback | 401 / 400, no traceback; stricter path checks |
+| 7 | Low | Release builds ran unpinned build tools (and, in the release job, unpinned test dependencies) alongside the files being published | Hash-pinned build tools, no build isolation, `--require-hashes` in the image, build separated from tests, hashes checked before publishing |
+| 8 | Info | Settings errors could print a raw key (a reversed tenants map) or a token given in place of its file's path | Entries named by position; paths not printed |
+
+Also fixed: `docker build --build-arg PRELOAD_ENCODER=` produced an image that couldn't start.
+
+**Open, needs deployment testing against the real Jev:**
+- If Jev keeps the first of two duplicate JSON keys (the proxy's parser keeps the last), a request could get an answer recorded for a different question, state or model than the one the proxy routed. Rejecting bodies with duplicate keys, and answers whose label isn't one of the task's classes, would close it regardless.
+- If Jev accepts a credential other than the bearer (`x-api-key`, a cookie, a query parameter), a request could get a made-up bearer accepted. Not accepting keys from requests that carry such credentials would close it regardless.
+- In shared tenancy, if Jev resolves `jev-latest` to different models for different keys, one service's answers can keep flipping a shared task's teacher lineage (and so its fallback).
+
+**Open hardening items (new):**
+- Admin `mode`/`target` changes can miss an engine that is being loaded at the same moment. `mode auto` doesn't end a fallback for a task that isn't loaded.
+- Audit draws use a fixed seed per engine load.
+- In shared tenancy the bound covers the combined traffic of all services on a task: a low-traffic service can see more disagreement than the budget while the mix is within it. Use `per_key` or a tenants map where a service needs its own guarantee.
+- Uvicorn has no header or body read timeout and no connection limit: put a reverse proxy with those in front when the port is reachable by untrusted networks.
+
+One area was only partly covered: HTTP path handling and forwarding had no dedicated reviewer in this run (the path checks above came from other reviewers), so a fourth run should start there.
+

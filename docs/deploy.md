@@ -20,7 +20,7 @@ About the image:
 - CPU, ONNX Runtime, bge-small baked in. It runs as uid 10001, with `/data` as the volume, and needs no network except to Jev: `HF_HUB_OFFLINE` is set when the encoder is baked in.
 - It works with a read-only root filesystem when `/tmp` is writable, and with all capabilities dropped. `deploy/smoke_test.py` checks this, and more, against any image: `python deploy/smoke_test.py ghcr.io/tomerglick57/jevstiller:0.2.0`. CI runs it on every image build.
 
-To build it yourself: `docker build -t jevstiller .`. Dependencies are installed at the versions in `uv.lock`, hash-checked. Build arguments: `PRELOAD_ENCODER=base` (or empty, which downloads on first start), `EXTRAS=server,onnx`, `PYTHON=3.12`.
+To build it yourself: `docker build -t jevstiller .`. Every package in the build is hash-checked: the dependencies from `uv.lock`, and the build tools (the build backend, `build`, `uv`) from `build-requirements.txt`. The project is built without build isolation, so nothing unpinned is fetched. Build arguments: `PRELOAD_ENCODER=base` (or empty, which downloads on first start), `EXTRAS=server,onnx`, `PYTHON=3.12`.
 
 **GPU:**
 1. Build on a CUDA base image with `--build-arg EXTRAS=server,gpu`, e.g. start from `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` and install Python 3.12.

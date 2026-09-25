@@ -298,6 +298,10 @@ class Proxy:
         except httpx.TimeoutException:
             self.metrics.upstream.inc("timeout")
             return _error(504, "upstream API timed out (jevstiller)")
+        except httpx.InvalidURL:
+            # the request's own URL can't be sent (a malformed path): the caller's error, not ours to log in full
+            self.metrics.upstream.inc("invalid_url")
+            return _error(400, "invalid request URL (jevstiller)")
         except httpx.HTTPError as e:
             log.warning("upstream unreachable: %s", type(e).__name__)
             self.metrics.upstream.inc("unreachable")
@@ -389,7 +393,7 @@ class Proxy:
             if answer is not None:
                 self.keys.accept(kh)
             if answer is not None and not self._overloaded():       # record it, unless the encoder is saturated
-                routings, _ = await self._route(groups, specs, tenant, req, answered=_answered(answer, groups))
+                routings, _ = await self._route(groups, specs, tenant, req, answered=_answered(answer, groups), kh=kh)
                 if routings is not None:                # None: routing failed and released everything
                     try:
                         self._defer_all(routings, "key_unverified")
@@ -401,7 +405,7 @@ class Proxy:
 
         if self._overloaded():                          # the local path would be slower than Jev: forward
             return await self._plain_forward(request, body, kh, "overloaded", t0, log_rec)
-        routings, unsupported = await self._route(groups, specs, tenant, req)
+        routings, unsupported = await self._route(groups, specs, tenant, req, kh=kh)
         if routings is None:                            # routing itself failed: fail open
             return await self._plain_forward(request, body, kh, "proxy_error", t0, log_rec)
         log_rec["tasks"] = [r.key for r in routings.values()][:8]
@@ -431,7 +435,8 @@ class Proxy:
         finally:
             admitted = await self._finish(routings, groups, answer, resp, (time.perf_counter() - t_up) * 1000)
         if admitted and answer is not None:             # this answer made them tasks: record it as their first row
-            more, _ = await self._route({s: groups[s] for s in admitted}, specs, tenant, req, answered=set(admitted))
+            more, _ = await self._route({s: groups[s] for s in admitted}, specs, tenant, req, answered=set(admitted),
+                                        kh=kh)
             if more:
                 try:
                     self._defer_all(more, "co_deferred")
@@ -505,7 +510,8 @@ class Proxy:
         access_log.info(json.dumps(rec, separators=(",", ":")))
 
     async def _route(self, groups: Mapping[str, list[str]], specs: Mapping[str, dict], tenant: str,
-                     req: dict, answered: set[str] | None = None) -> tuple[dict[str, Routing] | None, list[str]]:
+                     req: dict, answered: set[str] | None = None,
+                     kh: str | None = None) -> tuple[dict[str, Routing] | None, list[str]]:
         """Route each distinct question once. Returns (routings by spec, specs that can't be tasks), or
         (None, []) if routing failed unexpectedly (everything routed so far is released).
 
@@ -532,7 +538,7 @@ class Proxy:
                     routings[spec] = await anyio.to_thread.run_sync(
                         lambda q=q, admit=admit: self.manager.route(
                             tenant, q.get("instructions"), q["criteria"], [req["state"]], req["model"],
-                            stexts=stexts, X=X, admit=admit))
+                            stexts=stexts, X=X, admit=admit, caller=kh))
                 except ValueError:
                     unsupported.append(spec)            # not a valid task (e.g. one class): Jev decides
         except Exception:
@@ -643,7 +649,10 @@ class _TooLarge(Exception):
     pass
 
 
-_BAD_PATH_CHARS = re.compile(r"[\x00-\x1f\x7f?#]")
+_BAD_PATH_CHARS = re.compile(r"[\x00-\x1f\x7f?#\\]|%(?:2e|2f|5c)|^//", re.IGNORECASE)
+# control characters, ? and # (decoded from %xx), backslashes, dot, slash or backslash still percent-encoded after
+# one decoding (%252e arrives as %2e), and a leading // (a scheme-relative URL to httpx): none appear in Jev's API,
+# and each can be read differently by the proxy and by whatever resolves the forwarded URL
 
 
 class AccessMiddleware:
@@ -695,8 +704,8 @@ class AccessMiddleware:
             return await self._refuse("duplicate_auth", 400, "more than one Authorization header",
                                       scope, receive, send)
         if any(seg in (".", "..") for seg in path.split("/")) or _BAD_PATH_CHARS.search(path):
-            # control characters, ? and # (decoded from %xx) would be dropped or split off when the path is
-            # rebuilt into a URL, turning a harmless-looking segment into ".." upstream (audit run 2)
+            # each of these can be rebuilt into a different path upstream than the one checked here (security
+            # audits runs 2 and 3; see _BAD_PATH_CHARS)
             return await self._refuse("path", 400, "invalid path", scope, receive, send)
         limit = self.settings.max_body_bytes
         lengths = [v for k, v in raw if k.lower() == b"content-length"]

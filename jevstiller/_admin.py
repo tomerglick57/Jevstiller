@@ -19,7 +19,6 @@ call needs `Authorization: Bearer <admin token>`.
 from __future__ import annotations
 
 import base64
-import binascii
 import dataclasses
 import hmac
 import math
@@ -76,7 +75,7 @@ class Admin:
         if basic and auth.lower().startswith("basic "):
             try:
                 given = base64.b64decode(auth[6:].strip(), validate=True).decode().partition(":")[2]
-            except (binascii.Error, UnicodeDecodeError):
+            except ValueError:                              # binascii.Error, non-ASCII text, non-UTF-8 bytes
                 given = ""
         if not hmac.compare_digest(given.encode(), self.token.encode()):
             if basic:

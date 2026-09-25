@@ -59,7 +59,7 @@ Extra headers on every `/v1/systemone` response:
 | Header | Values |
 |---|---|
 | `x-jevstiller-source` | `local` or `upstream` |
-| `x-jevstiller-detail` | JSON, per question: the student version (`student:v7`) when local; the reason when forwarded (`co_deferred`, `key_unverified`, `not_admitted`, `tenant_task_limit`, `task_limit`, `unsupported`). Replaced by `{"questions": n}` above 64 questions. |
+| `x-jevstiller-detail` | JSON, per question: the student version (`student:v7`) when local; the reason when forwarded (`co_deferred`, `key_unverified`, `not_admitted`, `caller_task_limit`, `tenant_task_limit`, `task_limit`, `unsupported`). Replaced by `{"questions": n}` above 64 questions. |
 
 ## API keys
 
