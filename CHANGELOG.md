@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-09-25
 
 The drop-in Jev proxy. Point `TYPESAFE_BASE_URL` at `jevstiller serve`, keep your services' own Jev keys, and the proxy learns each repeated `choice` question from Jev's answers, then answers it locally within the agreement budget you set, with a permanent audit to Jev and automatic fallback. First release on PyPI (`pip install "jevstiller[server,onnx]"`) and as a container image (`ghcr.io/tomerglick57/jevstiller`).
 
