@@ -92,7 +92,10 @@ def _serve(a: argparse.Namespace) -> None:
              f"stored, blanked after {s.text_retention_days:g} days" if s.text_retention_days else
              "stored until the task is deleted")
     salt = load_salt(data)
-    encoder = BatchingEncoder(load_encoder(s.encoder, backend=s.backend, device=s.device))
+    try:
+        encoder = BatchingEncoder(load_encoder(s.encoder, backend=s.backend, device=s.device))
+    except ImportError as e:                            # a model encoder without its extra: say what to install
+        raise SystemExit(f"encoder {s.encoder!r}: {e}") from None
     encoder.encode(["warm up"])
     scheduler = TrainScheduler(workers=s.train_workers)
 

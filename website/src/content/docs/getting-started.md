@@ -11,14 +11,14 @@ the base URL changes.
 ```bash
 export JEVSTILLER_ADMIN_TOKEN=$(openssl rand -hex 32)      # enables the admin API and /metrics
 docker run -d --name jevstiller -p 8080:8080 -v jevstiller-data:/data \
-  -e JEVSTILLER_ADMIN_TOKEN ghcr.io/tomerglick57/jevstiller:0.3.0
+  -e JEVSTILLER_ADMIN_TOKEN ghcr.io/tomerglick57/jevstiller:0.3.1
 curl -s localhost:8080/readyz
 ```
 
 The image runs on CPU with the encoder built in, and needs no network except to Jev. Without Docker:
 
 ```bash
-pip install "jevstiller[server,onnx]"                # Python 3.10+
+pip install "jevstiller[onnx]"                       # Python 3.10+
 jevstiller serve --data-dir ./jevstiller-data
 ```
 

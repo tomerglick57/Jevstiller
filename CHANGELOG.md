@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-09-25
+
+- **`pip install jevstiller` now includes the proxy.** Its dependencies (Starlette, uvicorn, httpx, anyio, h11) are part of the plain install. Before, `jevstiller serve` failed with `No module named 'uvicorn'` unless you had installed `jevstiller[server]`. The `server` extra still exists (empty), so existing install commands keep working.
+- **For the default encoder, install `jevstiller[onnx]`.** Without it, `jevstiller serve` and `load_encoder` now say so (`pip install "jevstiller[onnx]"`, or use `--encoder hash`) instead of failing with a traceback.
+
 ## 0.3.0 — 2026-09-25
 
 A status page, a defined public Python API, and the fixes from a third security audit, including two in the checks behind the agreement guarantee.

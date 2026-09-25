@@ -27,8 +27,31 @@ TIERS = {
 }
 
 
+_EXTRA = {"onnxruntime": "onnx", "tokenizers": "onnx", "huggingface_hub": "onnx", "torch": "torch",
+          "transformers": "torch"}
+
+
+def _missing(err: ModuleNotFoundError) -> Exception:
+    """A missing optional package, as an error that says what to install."""
+    extra = _EXTRA.get((err.name or "").split(".")[0])
+    if extra is None:
+        return err
+    return ImportError(f"this encoder needs {err.name}: pip install \"jevstiller[{extra}]\" (or use the hash "
+                       f"encoder, which needs nothing)")
+
+
 def load_encoder(spec: str = "base", backend: str = "auto", device: str = "auto", **kw) -> Encoder:
-    """spec: 'hash' | 'hash:<dim>' | a tier name | 'torch:<hf model>' | 'onnx:<hf repo>'."""
+    """spec: 'hash' | 'hash:<dim>' | a tier name | 'torch:<hf model>' | 'onnx:<hf repo>'.
+
+    The model encoders need an extra (`jevstiller[onnx]`, `[gpu]` or `[torch]`); without it this raises an
+    ImportError that says which."""
+    try:
+        return _load(spec, backend, device, **kw)
+    except ModuleNotFoundError as e:
+        raise _missing(e) from None
+
+
+def _load(spec: str, backend: str, device: str, **kw) -> Encoder:
     if spec == "hash" or spec.startswith("hash:"):
         dim = int(spec.split(":")[1]) if ":" in spec else 512
         return HashEncoder(dim=dim, **kw)

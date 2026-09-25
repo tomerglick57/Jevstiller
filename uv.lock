@@ -324,41 +324,35 @@ wheels = [
 
 [[package]]
 name = "jevstiller"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
+    { name = "h11" },
+    { name = "httpx" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "starlette" },
     { name = "threadpoolctl" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
 all = [
-    { name = "anyio" },
-    { name = "h11" },
-    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "onnxruntime", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "onnxruntime", version = "1.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "starlette" },
     { name = "tokenizers" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "torch" },
     { name = "transformers" },
     { name = "typesafe-sdk" },
-    { name = "uvicorn" },
 ]
 dev = [
-    { name = "anyio" },
-    { name = "h11" },
-    { name = "httpx" },
     { name = "pytest" },
     { name = "ruff" },
-    { name = "starlette" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "typesafe-sdk" },
-    { name = "uvicorn" },
 ]
 gpu = [
     { name = "huggingface-hub" },
@@ -375,14 +369,6 @@ onnx = [
     { name = "onnxruntime", version = "1.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "tokenizers" },
 ]
-server = [
-    { name = "anyio" },
-    { name = "h11" },
-    { name = "httpx" },
-    { name = "starlette" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
-    { name = "uvicorn" },
-]
 torch = [
     { name = "torch" },
     { name = "transformers" },
@@ -390,9 +376,9 @@ torch = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anyio", marker = "extra == 'server'", specifier = ">=4.14.2" },
-    { name = "h11", marker = "extra == 'server'", specifier = ">=0.16" },
-    { name = "httpx", marker = "extra == 'server'", specifier = ">=0.27" },
+    { name = "anyio", specifier = ">=4.14.2" },
+    { name = "h11", specifier = ">=0.16" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'gpu'", specifier = ">=0.20" },
     { name = "huggingface-hub", marker = "extra == 'onnx'", specifier = ">=0.20" },
     { name = "jevstiller", extras = ["jev", "server"], marker = "extra == 'dev'" },
@@ -402,15 +388,15 @@ requires-dist = [
     { name = "onnxruntime-gpu", marker = "extra == 'gpu'", specifier = ">=1.16" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "starlette", marker = "extra == 'server'", specifier = ">=1.3.1" },
+    { name = "starlette", specifier = ">=1.3.1" },
     { name = "threadpoolctl", specifier = ">=3.1" },
     { name = "tokenizers", marker = "extra == 'gpu'", specifier = ">=0.15" },
     { name = "tokenizers", marker = "extra == 'onnx'", specifier = ">=0.15" },
-    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'server'", specifier = ">=2" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.1" },
     { name = "transformers", marker = "extra == 'torch'", specifier = ">=4.36" },
     { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.7.1" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.31" },
+    { name = "uvicorn", specifier = ">=0.31" },
 ]
 provides-extras = ["jev", "server", "onnx", "gpu", "torch", "all", "dev"]
 
