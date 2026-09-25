@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **A status page** (P5.7) at `GET /jevstiller/status`. Open it in a browser and log in with the admin token as the password (any user name). It shows the share answered locally, each task's state, local share and agreement with Jev against its target, and recent events. It is read-only and cached for 5 s, and it never loads a task. It is HTML-escaped with no scripts (the CSP forbids them), and it is off without an admin token. The JSON admin API still takes only the bearer token.
 - **A defined public API** (P7.7). It is what `jevstiller`, `jevstiller.server`, `jevstiller.encoders`, `jevstiller.teachers` and `jevstiller.teachers.jev` export in `__all__`, recorded in `tests/public_api.txt` and checked by a test. Everything else is internal (docs/compatibility.md). For code that imported internals:
   - Internal modules have a leading underscore: `jevstiller.core` → `jevstiller._core`, and likewise `manager`, `store`, `task`, `training`, `scheduler`, `registry`, `calibrate`, `ood`, `student`, `settings`, `admin`, `backup`, `metrics`, `cli`, the encoder and teacher implementations, and the proxy's internals (`jevstiller.server` keeps `create_app`, `ProxySettings`, `KeyRegistry` and `load_salt`).
   - Import from `jevstiller` instead: `train_pool` (was `jevstiller.training`), `State`, `Routed`, `Routing` and `TaskInfo`.

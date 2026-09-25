@@ -737,7 +737,8 @@ def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys
     registry = MetricsRegistry()
     metrics = ProxyMetrics(registry)
     proxy = Proxy(manager, settings, keys, client, metrics)
-    admin = Admin(manager, admin_token, stats=lambda: {"proxy": dict(proxy.stats)})
+    from . import __version__
+    admin = Admin(manager, admin_token, stats=lambda: {"proxy": dict(proxy.stats)}, version=__version__)
     _task_gauges(registry, manager, keys)
 
     def _ready() -> dict[str, bool]:

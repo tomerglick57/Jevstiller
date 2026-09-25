@@ -12,24 +12,31 @@ call needs `Authorization: Bearer <admin token>`.
     DELETE /jevstiller/v1/tasks/{key}                delete the task and all its data
     DELETE /jevstiller/v1/tenants/{tenant}           delete every task of a tenant
     GET    /jevstiller/v1/stats                      proxy, manager and scheduler counters
+
+    GET    /jevstiller/status                        a read-only HTML page (browsers: log in with any user name
+                                                     and the admin token as the password)
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import dataclasses
 import hmac
 import math
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 
 import anyio
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from ._manager import TaskManager
 
 PREFIX = "/jevstiller/v1"
+PAGE_CACHE_S = 5.0                                      # the status page is redrawn at most this often
 _KEY = re.compile(r"^[0-9a-f]{20}$")
 
 
@@ -54,16 +61,27 @@ def _err(status: int, detail: str) -> JSONResponse:
 
 
 class Admin:
-    def __init__(self, manager: TaskManager, token: str | None, stats: Callable[[], dict] | None = None):
-        self.manager, self.token, self.stats_fn = manager, token, stats
+    def __init__(self, manager: TaskManager, token: str | None, stats: Callable[[], dict] | None = None,
+                 version: str = ""):
+        self.manager, self.token, self.stats_fn, self.version = manager, token, stats, version
+        self._page: tuple[float, str, str] | None = None   # (rendered at, html, style nonce)
 
-    def authorized(self, request: Request) -> Response | None:
-        """None when the call may proceed, else the response to send."""
+    def authorized(self, request: Request, basic: bool = False) -> Response | None:
+        """None when the call may proceed, else the response to send. `basic`: also accept the admin token as the
+        password of HTTP Basic auth (any user name), for browsers."""
         if not self.token:
             return _err(404, "not found")                    # the admin API is off
         auth = request.headers.get("authorization", "")
         given = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if basic and auth.lower().startswith("basic "):
+            try:
+                given = base64.b64decode(auth[6:].strip(), validate=True).decode().partition(":")[2]
+            except (binascii.Error, UnicodeDecodeError):
+                given = ""
         if not hmac.compare_digest(given.encode(), self.token.encode()):
+            if basic:
+                return Response("admin token required (as the password)\n", 401, media_type="text/plain",
+                                headers={"www-authenticate": 'Basic realm="jevstiller", charset="UTF-8"'})
             return _err(401, "admin token required")
         return None
 
@@ -208,9 +226,29 @@ class Admin:
             data.update(self.stats_fn())
         return _ok(data)
 
+    async def status_page(self, request: Request) -> Response:
+        if (denied := self.authorized(request, basic=True)) is not None:
+            return denied
+        if request.method not in ("GET", "HEAD"):
+            return _err(405, "method not allowed")
+        now = time.monotonic()
+        if self._page is None or now - self._page[0] > PAGE_CACHE_S:   # drawing it reads every loaded task's store
+            from ._status_page import render
+            stats = (self.stats_fn() if self.stats_fn else {}).get("proxy")
+            page, nonce = await anyio.to_thread.run_sync(lambda: render(self.manager, stats, self.version))
+            self._page = (now, page, nonce)
+        _, page, nonce = self._page
+        return HTMLResponse(page, headers={
+            "content-security-policy": (f"default-src 'none'; style-src 'nonce-{nonce}'; base-uri 'none'; "
+                                        "form-action 'none'; frame-ancestors 'none'"),
+            "x-frame-options": "DENY", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer",
+            "cache-control": "no-store"})
+
     def routes(self) -> list[Route]:
         p = PREFIX
         return [
+            Route("/jevstiller/status", self.status_page, methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE",
+                                                                   "OPTIONS"]),
             Route(f"{p}/tasks", self.tasks, methods=["GET"]),
             Route(f"{p}/tasks/{{key}}", self.task, methods=["GET"]),
             Route(f"{p}/tasks/{{key}}", self.delete_task, methods=["DELETE"]),

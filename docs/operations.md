@@ -7,7 +7,22 @@
 | `GET /healthz` | `{"ok": true}` (the process answers) |
 | `GET /readyz` | 200 `{"ready": true, "checks": {"manager", "data_dir_writable", "encoder"}}`; 503 names the failing check |
 | `jevstiller admin stats` | tasks, loaded, training queue, request counters |
+| `/jevstiller/status` | the status page, in a browser (below) |
 | `/metrics` | see below |
+
+## The status page
+
+Open `http://<proxy>:8080/jevstiller/status` in a browser. Log in with any user name and the admin token as the password. The page shows:
+- how much is answered locally since start;
+- each task (the 200 most recently used): its tenant and question, what it's doing (learning, answering locally, a candidate in shadow, fallback to Jev), its local share, and its agreement with Jev on the audit channel with the interval and `OK` / `inconclusive` / `BROKEN`;
+- recent events (promotions, drift, teacher changes).
+
+Details:
+- **Read-only.** Change things with `jevstiller admin`.
+- **Cheap:** it refreshes every 30 s, is drawn at most every 5 s, and reads only tasks that are already loaded. Viewing it never loads a task or counts as using it.
+- **Off (404) without an admin token.**
+- **With `access_token` set,** every request needs `x-jevstiller-token`, and a browser can't add it. Open the page through a reverse proxy that adds the header, or from an allowed network without the access token.
+- **Safe to show caller data:** the questions, tenant names and class names on it come from callers. They are HTML-escaped, and the page runs no scripts, with a Content-Security-Policy that forbids them.
 
 ## The admin API and CLI
 
