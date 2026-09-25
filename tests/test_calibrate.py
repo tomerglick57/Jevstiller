@@ -54,7 +54,8 @@ def test_the_guarantee_holds_at_delta():
 
     def true_rate(t):                     # P(conf >= t and disagree)
         m = fine >= t
-        return float(np.trapezoid(np.where(m, p_dis(fine), 0), fine) / 0.5)
+        trapezoid = getattr(np, "trapezoid", None) or np.trapz   # numpy < 2 has only trapz
+        return float(trapezoid(np.where(m, p_dis(fine), 0), fine) / 0.5)
 
     grid = np.linspace(0.99, 0.5, 60)
     sims, bad = 300, 0

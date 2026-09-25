@@ -74,7 +74,8 @@ def serve(app):
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)   # as uvicorn does for sockets it creates
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="off"))
+    # keep-alive as `jevstiller serve` sets it: uvicorn's 5 s default races httpx's reuse of idle connections
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="off", timeout_keep_alive=75))
     t = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     t.start()
     while not server.started:

@@ -43,7 +43,7 @@ from typing import Any
 import anyio
 import httpx
 from starlette.applications import Starlette
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
@@ -695,7 +695,11 @@ def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys
         for close in closers:
             await anyio.to_thread.run_sync(close)
 
-    app = Starlette(routes=[
+    async def client_gone(request: Request, exc: Exception) -> Response:
+        # the caller hung up while sending its request: nobody to answer, and not the proxy's error
+        return Response(status_code=499)
+
+    app = Starlette(exception_handlers={ClientDisconnect: client_gone}, routes=[
         Route(SYSTEM_ONE, proxy.system_one, methods=["POST"]),
         Route("/healthz", proxy.healthz, methods=ALL_METHODS),
         Route("/readyz", readyz, methods=ALL_METHODS),

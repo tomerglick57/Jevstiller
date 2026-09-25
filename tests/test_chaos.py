@@ -345,3 +345,34 @@ def test_idle_connections_are_kept_longer_than_clients_reuse_them(tmp_path, monk
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append(kw))
     cli.main(["serve", "--data-dir", str(tmp_path), "--encoder", "hash", "--log-level", "warning"])
     assert calls[0]["timeout_keep_alive"] >= 60           # httpx reuses for 5 s, load balancers ~60 s
+
+
+def test_a_caller_hanging_up_mid_request_is_not_an_error(tmp_path, world):
+    import logging
+
+    class Errors(logging.Handler):                        # uvicorn's loggers don't propagate to caplog's root
+        def __init__(self):
+            super().__init__(logging.ERROR)
+            self.records = []
+
+        def emit(self, record):
+            self.records.append(record)
+    jev = ChaosJev(world)
+    with serve(jev.app()) as upstream:
+        m = TaskManager(tmp_path, None, HashEncoder(dim=64), Config(training="manual"), janitor_interval_s=3600)
+        with serve(create_app(m, ProxySettings(upstream=upstream))) as proxy:
+            errors = Errors()                             # after the servers start: uvicorn resets its loggers
+            logging.getLogger("uvicorn.error").addHandler(errors)
+            try:
+                host, port = proxy.removeprefix("http://").split(":")
+                s = socket.create_connection((host, int(port)))
+                s.sendall(b"POST /v1/systemone HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer k\r\n"
+                          b"Content-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"state\": ")
+                time.sleep(0.3)                           # the handler is now waiting for the rest
+                s.close()                                 # gone before the body arrived
+                time.sleep(0.5)
+                assert not errors.records, [r.getMessage() for r in errors.records]
+                assert _source(client(proxy), "w1") == "upstream"   # and the proxy carries on
+            finally:
+                logging.getLogger("uvicorn.error").removeHandler(errors)
+        m.close()

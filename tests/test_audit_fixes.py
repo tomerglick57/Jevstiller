@@ -270,8 +270,12 @@ def test_deeply_nested_json_is_forwarded(tmp_path, up):
     m = _manager(tmp_path)
     with serve(up.app()) as u, serve(create_app(m, ProxySettings(upstream=u))) as proxy:
         body = b'{"state": ' + b"[" * 100_000 + b"]" * 100_000 + b', "model": "m", "questions": {}}'
-        r = httpx.post(f"{proxy}/v1/systemone", content=body, headers={"Authorization": f"Bearer {GOOD}"})
-        assert r.status_code == 422 and len(up.requests) == 1         # Jev's verdict, not a proxy 500
+        headers = {"Authorization": f"Bearer {GOOD}"}
+        direct = httpx.post(f"{u}/v1/systemone", content=body, headers=headers)
+        r = httpx.post(f"{proxy}/v1/systemone", content=body, headers=headers)
+        # Jev's verdict, whatever it is (Python 3.14.7 parses this nesting; earlier versions give up), and
+        # never a proxy 500
+        assert r.status_code == direct.status_code != 500 and len(up.requests) == 2
     m.close()
 
 

@@ -237,9 +237,12 @@ def test_the_loaded_cap_holds_under_concurrent_loads(tmp_path, teacher, world):
 def test_a_requested_maintenance_pass_does_not_pin_an_engine(tmp_path, teacher, world):
     m = TaskManager(tmp_path, teacher, HashEncoder(dim=128), _cfg(training="background", maintenance_interval_s=60),
                     admission=Admission(min_requests=1), max_loaded=0, janitor_interval_s=3600)
-    m.classify("acme", Q, LABELS, _texts(world, 3))
-    m.classify("acme", Q, LABELS, _texts(world, 3))       # the worker rests 60 s: this pass stays requested
+    m.classify("acme", Q, LABELS, _texts(world, 3))       # requests a first pass
     e = m.engine(m.tasks()[0].key)
+    deadline = time.time() + 30
+    while (e._done < 1 or e._maint.locked()) and time.time() < deadline:
+        time.sleep(0.01)                                  # until it has run; the worker then rests 60 s
+    m.classify("acme", Q, LABELS, _texts(world, 3))       # so this pass stays requested, not running
     assert not e.busy()
     m.sweep()
     assert m.loaded() == []
