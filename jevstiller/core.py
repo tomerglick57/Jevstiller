@@ -638,7 +638,8 @@ class Jevstiller:
                      importance_weighting=self.cfg.importance_weighting,
                      prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None,
                      teacher_model=lineage, since_id=since, min_samples_per_class=self.cfg.min_samples_per_class,
-                     defer_rare=self.cfg.rare_classes == "defer")
+                     defer_rare=self.cfg.rare_classes == "defer", max_train=self.cfg.max_train_samples,
+                     max_calib=self.cfg.max_calib_samples)
         if self.train_executor is None:
             fut: Future = Future()
             try:

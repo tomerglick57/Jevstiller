@@ -120,8 +120,8 @@ class Store(Protocol):
     def event(self, kind: str, **detail) -> None: ...
     def flush(self, timeout: float | None = None) -> bool: ...
     def counts(self, task_version: str, teacher_model: str | None = None, since_id: int = 0) -> dict: ...
-    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0): ...
-    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0): ...
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0): ...
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0): ...
     def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None,
                        since_id: int = 0): ...
     def audit_window(self, task_version: str, encoder_id: str, dim: int, limit: int,
@@ -313,24 +313,27 @@ class SampleStore:
 
     def labelled(self, task_version: str, encoder_id: str, labels: Sequence[str], dim: int,
                  split: str, channels: Iterable[str] = TEACHER_CHANNELS, teacher_model: str | None = None,
-                 since_id: int = 0):
+                 since_id: int = 0, limit: int = 0):
         """Embeddings X, teacher distributions Y, teacher argmax y, importance weights w for teacher-labelled rows
-        (of one teacher lineage when `teacher_model` is given, after row `since_id`)."""
+        (of one teacher lineage when `teacher_model` is given, after row `since_id`), oldest first. With `limit`,
+        only the most recent `limit` rows."""
         ch = tuple(channels)
         lin, lin_args = _lineage(teacher_model, since_id)
         rows = self.db.execute(
             f"SELECT embedding, teacher_probs, teacher_label, weight FROM samples "
             f"WHERE task_version=? AND encoder_id=?{lin} "
-            f"AND split=? AND teacher_label IS NOT NULL AND channel IN ({','.join('?' * len(ch))}) ORDER BY id",
-            (task_version, encoder_id, *lin_args, split, *ch)).fetchall()
-        return self._matrix(rows, labels, dim)
+            f"AND split=? AND teacher_label IS NOT NULL AND channel IN ({','.join('?' * len(ch))}) "
+            + ("ORDER BY id DESC LIMIT ?" if limit else "ORDER BY id"),
+            (task_version, encoder_id, *lin_args, split, *ch, *((limit,) if limit else ()))).fetchall()
+        return self._matrix(rows[::-1] if limit else rows, labels, dim)
 
-    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0):
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0):
         return self.labelled(task_version, encoder_id, labels, dim, "train", teacher_model=teacher_model,
-                             since_id=since_id)
+                             since_id=since_id, limit=limit)
 
-    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0):
-        return self.labelled(task_version, encoder_id, labels, dim, "calib", IID_CHANNELS, teacher_model, since_id)
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0):
+        return self.labelled(task_version, encoder_id, labels, dim, "calib", IID_CHANNELS, teacher_model, since_id,
+                             limit)
 
     def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None,
                        since_id: int = 0):

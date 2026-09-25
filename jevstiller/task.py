@@ -107,6 +107,9 @@ class Config:
     ood_quantile: float = 0.99
     ood_k: int = 10
     ood_max_ref: int = 5_000            # reference embeddings kept per version (memory, per-request cost)
+    max_train_samples: int = 50_000     # a fit uses at most this many of the most recent training rows (0 = all):
+                                        # without a cap, each retrain of a busy task reads its whole history
+    max_calib_samples: int = 20_000     # ... and calibration rows
     drift_window: int = 500             # audit records in the rolling agreement check
     drift_min_samples: int = 200
     drift_margin: float = 0.0           # ub(agreement) < target - margin -> hard fallback
@@ -142,6 +145,10 @@ class Config:
                               ("teacher_change", TEACHER_CHANGE), ("rare_classes", RARE_CLASSES)):
             if getattr(self, name) not in allowed:
                 raise ValueError(f"{name} must be one of {allowed}, got {getattr(self, name)!r}")
+        for name, floor in (("max_train_samples", "min_train_samples"), ("max_calib_samples", "min_calib_samples")):
+            cap = getattr(self, name)
+            if cap < 0 or 0 < cap < getattr(self, floor):
+                raise ValueError(f"{name} must be 0 (no cap) or at least {floor} ({getattr(self, floor)}), got {cap}")
 
     def to_dict(self) -> dict:
         return asdict(self)

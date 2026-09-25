@@ -94,6 +94,8 @@ class FitJob:
     prod_dir: str | None = None    # production version, scored on the same calibration rows
     teacher_model: str | None = None   # train on this teacher lineage only
     since_id: int = 0                  # ... and on rows after this one (a confirmed drift restarts the data)
+    max_train: int = 0                 # the most recent rows only (0 = all)
+    max_calib: int = 0
     min_samples_per_class: int = 0
     defer_rare: bool = False       # classes below min_samples_per_class are deferred to the teacher
 
@@ -118,9 +120,9 @@ def run_fit_job(job: FitJob) -> FitResult:
     store = SampleStore(Path(job.store_path), read_only=True)
     try:
         X, Y, y, w = store.training_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model,
-                                        job.since_id)
+                                        job.since_id, job.max_train)
         Xc, _, yc, _ = store.calib_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model,
-                                       job.since_id)
+                                       job.since_id, job.max_calib)
     finally:
         store.close()
     if len(X) == 0 or len(Xc) == 0:

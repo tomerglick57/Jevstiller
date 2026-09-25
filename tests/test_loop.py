@@ -158,3 +158,24 @@ def test_without_a_student_a_failed_candidate_backs_off(tmp_path, task, world, t
     js.classify_batch([t for t, _ in world.sample(100)])
     assert js._should_train()
     js.close()
+
+
+def test_fits_use_only_the_most_recent_rows(tmp_path, task, world, teacher):
+    """A fit reads at most max_train_samples / max_calib_samples rows, the newest: otherwise a busy task's retrains
+    read (and hold in memory) its whole history, growing without bound over months."""
+    import numpy as np
+    import pytest
+
+    from jevstiller import Config
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual", max_train_samples=500,
+                                                          max_calib_samples=200))
+    for _ in range(10):
+        js.classify_batch([t for t, _ in world.sample(200)])
+    rep = js.train_now()
+    assert rep.n_train == 500 and rep.n_calib == 200
+    args = (task.version, js.encoder.id, task.labels, js.encoder.dim)
+    X_all = js.store.training_set(*args)[0]
+    assert len(X_all) > 500 and np.array_equal(js.store.training_set(*args, limit=500)[0], X_all[-500:])
+    js.close()
+    with pytest.raises(ValueError, match="max_train_samples"):
+        Config(min_train_samples=1000, max_train_samples=100)

@@ -80,6 +80,30 @@ def serve_in_thread(app) -> str:
     return f"http://127.0.0.1:{sock.getsockname()[1]}"
 
 
+def workers_rss_mb(pid: int) -> float:
+    """Resident memory of the server's descendants (training workers, the forkserver)."""
+    parent: dict[int, int] = {}
+    for d in Path("/proc").iterdir():
+        if d.name.isdigit():
+            try:
+                parent[int(d.name)] = int((d / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            except (OSError, IndexError, ValueError):
+                pass
+    kids, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        new = [c for c, pp in parent.items() if pp == p]
+        kids += new
+        todo += new
+    total = 0.0
+    for k in kids:
+        try:
+            total += rss_mb(k)
+        except OSError:
+            pass
+    return total
+
+
 def rss_mb(pid: int) -> float:
     for line in Path(f"/proc/{pid}/status").read_text().splitlines():
         if line.startswith("VmRSS:"):
@@ -195,12 +219,14 @@ drift_min_samples = 60
             except (httpx.HTTPError, ValueError):
                 st = {}
             timeline.append({"t": round(now), "rss_mb": round(rss_mb(server.pid), 1),
+                             "workers_mb": round(workers_rss_mb(server.pid), 1),
                              "models_mb": round(st.get("student_memory_mb", float("nan")), 1),
                              "loads": st.get("loads"), "training": st.get("training", {}).get("queued"),
                              "local_share": round(window.get("local", 0) / n, 3), "requests": n,
                              "errors": {k: v for k, v in window.items() if k not in ("local", "upstream")}})
             last = timeline[-1]
             print(f"t={last['t']:>5}s  rss {last['rss_mb']:>7.1f} MB  models {last['models_mb']:>6.1f} MB  "
+                  f"workers {last['workers_mb']:>6.1f} MB  "
                   f"loads {last['loads']}  queued {last['training']}  local {last['local_share']:.0%}  "
                   f"req {n}  {last['errors'] or ''}{'  <- drift' if drifted_at and now - drifted_at < 10 else ''}",
                   flush=True)
@@ -247,6 +273,7 @@ drift_min_samples = 60
         "recovered": (post_end >= 0.8 * pre_share and post_min < pre_share) if drifted_at is not None else None,
         "rss_mb": {"start": timeline[0]["rss_mb"], "max": max(p["rss_mb"] for p in timeline), "end": timeline[-1]["rss_mb"]},
         "models_mb": {"max": max(p["models_mb"] for p in timeline), "end": timeline[-1]["models_mb"]},
+        "training_workers_mb": {"max": max(p["workers_mb"] for p in timeline), "end": timeline[-1]["workers_mb"]},
         "loads_per_minute": round(((timeline[-1]["loads"] or 0) - (timeline[0]["loads"] or 0))
                                   / max(1e-9, (timeline[-1]["t"] - timeline[0]["t"]) / 60), 1),
         "rss_minus_models_slope_mb_per_hour": {"first_half": round(slope(timeline[2:half]), 1),

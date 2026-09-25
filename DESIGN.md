@@ -534,7 +534,7 @@ Training never runs on a caller's thread. `Config.training`:
 - `inline`: maintenance runs inside `classify_batch`. It is deterministic, which replays and tests need, because a replay pushes weeks of traffic through in seconds.
 - `manual`: only `maintain()` / `train_now()`.
 
-A training job (`training.run_fit_job`) is self-contained. It reads the task's samples from a read-only connection, fits the head, the OOD reference and the policy, scores production on the same calibration rows, and writes the version files into a staging directory. The registry then `adopt`s that directory atomically. Only small objects cross a process boundary, so with a `train_executor` (a process pool) the serving process does no heavy work for a fit.
+A training job (`training.run_fit_job`) is self-contained. It reads the task's most recent samples from a read-only connection (at most `max_train_samples`, 50,000, and `max_calib_samples`, 20,000: without a cap, every retrain of a busy task would read, and hold in memory, its whole history), fits the head, the OOD reference and the policy, scores production on the same calibration rows, and writes the version files into a staging directory. The registry then `adopt`s that directory atomically. Only small objects cross a process boundary, so with a `train_executor` (a process pool) the serving process does no heavy work for a fit.
 
 With an executor, training is **asynchronous**: maintenance submits the job and keeps judging shadows and checking drift while the job waits for a worker, and a later pass adopts the result. A failed job is recorded (`train_failed`) and retried on a later pass. It never fails a request.
 
