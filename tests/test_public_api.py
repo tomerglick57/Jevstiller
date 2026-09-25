@@ -64,8 +64,10 @@ def describe() -> list[str]:
                 lines += ["  " + line for line in _describe_class(path, obj)]
             elif callable(obj):
                 lines.append(f"  def {path}{_sig(obj)}")
-            else:
+            elif isinstance(obj, (dict, list, tuple, str, int, float)):
                 lines.append(f"  {path}: {type(obj).__name__}")
+            else:                                        # a type alias: its repr is the same on every Python
+                lines.append(f"  {path} = {obj!r}")
     return lines
 
 

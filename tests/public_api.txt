@@ -99,7 +99,7 @@ module jevstiller
       field model: str | None
       field uncounted: bool
       property local
-  jevstiller.State: Union
+  jevstiller.State = str | dict | list
   class jevstiller.Status(task: 'str', task_version: 'str', mode: 'str', audit_rate: 'float', production: 'str | None', shadow: 'str | None', requests: 'int', served_by_student: 'int', served_by_teacher: 'int', channels: 'dict', student_share: 'float', teacher_share: 'float', audit_n: 'int', audit_agreement: 'float | None', audit_agreement_lb: 'float | None', audit_agreement_ub: 'float | None', target_agreement: 'float', teacher_calls: 'int', teacher_calls_avoided: 'int', teacher_cost_usd: 'float', teacher_cost_avoided_usd: 'float', labelled_train: 'int', labelled_calib: 'int', policy: 'dict | None', events: 'list' = <factory>, teacher_errors: 'int' = 0, teacher_model: 'str | None' = None, readiness: 'dict | None' = None) -> None
       field task: str
       field task_version: str
