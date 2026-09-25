@@ -18,7 +18,7 @@ base URL changes.
 export JEVSTILLER_ADMIN_TOKEN=$(openssl rand -hex 32)
 docker run -d --name jevstiller -p 8080:8080 \
   -v jevstiller-data:/data -e JEVSTILLER_ADMIN_TOKEN \
-  ghcr.io/tomerglick57/jevstiller:0.3.2
+  ghcr.io/tomerglick57/jevstiller:0.3.3
 ```
 
 The image runs on CPU with the encoder built in, and needs no network except to Jev.
@@ -43,7 +43,7 @@ The settings are in `deploy/jevstiller.toml`. Your other services on the same Co
 ```bash
 kubectl create secret generic jevstiller \
   --from-literal=admin-token=$(openssl rand -hex 32)
-REPO=https://raw.githubusercontent.com/tomerglick57/Jevstiller/v0.3.2
+REPO=https://raw.githubusercontent.com/tomerglick57/Jevstiller/v0.3.3
 kubectl apply -f $REPO/deploy/kubernetes/jevstiller.yaml
 # to try it from your machine:
 kubectl port-forward svc/jevstiller 8080:8080

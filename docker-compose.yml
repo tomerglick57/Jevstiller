@@ -1,7 +1,7 @@
 # docker compose up -d        then, in the calling services:  TYPESAFE_BASE_URL=http://jevstiller:8080
 services:
   jevstiller:
-    image: ghcr.io/tomerglick57/jevstiller:0.3.2     # or build it yourself: replace this line with `build: .`
+    image: ghcr.io/tomerglick57/jevstiller:0.3.3     # or build it yourself: replace this line with `build: .`
     ports: ["8080:8080"]
     volumes:
       - jevstiller-data:/data

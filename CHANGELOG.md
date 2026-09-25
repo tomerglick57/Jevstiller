@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 — 2026-09-26
 
 - **`jevstiller admin` works next to the server without flags.** When no token or URL is given, it uses the server's own settings: the config file (`JEVSTILLER_CONFIG`), `JEVSTILLER_ADMIN_TOKEN_FILE` and the port. So `docker exec jevstiller jevstiller admin tasks` (or `docker compose exec`, or `kubectl exec`) just works.
 - The Kubernetes manifest passes its config file as `JEVSTILLER_CONFIG` instead of `--config`, so `kubectl exec ... jevstiller admin` finds the same settings.
