@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 — 2026-09-26
 
 - **One install command.** `pip install jevstiller` now includes everything most people need: the proxy, the default encoder (ONNX Runtime, CPU) and the Jev adapter. On a GPU machine, `pip install "jevstiller[gpu]"` adds PyTorch, which is used automatically when CUDA is available. ONNX Runtime is required only on platforms it ships for (x86-64 and ARM64); elsewhere `jevstiller serve` says what to do.
   - The `[server]`, `[onnx]`, `[jev]`, `[torch]` and `[all]` extras still work (the first three are now empty, the others mean `[gpu]`).

@@ -51,7 +51,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: jevstiller
-          image: ghcr.io/tomerglick57/jevstiller:0.3.1
+          image: ghcr.io/tomerglick57/jevstiller:0.3.2
           args: ["serve", "--config", "/etc/jevstiller/jevstiller.toml"]
           ports:
             - {name: http, containerPort: 8080}
