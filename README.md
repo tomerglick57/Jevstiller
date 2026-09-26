@@ -170,6 +170,7 @@ Alpha. Validated against live Jev (above).
   - Load up to 256 concurrent callers.
 
   Results: [docs/benchmarks.md](docs/benchmarks.md).
+- **Benchmarked on five public tasks** against Jev's recorded answers (Banking77, CLINC150, AG News, TweetEval sentiment and offensive): coverage from 22% (tweets, where Jev itself is inconsistent) to 80% (news), agreement 98.7–99.7%, system accuracy equal to Jev's on every task. Over 100 random splits, the calibrated threshold broke the 2% budget once; the usual point-estimate rule broke it on 6–12 of 20 splits per task. Tables and the one-command reproduction: [docs/benchmarks.md](docs/benchmarks.md#benchmark).
 
 See [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) for what is done and what is next.
 

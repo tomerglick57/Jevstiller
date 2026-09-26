@@ -28,14 +28,20 @@ def replay_row(d: str, tag: str, encoder: str) -> str | None:
     if not p.exists():
         return None
     r = json.loads(p.read_text())
-    e = [c for c in r["checkpoints"] if c.get("eval")][-1]["eval"]
     fs = r["final_status"]
+    evals = [c for c in r["checkpoints"] if c.get("eval")]
+    if not evals:
+        return (f"| {NAMES.get(d, d)} | {r['n_stream']:,} | no student | – | {r['teacher_profile']['teacher_accuracy_vs_truth']:.1%} / – "
+                f"| 0% | – | ${fs.get('teacher_cost_usd', 0.0) + r['teacher_profile']['cost_usd']:.2f} |")
+    e = evals[-1]["eval"]
+    d = d + " †" if r["args"].get("rare_classes") == "defer" else d
     cost = fs.get("teacher_cost_usd", 0.0) + r["teacher_profile"]["cost_usd"]
     rps = r["burst"].get("student_rows_per_s")
-    return (f"| {NAMES.get(d, d)} | {r['n_stream']:,} | **{e['coverage']:.1%}** | **{e['system_agreement']:.2%}** "
+    name = NAMES.get(d.rstrip(" †"), d.rstrip(" †")) + (" †" if d.endswith("†") else "")
+    return (f"| {name} | {r['n_stream']:,} | **{e['coverage']:.1%}** | **{e['system_agreement']:.2%}** "
             f"| {e['teacher_accuracy_vs_truth']:.1%} / {e['system_accuracy_vs_truth']:.1%} "
             f"| {fs['student_share']:.0%} | {rps:,.0f}/s | ${cost:.2f} |" if rps else
-            f"| {NAMES.get(d, d)} | {r['n_stream']:,} | {e['coverage']:.1%} | {e['system_agreement']:.2%} "
+            f"| {name} | {r['n_stream']:,} | {e['coverage']:.1%} | {e['system_agreement']:.2%} "
             f"| {e['teacher_accuracy_vs_truth']:.1%} / {e['system_accuracy_vs_truth']:.1%} | {fs['student_share']:.0%} | – | ${cost:.2f} |")
 
 
@@ -69,6 +75,9 @@ def build(tag: str, encoder: str) -> str:
          "|---|---:|---:|---:|---:|---:|---:|---:|"]
     got = [replay_row(d, tag, encoder) for d in DATASETS]
     L += [g for g in got if g] or ["| (no replays yet) | | | | | | | |"]
+    if any(g and "†" in g for g in got):
+        L += ["", "† run with `rare_classes = \"defer\"`: Jev never used one of the task's labels, and the default "
+              "(`wait`) would have kept the first student from training for the whole stream."]
     L += ["", "### Threshold rules on the same data", "",
           "`experiments/baselines.py`: 20 random train / calibration / test splits per task, one head per split, "
           "then the confidence threshold is picked on the calibration split by each rule and judged on the test "

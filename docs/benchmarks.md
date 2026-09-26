@@ -5,8 +5,53 @@ Every number quoted in the README, DESIGN.md and DEPLOYMENT_PLAN.md, with the co
 ## Benchmark
 
 <!-- bench:start -->
-(not run yet: `bash experiments/bench.sh`)
+### Quality: the loop against live Jev's answers
+
+One replay per task (`experiments/bench.sh`): the dataset's labels are hidden, 2,000 rows are held out, the rest stream through the loop with Jev's recorded answers as the teacher (bge-small on CPU, target agreement 98%, audit rate 2%). Coverage and agreement are measured on the held-out rows against Jev; accuracy is against the dataset's own labels, for Jev alone and for the system (student where it answers, Jev elsewhere). "Local share" is over the whole stream, cold start included.
+
+| Task | Stream | Held-out coverage | Agreement with Jev | Accuracy: Jev / system | Local share | Student path | Jev cost |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Banking77 (77 intents) | 11,083 | **71.9%** | **99.50%** | 78.5% / 78.5% | 40% | 111/s | $0.62 |
+| CLINC150 (150 intents + other, 12k sample) † | 10,000 | **69.0%** | **99.65%** | 90.1% / 90.1% | 41% | 348/s | $0.83 |
+| AG News (4 sections, 20k sample) | 18,000 | **80.2%** | **99.40%** | 88.7% / 88.7% | 64% | 38/s | $0.15 |
+| TweetEval sentiment (3) | 57,899 | **22.2%** | **98.70%** | 64.2% / 64.5% | 16% | 114/s | $0.80 |
+| TweetEval offensive (2) | 12,100 | **24.1%** | **98.80%** | 73.8% / 74.2% | 20% | 55/s | $0.18 |
+
+† run with `rare_classes = "defer"`: Jev never used one of the task's labels, and the default (`wait`) would have kept the first student from training for the whole stream.
+
+### Threshold rules on the same data
+
+`experiments/baselines.py`: 20 random train / calibration / test splits per task, one head per split, then the confidence threshold is picked on the calibration split by each rule and judged on the test split. Disagreement is the share of *all* test requests the student answered differently from Jev, which is what the 2% budget limits; a violation is a split where it exceeded the budget.
+
+| Task | Rule | Coverage | Disagreement (mean) | Disagreement (worst) | Violations | System accuracy |
+|---|---|---:|---:|---:|---:|---:|
+| Banking77 (77 intents) | **Jevstiller** (soft labels, bound, OOD gate) | 74.9% | 1.15% | 1.55% | 0/20 | 78.4% |
+| Banking77 (77 intents) | hard labels, bound, OOD gate | 71.8% | 1.06% | 1.80% | 0/20 | 78.5% |
+| Banking77 (77 intents) | soft labels, point estimate | 79.8% | 1.90% | 2.70% | 9/20 | 78.5% |
+| Banking77 (77 intents) | hard labels, point estimate (stuntd's recipe) | 78.2% | 1.81% | 2.65% | 6/20 | 78.6% |
+| CLINC150 (150 intents + other, 12k sample) | **Jevstiller** (soft labels, bound, OOD gate) | 78.9% | 1.25% | 1.80% | 0/20 | 91.4% |
+| CLINC150 (150 intents + other, 12k sample) | hard labels, bound, OOD gate | 75.6% | 1.26% | 1.70% | 0/20 | 91.6% |
+| CLINC150 (150 intents + other, 12k sample) | soft labels, point estimate | 84.3% | 2.09% | 2.85% | 12/20 | 91.3% |
+| CLINC150 (150 intents + other, 12k sample) | hard labels, point estimate (stuntd's recipe) | 82.8% | 2.09% | 2.90% | 12/20 | 91.6% |
+| AG News (4 sections, 20k sample) | **Jevstiller** (soft labels, bound, OOD gate) | 86.5% | 1.34% | 1.75% | 0/20 | 88.5% |
+| AG News (4 sections, 20k sample) | hard labels, bound, OOD gate | 86.1% | 1.35% | 2.00% | 0/20 | 88.6% |
+| AG News (4 sections, 20k sample) | soft labels, point estimate | 90.3% | 2.06% | 2.65% | 11/20 | 88.3% |
+| AG News (4 sections, 20k sample) | hard labels, point estimate (stuntd's recipe) | 89.9% | 1.96% | 3.05% | 8/20 | 88.5% |
+| TweetEval sentiment (3) | **Jevstiller** (soft labels, bound, OOD gate) | 24.0% | 1.46% | 2.10% | 1/20 | 66.1% |
+| TweetEval sentiment (3) | hard labels, bound, OOD gate | 24.0% | 1.44% | 1.95% | 0/20 | 66.1% |
+| TweetEval sentiment (3) | soft labels, point estimate | 28.2% | 1.99% | 2.60% | 8/20 | 66.2% |
+| TweetEval sentiment (3) | hard labels, point estimate (stuntd's recipe) | 27.7% | 1.96% | 2.80% | 7/20 | 66.1% |
+| TweetEval offensive (2) | **Jevstiller** (soft labels, bound, OOD gate) | 28.7% | 1.10% | 1.40% | 0/20 | 73.8% |
+| TweetEval offensive (2) | hard labels, bound, OOD gate | 28.0% | 1.09% | 1.65% | 0/20 | 73.9% |
+| TweetEval offensive (2) | soft labels, point estimate | 36.8% | 1.81% | 2.70% | 6/20 | 74.0% |
+| TweetEval offensive (2) | hard labels, point estimate (stuntd's recipe) | 35.7% | 1.83% | 2.55% | 7/20 | 74.0% |
 <!-- bench:end -->
+
+What the tables say, read together:
+
+- **The bound holds; the point estimate does not.** Over 100 splits across five tasks, Jevstiller's rule exceeded the 2% budget once (TweetEval sentiment, 2.10%); the point-estimate rule, which is what most local-model recipes use, exceeded it on 6 to 12 of 20 splits per task, by up to a full point. The price is four to eight points of coverage. The soft labels buy two to three points of coverage on the many-class tasks and nothing on the easy ones.
+- **Coverage tracks Jev's own consistency, not the task's difficulty.** On the two tweet tasks Jev agrees with the dataset's labels only 64% and 74% of the time, so its answers near the class boundaries are noisy, and a student cannot reproduce noise within a 2% budget: it answers the confident quarter and forwards the rest. The system's accuracy still matches Jev's. The budget is a promise about agreement with Jev, and these tasks show what that costs when Jev itself is unsure.
+- **A label Jev never uses blocks the default configuration.** CLINC150 has 151 labels and Jev never answered `reminder_update` in 12,000 messages, so `rare_classes = "wait"` waited for it for the whole stream. With `defer` the loop trains on the classes it has and forwards the rest. Whether the default should change is open.
 
 ## Measurements behind the design decisions
 
