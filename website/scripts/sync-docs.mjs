@@ -30,6 +30,7 @@ function rewriteLinks(md, from) {
 		const file = posix.normalize(posix.join(posix.dirname(from), path));
 		const slug = PAGES[file] ?? SECTIONS.find((s) => s.file === file && !frag)?.slug;
 		if (slug) return `](/${slug}/${frag ? `#${frag}` : ''})`;
+		if (/\.(gif|png|jpe?g|svg|webp)$/i.test(file)) return `](${REPO}/raw/main/${file})`; // images: the file itself
 		return `](${REPO}/blob/main/${file}${frag ? `#${frag}` : ''})`;
 	});
 }

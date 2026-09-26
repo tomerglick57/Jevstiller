@@ -60,7 +60,22 @@ With a live teacher, coverage came out higher than with the "oracle" labels and 
 
 Jev's latency is flat in concurrency: the argument for a local model is the ~300 ms per answer and the dependency, not the request rate. TypeSafe says its limits adjust dynamically, so another key or another day may see the published limit enforced.
 
-### Through the proxy, cold start (P6.7)
+### The sequential race (2026-09-26)
+
+![200 decisions one at a time: Jev direct finishes in 60.2 s, through Jevstiller in 24.7 s](media/race.gif)
+
+`python examples/race.py run --steps 200` then `replay`. A chain of dependent decisions (an agent loop, a game, classify-then-act) waits for each answer before the next request, so per-answer latency is the whole story, and Jev's does not change with load. The same 200 Banking77 messages and the same 6-class routing question go once to Jev directly and once through a `jevstiller serve` container whose student was trained by the 5,000-message pass of `examples/proxy_demo.py`; the two lanes run one after the other (they share one key and one machine) and the replay draws their recorded timelines on one clock, sped up 3×.
+
+| Lane | 200 decisions | p50 per answer | Answered locally |
+|---|---:|---:|---:|
+| Jev direct | 60.2 s | 296 ms | – |
+| via Jevstiller | **24.7 s** | 16 ms (local answers 14.5 ms, forwarded 313 ms) | 133 of 200 |
+
+2.4× end to end. The 67 forwarded decisions cost 21 of the 24.7 seconds: with a 33% forwarded share the chain cannot get much past 3× no matter how fast the local path is, so the number to push is coverage, not encoder speed. The 20× only shows per local answer. One local answer took 1.8 s (a training pass on the CPU encoder); the rest were under 60 ms.
+
+The task's audit at the end of the session, after 15,000 requests and four student versions: agreement with Jev 97.5% on 161 audited requests, 95% interval [94.4%, 99.1%], against a 98% target. Inconclusive, not broken: the interval straddles the target, so the proxy keeps forwarding what the student is unsure about and keeps auditing. The race above was served by the first two versions, whose audits stood at 100% on 100 and 22 samples.
+
+
 
 `python experiments/live_proxy.py --requests 4000 --concurrency 8` → `experiments/results/live-proxy.json`
 
