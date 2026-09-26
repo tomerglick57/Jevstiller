@@ -78,4 +78,4 @@ Within a minor version, these stay compatible:
 
 **Upgrades:** a newer version upgrades a data directory in place on first start: sample stores are migrated, and tasks are re-keyed if the key scheme changed. Back up first (`jevstiller backup`). Downgrading to an older version with an upgraded data directory isn't supported: restore the backup instead.
 
-Jevstiller is an independent open-source project (MIT). It is not affiliated with, endorsed by, or supported by TypeSafe.
+Jevstiller is an independent open-source project (Apache 2.0). It is not affiliated with, endorsed by, or supported by TypeSafe.

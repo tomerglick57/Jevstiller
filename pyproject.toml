@@ -4,8 +4,8 @@ version = "0.3.4"
 description = "Distill a repeated Jev classification task into a local model, on the fly — same answers, your hardware."
 dynamic = ["readme"]
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Tomer Glick" }]
 keywords = ["jev", "typesafe", "distillation", "classification", "mlops", "model-cascade", "knowledge-distillation"]
 classifiers = [
@@ -80,7 +80,7 @@ replacement = '](https://github.com/tomerglick57/Jevstiller/blob/main/\1)'
 packages = ["jevstiller"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/jevstiller", "/tests", "/README.md", "/LICENSE", "/DESIGN.md", "/CHANGELOG.md"]
+include = ["/jevstiller", "/tests", "/README.md", "/LICENSE", "/NOTICE", "/DESIGN.md", "/CHANGELOG.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

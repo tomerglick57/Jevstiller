@@ -13,7 +13,7 @@ WORKDIR /src
 # own directory (security audit run 3).
 COPY build-requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes -r build-requirements.txt
-COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
 COPY jevstiller ./jevstiller
 RUN uv export --locked --no-emit-project $(for e in $(echo "$EXTRAS" | tr ',' ' '); do printf -- '--extra %s ' "$e"; done) \
       -o requirements.txt \

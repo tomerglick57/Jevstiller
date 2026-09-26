@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **The license is now Apache 2.0** (was MIT). It is just as permissive, and adds an explicit patent grant from contributors and a `NOTICE` file that redistributions keep. Releases up to 0.3.4 stay available under MIT.
+
 ## 0.3.4 — 2026-09-26
 
 - **Disk use no longer grows with every retrain.** The 24-hour soak's data directory reached 53 GB, 23 GB of it old model versions: every superseded version was kept (~8–10 MB each, 645 in the busiest task). Now only the newest `keep_versions` (default 3) versions of each finished state (superseded, rejected, rolled back) keep their files. Production, the shadow and candidates always stay. Older ones stay listed as `deleted`, and rollback goes back at most that far. Versions an earlier release kept are deleted on each task's first maintenance pass after the upgrade.
