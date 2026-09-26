@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "experiments"))
 from datasets import LOADERS  # noqa: E402
 
 DATASETS = [d for d in LOADERS if d != "synthetic"]
-NAMES = {"banking77": "Banking77 (77 intents)", "clinc150": "CLINC150 (150 intents + other)",
+NAMES = {"banking77": "Banking77 (77 intents)", "clinc150": "CLINC150 (150 intents + other, 12k sample)",
          "ag_news": "AG News (4 sections, 20k sample)", "tweet_sentiment": "TweetEval sentiment (3)",
          "tweet_offensive": "TweetEval offensive (2)"}
 

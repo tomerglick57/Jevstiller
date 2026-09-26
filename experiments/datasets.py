@@ -30,13 +30,17 @@ def banking77() -> dict:
             "classes": {c: c.replace("_", " ") for c in labels}}
 
 
-def clinc150() -> dict:
+def clinc150(n: int = 12_000, seed: int = 0) -> dict:
+    """A fixed 12,000-row sample of CLINC150 (23,700 rows; every Jev call carries 151 class descriptions)."""
+    import random
     p = _fetch("https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json", "clinc150_full.json")
     d = json.loads(p.read_text())
     rows = []
     for _k, v in d.items():
         for text, label in v:
             rows.append((text, "other" if label == "oos" else label))
+    random.Random(seed).shuffle(rows)
+    rows = rows[:n]
     labels = sorted({c for _, c in rows if c != "other"})
     classes = {c: c.replace("_", " ") for c in labels}
     classes["other"] = "None of the above: the request does not match any listed intent"
