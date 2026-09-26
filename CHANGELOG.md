@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Reproduce the headline result without an API key.** `bash experiments/reproduce.sh` replays Banking77 against Jev's recorded answers, which now ship with the repository (`experiments/cache/banking77.jsonl.gz`), and prints the numbers next to the published ones. `experiments/run.py` has a `--teacher cached` mode for it, and `experiments/record_answers.py` records a complete cache for a dataset.
+- **Replays are reproducible.** The per-request train/calibration split is now seeded from `Config.seed` and the task version instead of the store's file path, so the same replay gives the same result on any machine. Production behaviour is unchanged: the split is still a uniform draw per request.
+- `Status.report(events=False)` leaves out the loop events; floats in event lines are rounded to four decimals.
+- `examples/quickstart_synthetic.py` starts from a fresh temporary directory on every run.
+- Repository: GitHub Discussions for questions and results, a pull request template, links from the issue chooser.
+
 ## 0.3.3 — 2026-09-26
 
 - **`jevstiller admin` works next to the server without flags.** When no token or URL is given, it uses the server's own settings: the config file (`JEVSTILLER_CONFIG`), `JEVSTILLER_ADMIN_TOKEN_FILE` and the port. So `docker exec jevstiller jevstiller admin tasks` (or `docker compose exec`, or `kubectl exec`) just works.

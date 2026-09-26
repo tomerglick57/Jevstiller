@@ -11,6 +11,16 @@ your app ──► Jev                     your app ──► Jevstiller ──�
                                                  answer
 ```
 
+![The no-key quickstart: within a few thousand requests the local student answers most of the traffic](docs/media/quickstart.gif)
+
+Try it in a minute, no API key, CPU only. A synthetic teacher stands in for Jev; the loop is the real one:
+
+```bash
+pip install jevstiller
+curl -sO https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/examples/quickstart_synthetic.py
+python quickstart_synthetic.py
+```
+
 ## Why
 
 Jev is fast, cheap and typed. It is also a ceiling: **1,200 requests per minute** per key, ~300 ms per answer, hosted only. Jevstiller is for the workload that outgrows that — bursts, backlogs, latency budgets in milliseconds, boxes with no egress, or simply not wanting every classification to depend on one external API.
@@ -86,13 +96,7 @@ As of September 2026:
 
 ## Quickstart (library)
 
-No API key needed — a synthetic teacher stands in for Jev:
-
-```bash
-python examples/quickstart_synthetic.py
-```
-
-With Jev (`TYPESAFE_API_KEY` in your environment):
+The no-key demo is at the top of this page. With Jev (`TYPESAFE_API_KEY` in your environment):
 
 ```python
 from jevstiller import Task, Jevstiller, load_encoder
@@ -174,18 +178,28 @@ Documentation:
 
 Not for: tasks with changing class lists (retrain from scratch), non-text input, or volumes too low to ever collect a few thousand examples.
 
-## Experiments
+## Reproduce the numbers
+
+Jev's answers for every Banking77 message ship with the repository, so the headline result replays without an API key:
 
 ```bash
-python experiments/run.py --dataset banking77 --teacher oracle --encoder base   # dry run, no key
-python experiments/run.py --dataset banking77 --teacher jev --encoder base      # the real thing
+git clone https://github.com/tomerglick57/Jevstiller && cd Jevstiller && pip install jevstiller
+bash experiments/reproduce.sh      # the Banking77 result above, on CPU, 10-15 minutes: 71.9% coverage at 99.50% agreement, deterministic
+```
+
+```bash
+python experiments/run.py --dataset banking77 --teacher jev --encoder small     # against live Jev (TYPESAFE_API_KEY)
+python experiments/run.py --dataset banking77 --teacher oracle --encoder base   # the dataset's labels as a perfect teacher
 ```
 
 See [experiments/README.md](experiments/README.md).
 
-## Contributing
+## Questions and contributing
 
-Issues and PRs welcome — especially "I ran it on task X and here's the status report". See [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Questions**: [Discussions › Q&A](https://github.com/tomerglick57/Jevstiller/discussions/categories/q-a).
+- **You ran it on a real task**: post the status report in [Discussions › Show and tell](https://github.com/tomerglick57/Jevstiller/discussions/categories/show-and-tell) or open a [result report](https://github.com/tomerglick57/Jevstiller/issues/new?template=result.md). This is the most useful thing you can do for the project.
+- **Bugs**: [open an issue](https://github.com/tomerglick57/Jevstiller/issues/new?template=bug.md). PRs welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Security**: see [SECURITY.md](SECURITY.md), not a public issue.
 
 ## License
 

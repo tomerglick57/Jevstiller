@@ -3,6 +3,8 @@
 A synthetic "teacher" stands in for Jev. Watch the student take over traffic while the audit channel
 keeps checking agreement against the contract.
 """
+import tempfile
+
 from jevstiller import Config, Jevstiller, SyntheticTeacher, SyntheticWorld, Task
 
 labels = ["billing", "technical", "cancellation", "sales", "other"]
@@ -20,7 +22,8 @@ task = Task(
 cfg = Config(audit_rate=0.05, min_train_samples=400, min_samples_per_class=20, min_calib_samples=150,
              min_new_samples=1500, shadow_min_samples=200, training="inline")
 
-js = Jevstiller(task, teacher, data_dir="./jevstiller-data", config=cfg)
+# A fresh directory each run, so the student always starts from nothing. A real service keeps a fixed data_dir.
+js = Jevstiller(task, teacher, data_dir=tempfile.mkdtemp(prefix="jevstiller-quickstart-"), config=cfg)
 
 for step in range(40):
     batch = [text for text, _ in world.sample(200)]
@@ -31,4 +34,4 @@ for step in range(40):
         print(f"after {(step + 1) * 200:>6,} requests: {local:5.1%} served locally   production={prod}")
 
 print()
-print(js.status().report())
+print(js.status().report(events=False))   # events=True (the default) also lists the last loop events

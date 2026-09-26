@@ -130,7 +130,7 @@ module jevstiller
       field teacher_errors: int
       field teacher_model: str | None
       field readiness: dict | None
-      def report(self) -> 'str'
+      def report(self, events: 'bool' = True) -> 'str'
   class jevstiller.SyntheticTeacher(world: 'SyntheticWorld', temperature: 'float' = 0.7, noise: 'float' = 0.5, price_per_mtok: 'float' = 0.042)
       def answer(self, text: 'str', task: 'Task') -> 'TeacherOutput'
       def classify(self, texts: 'Sequence[State]', task: 'Task') -> 'list[TeacherOutput]'

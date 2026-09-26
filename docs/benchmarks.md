@@ -18,7 +18,7 @@ A 5-class question with a one-sentence message used 400 input tokens (instructio
 
 `python experiments/run.py --dataset banking77 --teacher jev --encoder small --backend onnx --device cpu --tag live-bound`
 
-Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-09-25 with the corrected calibration (joint-loss bound, fixed-sequence testing; DESIGN §7.6). The first run, with the flawed rule, got 70.6% coverage at 99.40% agreement, so the correction cost nothing here. bge-small (ONNX, CPU), target agreement 98%, audit rate 2%. 11,083 replayed messages, with 2,000 held out and labelled by Jev for evaluation. All Jev answers are cached in `experiments/cache/banking77.jsonl`, so re-runs are free.
+Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-09-25 with the corrected calibration (joint-loss bound, fixed-sequence testing; DESIGN §7.6). The first run, with the flawed rule, got 70.6% coverage at 99.40% agreement, so the correction cost nothing here. bge-small (ONNX, CPU), target agreement 98%, audit rate 2%. 11,083 replayed messages, with 2,000 held out and labelled by Jev for evaluation. All Jev answers are cached in `experiments/cache/banking77.jsonl`, so re-runs are free; the cache ships with the repository (gzipped, completed for all 13,083 messages with `experiments/record_answers.py` on 2026-09-26), and `bash experiments/reproduce.sh` replays it without an API key.
 
 | Measure | Result |
 |---|---|
@@ -33,6 +33,8 @@ Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-0
 | Jev latency | 291 ms mean |
 | Student path throughput (held-out, CPU) | 129 rows/s, encoder-bound at 7 ms/text on this machine (Jev's ceiling: 20 rows/s) |
 | Wall-clock for the whole replay | 11 min |
+
+**Reproduction (2026-09-26).** `bash experiments/reproduce.sh` replays the shipped answers with `--teacher cached`: held-out coverage **71.9%**, system agreement **99.50%**, accuracy against the dataset's labels 78.5% (Jev: 78.5%), 8,666 cache hits and no misses. The replay is deterministic since the train/calibration split is seeded from the config (before, from the store's file path). Four earlier replays of the same stream with different splits gave 66.8–70.7% coverage at 99.45–99.65% agreement: the split moves coverage by a few points, agreement stays inside the contract every time.
 
 With a live teacher, coverage came out higher than with the "oracle" labels and the same encoder (65.7%). A plausible explanation, not tested: a model's labels are more consistent with the surface of the text than human labels, so they're easier to reproduce.
 

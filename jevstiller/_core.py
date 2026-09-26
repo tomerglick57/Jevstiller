@@ -137,7 +137,8 @@ class Status:
     teacher_model: str | None = None        # the teacher lineage the loop trains and audits against
     readiness: dict | None = None           # before the first student: what training is waiting for
 
-    def report(self) -> str:
+    def report(self, events: bool = True) -> str:
+        """The status as text. `events=False` leaves out the last five loop events."""
         L = []
         L.append(f"Task: {self.task}   version {self.task_version}   mode: {self.mode}   "
                  f"audit rate {self.audit_rate:.0%}")
@@ -178,9 +179,10 @@ class Status:
                      " of requests")
             if p.get("deferred_labels"):
                 L.append(f"  rare classes, always sent to the teacher: {', '.join(map(_inert, p['deferred_labels']))}")
-        for e in self.events[-5:]:
+        for e in self.events[-5:] if events else []:
             L.append(f"  event: {_inert(e['kind'])} "
-                     + " ".join(f"{_inert(k)}={_inert(v)}" for k, v in e.items() if k not in ('kind', 'ts')))
+                     + " ".join(f"{_inert(k)}={_inert(round(v, 4) if isinstance(v, float) else v)}"
+                                for k, v in e.items() if k not in ('kind', 'ts')))
         return "\n".join(L)
 
 
@@ -210,7 +212,8 @@ class Jevstiller:
         self.hash_key = hash_key                # keys the per-row text hash (HMAC) when given
         self.dir = Path(data_dir) / task.name
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction)
+        self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction,
+                                 split_seed=f"{self.cfg.seed}:{task.version}")
         self.registry = Registry(self.dir / "versions")
         self.rng = np.random.default_rng(self.cfg.seed)
         self._state = threading.Lock()

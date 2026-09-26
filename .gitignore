@@ -220,7 +220,8 @@ __marimo__/
 # Jevstiller experiment outputs
 experiments/results/
 experiments/data/
-experiments/cache/
+experiments/cache/*
+!experiments/cache/banking77.jsonl.gz
 
 # Jevstiller deployment secrets
 deploy/admin-token.txt

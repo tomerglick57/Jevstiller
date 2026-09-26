@@ -5,10 +5,12 @@ Replays a labelled dataset through Jevstiller with the labels hidden (DESIGN.md 
 `experiments/cache/<dataset>.jsonl` so a re-run is free.
 
 ```bash
+bash experiments/reproduce.sh                                                     # the README's Banking77 result from Jev's recorded answers (shipped, gzipped); no key
 python3 experiments/run.py --dataset banking77 --teacher jev --encoder base        # the real thing (needs TYPESAFE_API_KEY in .env)
 python3 experiments/run.py --dataset banking77 --teacher oracle --encoder base     # dry run: hidden labels as a perfect teacher
 python3 experiments/run.py --dataset synthetic --teacher synthetic --encoder hash  # no downloads, no GPU, ~1 min
 python3 experiments/jev_profile.py                                                 # live Jev latency + wire fixtures
+python3 experiments/record_answers.py --dataset banking77                          # record Jev's answer for every message into the cache (~$0.35)
 ```
 
 More options: `--backend onnx --device cpu` (CPU-only), `--ood-max-ref N` (size of the OOD reference, default 5,000),

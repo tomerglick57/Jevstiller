@@ -20,6 +20,18 @@ from jevstiller import Config, Jevstiller, Task, load_encoder  # noqa: E402
 from jevstiller.teachers import CachedTeacher, SyntheticTeacher  # noqa: E402
 
 
+class CacheOnlyTeacher:
+    """Stands in for Jev when every answer is already in the cache (`--teacher cached`, no API key needed)."""
+    name = "jev:jev-1.13.0"
+
+    def __init__(self, cache: Path):
+        self.cache = cache
+
+    def classify(self, texts, task):
+        raise SystemExit(f"{len(texts)} message(s) are not in {self.cache}. Unpack experiments/cache/banking77.jsonl.gz "
+                         f"(see experiments/reproduce.sh), or run with --teacher jev and TYPESAFE_API_KEY to record them.")
+
+
 class OracleTeacher:
     """Returns the dataset's own label with probability `p_true`, the rest spread uniformly. Upper bound, not a product path."""
     name = "oracle"
@@ -53,7 +65,8 @@ def load_env(path: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default="banking77", choices=list(LOADERS))
-    ap.add_argument("--teacher", default="jev", choices=["jev", "synthetic", "oracle"])
+    ap.add_argument("--teacher", default="jev", choices=["jev", "cached", "synthetic", "oracle"],
+                    help="cached: Jev's recorded answers only (experiments/cache/), no API key")
     ap.add_argument("--encoder", default="base")
     ap.add_argument("--backend", default="auto")
     ap.add_argument("--device", default="auto")
@@ -85,9 +98,14 @@ def main() -> None:
         stream = stream[:a.limit]
     task = Task(name=a.dataset, instructions=ds["instructions"], classes=ds["classes"], target_agreement=a.target)
 
-    if a.teacher == "jev":
-        from jevstiller.teachers.jev import JevTeacher
-        teacher = CachedTeacher(JevTeacher(), root / "experiments" / "cache" / f"{a.dataset}.jsonl")
+    if a.teacher in ("jev", "cached"):
+        cache = root / "experiments" / "cache" / f"{a.dataset}.jsonl"
+        if a.teacher == "cached":
+            inner = CacheOnlyTeacher(cache)
+        else:
+            from jevstiller.teachers.jev import JevTeacher
+            inner = JevTeacher()
+        teacher = CachedTeacher(inner, cache)
     elif a.teacher == "oracle":
         teacher = OracleTeacher(dict(ds["rows"]))          # dry run: the hidden labels as a perfect teacher
     else:

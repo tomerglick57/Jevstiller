@@ -151,12 +151,14 @@ class SampleStore:
 
     def __init__(self, path: Path, calib_fraction: float = 0.2, busy_timeout_s: float = 30.0,
                  write_behind: bool = True, max_pending: int = 100_000, max_batch: int = 5_000,
-                 read_only: bool = False):
+                 read_only: bool = False, split_seed: str | None = None):
         self.path = Path(path)
         self.read_only = read_only
         self.calib_fraction = calib_fraction
-        # the per-request calibration draw: seeded from the path, so a replay into the same place splits the same way
-        self._split_rng = random.Random(hashlib.sha256(str(self.path).encode()).digest())
+        # the per-request calibration draw: seeded from `split_seed` (the loop passes its config seed and the task
+        # version, so a replay splits the same way on any machine), else from the path
+        seed = split_seed if split_seed is not None else str(self.path)
+        self._split_rng = random.Random(hashlib.sha256(seed.encode()).digest())
         self.busy_timeout_s = busy_timeout_s
         self.write_behind = write_behind
         self.max_pending, self.max_batch = max_pending, max_batch
