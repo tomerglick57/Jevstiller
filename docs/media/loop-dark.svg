@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 350" width="860" height="350" role="img">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2a4744"/></marker><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3ec4bd"/></marker></defs>
+<rect x="20" y="60" width="100" height="56" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="70" y="93" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">request</text>
+
+<path d="M120 88 L168 88" fill="none" stroke="#2a4744" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="170" y="60" width="150" height="56" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="245" y="84" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">router</text>
+<text x="245" y="102" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#6f8d89" text-anchor="middle">confidence, OOD gate</text>
+<path d="M320 76 C 360 76, 360 68, 400 68 L 498 68" fill="none" stroke="#2a4744" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="449" y="60" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="middle">confident,</text>
+<text x="449" y="82" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="middle">known input</text>
+<rect x="500" y="40" width="150" height="56" rx="6" fill="#123634" stroke="#3ec4bd" stroke-width="1.2"/>
+<text x="575" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">local student</text>
+<text x="575" y="82" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#6f8d89" text-anchor="middle">student:vN · ~16 ms</text>
+<path d="M320 100 C 360 100, 360 158, 400 158 L 498 158" fill="none" stroke="#2a4744" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="449" y="150" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="middle">unsure, novel,</text>
+<text x="449" y="172" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="middle">or the 2% audit</text>
+<rect x="500" y="130" width="150" height="56" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="575" y="154" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">Jev</text>
+<text x="575" y="172" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#6f8d89" text-anchor="middle">the teacher · ~300 ms</text>
+<path d="M650 68 C 700 68, 710 88, 758 88" fill="none" stroke="#2a4744" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M650 158 C 700 158, 710 88, 758 88" fill="none" stroke="#2a4744" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="760" y="60" width="100" height="56" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="810" y="93" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">answer</text>
+
+<path d="M575 186 L575 248" fill="none" stroke="#3ec4bd" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ah)"/>
+<text x="582" y="214" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="start">answer + Jev’s distribution:</text>
+<text x="582" y="228" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="start">a training row</text>
+<rect x="500" y="250" width="150" height="56" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="575" y="274" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">sample store</text>
+<text x="575" y="292" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#6f8d89" text-anchor="middle">embeddings, kept</text>
+<path d="M500 278 L 402 278" fill="none" stroke="#2a4744" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="451" y="270" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="middle">train, seconds</text>
+<rect x="250" y="250" width="150" height="56" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="325" y="274" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">candidate</text>
+<text x="325" y="292" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#6f8d89" text-anchor="middle">encoder + small head</text>
+<path d="M245 116 L 322 248" fill="none" stroke="#2a4744" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#a)"/>
+<text x="284" y="190" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="end">shadowed on live traffic</text>
+<path d="M250 278 L 152 278" fill="none" stroke="#2a4744" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="201" y="270" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="middle">within budget?</text>
+<rect x="20" y="250" width="130" height="56" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="85" y="274" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13.5" font-weight="600" fill="#e8f2f0" text-anchor="middle">promote</text>
+<text x="85" y="292" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#6f8d89" text-anchor="middle">or fall back</text>
+<path d="M85 250 L85 16 L575 16 L575 38" fill="none" stroke="#3ec4bd" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#ah)"/>
+<text x="330" y="30" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#a9bfbc" text-anchor="middle">promote to production, or roll back</text>
+<text x="20" y="338" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="400" fill="#6f8d89" text-anchor="start">The audit slice keeps checking production; if agreement drops, or Jev changes, the task falls back to Jev and retrains.</text>
+</svg>

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 372" width="720" height="372" role="img">
+<rect x="62" y="30" width="83.7" height="170" fill="#121c1b" opacity="0.04"/>
+<text x="70" y="46" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="start">learning</text>
+<text x="70" y="60" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="start">all to Jev</text>
+<line x1="62" x2="704" y1="200" y2="200" stroke="#e6ecec"/>
+<text x="54" y="204" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">0%</text>
+<line x1="62" x2="704" y1="157.5" y2="157.5" stroke="#e6ecec"/>
+<text x="54" y="161.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">25%</text>
+<line x1="62" x2="704" y1="115" y2="115" stroke="#e6ecec"/>
+<text x="54" y="119" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">50%</text>
+<line x1="62" x2="704" y1="72.5" y2="72.5" stroke="#e6ecec"/>
+<text x="54" y="76.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">75%</text>
+<line x1="62" x2="704" y1="30" y2="30" stroke="#e6ecec"/>
+<text x="54" y="34" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">100%</text>
+<polygon points="62,200 62.0,200.0 78.7,200.0 89.9,200.0 117.8,200.0 173.7,122.9 229.5,90.9 341.1,87.5 480.7,84.6 620.3,82.8 680.7,79.8 680.7,200" fill="#137572" opacity="0.12"/>
+<polyline points="62.0,200.0 78.7,200.0 89.9,200.0 117.8,200.0 173.7,122.9 229.5,90.9 341.1,87.5 480.7,84.6 620.3,82.8 680.7,79.8" fill="none" stroke="#137572" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="78.7" cy="200.0" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="89.9" cy="200.0" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="117.8" cy="200.0" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="173.7" cy="122.9" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="229.5" cy="90.9" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="341.1" cy="87.5" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="480.7" cy="84.6" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="620.3" cy="82.8" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<circle cx="680.7" cy="79.8" r="4.5" fill="#137572" stroke="#ffffff" stroke-width="2"/>
+<text x="676.7205217391305" y="65.81" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.5" font-weight="700" fill="#121c1b" text-anchor="end">70.7% answered locally</text>
+<text x="62" y="20" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" font-weight="600" fill="#121c1b" text-anchor="start">Answered locally, without calling Jev</text>
+<line x1="62" x2="704" y1="328" y2="328" stroke="#e6ecec"/>
+<text x="54" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">97%</text>
+<line x1="62" x2="704" y1="302.66666666666663" y2="302.66666666666663" stroke="#b8700f" stroke-width="1.5" stroke-dasharray="4 4"/>
+<text x="54" y="306.66666666666663" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">98%</text>
+<line x1="62" x2="704" y1="277.33333333333326" y2="277.33333333333326" stroke="#e6ecec"/>
+<text x="54" y="281.33333333333326" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">99%</text>
+<line x1="62" x2="704" y1="251.99999999999994" y2="251.99999999999994" stroke="#e6ecec"/>
+<text x="54" y="255.99999999999994" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="end">100%</text>
+<text x="704" y="316.66666666666663" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#b8700f" text-anchor="end">target 98%</text>
+<polyline points="173.7,258.3 229.5,271.0 341.1,265.9 480.7,268.5 620.3,267.2 680.7,265.9" fill="none" stroke="#6b4fb3" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="173.7" cy="258.3" r="4.5" fill="#6b4fb3" stroke="#ffffff" stroke-width="2"/>
+<circle cx="229.5" cy="271.0" r="4.5" fill="#6b4fb3" stroke="#ffffff" stroke-width="2"/>
+<circle cx="341.1" cy="265.9" r="4.5" fill="#6b4fb3" stroke="#ffffff" stroke-width="2"/>
+<circle cx="480.7" cy="268.5" r="4.5" fill="#6b4fb3" stroke="#ffffff" stroke-width="2"/>
+<circle cx="620.3" cy="267.2" r="4.5" fill="#6b4fb3" stroke="#ffffff" stroke-width="2"/>
+<circle cx="680.7" cy="265.9" r="4.5" fill="#6b4fb3" stroke="#ffffff" stroke-width="2"/>
+<text x="676.7205217391305" y="253.9333333333331" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.5" font-weight="700" fill="#121c1b" text-anchor="end">99.45% agreement</text>
+<text x="62" y="240" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" font-weight="600" fill="#121c1b" text-anchor="start">Agreement with Jev, on 2,000 held-out messages</text>
+<text x="62" y="348" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="middle">0</text>
+<text x="201.56521739130434" y="348" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="middle">2,500</text>
+<text x="341.1304347826087" y="348" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="middle">5,000</text>
+<text x="480.69565217391306" y="348" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="middle">7,500</text>
+<text x="620.2608695652174" y="348" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="400" fill="#748684" text-anchor="middle">10,000</text>
+<text x="383" y="366" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" font-weight="600" fill="#121c1b" text-anchor="middle">messages seen</text>
+</svg>

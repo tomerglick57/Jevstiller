@@ -1,15 +1,27 @@
-# Jevstiller
+<p align="center">
+  <a href="https://jevstiller.pages.dev"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/tomerglick57/Jevstiller/raw/main/brand/jevstiller-logo-dark.svg">
+    <img alt="Jevstiller" src="https://github.com/tomerglick57/Jevstiller/raw/main/brand/jevstiller-logo.svg" width="340">
+  </picture></a>
+</p>
 
-**Jev, distilled on the fly.** Put Jevstiller in front of a repeated [Jev](https://docs.typesafe.ai) classification call. At first every request still goes to Jev. From Jev's own answers — with their full probability distributions — it trains a small local model on your traffic, checks that the model agrees with Jev within a budget you set, and then answers most requests itself. Uncertain or novel input, and a permanent random audit slice, keep going to Jev.
+<p align="center"><b>Jev, distilled on the fly.</b> Same call. Same answers. Your hardware.</p>
 
-Same call. Same answers. Your hardware.
+<p align="center">
+  <a href="https://pypi.org/project/jevstiller/"><img alt="PyPI" src="https://img.shields.io/pypi/v/jevstiller?color=137572&label=pypi"></a>
+  <a href="https://pypi.org/project/jevstiller/"><img alt="Python 3.10+" src="https://img.shields.io/pypi/pyversions/jevstiller?color=137572"></a>
+  <a href="https://github.com/tomerglick57/Jevstiller/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/tomerglick57/Jevstiller/ci.yml?branch=main&label=ci"></a>
+  <a href="https://github.com/tomerglick57/Jevstiller/pkgs/container/jevstiller"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-jevstiller-137572"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/tomerglick57/Jevstiller?color=137572"></a>
+  <a href="https://jevstiller.pages.dev"><img alt="Docs" src="https://img.shields.io/badge/docs-jevstiller.pages.dev-137572"></a>
+</p>
 
-```text
-your app ──► Jev                     your app ──► Jevstiller ──► Jev
-                                                    │  local model    (only the 3% it isn't sure about,
-                                                    ▼                  plus a 2% audit)
-                                                 answer
-```
+Put Jevstiller in front of a repeated [Jev](https://docs.typesafe.ai) classification call. At first every request still goes to Jev. From Jev's own answers — with their full probability distributions — it trains a small local model on your traffic, checks that the model agrees with Jev within a budget you set, and then answers most requests itself. Uncertain or novel input, and a permanent random audit slice, keep going to Jev.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/flow-dark.svg">
+  <img alt="Your services call Jevstiller instead of Jev. Most requests are answered by the local model in about 16 ms; the uncertain ones and a 2% audit go on to Jev." src="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/flow-light.svg">
+</picture>
 
 ![The drop-in proxy in front of live Jev: your service unchanged, answers moving from Jev at ~350 ms to the local model at ~40 ms](docs/media/proxy.gif)
 
@@ -27,6 +39,31 @@ The recording above is [examples/proxy_demo.py](examples/proxy_demo.py): 5,000 r
 Jev is fast, cheap and typed. It is also ~300 ms away, per answer, at every load we tried (16 to 64 concurrent callers, up to 190 requests/s, p50 300 ms), and it is hosted: every classification is a network call to one vendor, under a published limit of 1,200 requests per minute that TypeSafe enforces at its own discretion. Jevstiller is for the workload where that hurts: decisions made one after another (an agent loop, a game tick, classify-then-act pipelines), latency budgets in milliseconds, boxes with no egress, or simply not wanting every classification to depend on one external API.
 
 Against live Jev, in a replay of Banking77 (77 customer-support intents), the local model answered **70.7% of held-out messages at 99.45% agreement with Jev** (target 98%), taking over most live traffic from about 5,000 messages on, and kept Jev's accuracy (78.5% vs Jev's 78.5% on the dataset's labels). A local answer takes ~15 ms on CPU (p50), about 20× faster than Jev; one CPU process answers ~130 messages/s, a GPU ~2,000/s.¹
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/results-dark.svg">
+  <img alt="Over 11,083 messages the share answered locally rises from 0% to 70.7%, while agreement with Jev stays between 99.25% and 99.75%, above the 98% target." src="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/results-light.svg" width="720">
+</picture>
+
+## Benchmark
+
+<!-- bench:start -->
+Five public tasks, replayed through the loop with Jev's recorded answers as the teacher (bge-small on CPU, target agreement 98%). Answered locally and agreement are measured on 2,000 held-out rows against Jev; accuracy is against the dataset's own labels, for Jev alone and for the system (student where it answers, Jev elsewhere).
+
+| Task | Answered locally | Agreement with Jev | Accuracy, Jev / system |
+|---|---:|---:|---:|
+| Banking77, 77 intents | **71.9%** | **99.50%** | 78.5% / 78.5% |
+| CLINC150, 150 intents † | **69.0%** | **99.65%** | 90.1% / 90.1% |
+| AG News, 4 sections | **80.2%** | **99.40%** | 88.7% / 88.7% |
+| TweetEval sentiment, 3 classes | **22.2%** | **98.70%** | 64.2% / 64.5% |
+| TweetEval offensive, 2 classes | **24.1%** | **98.80%** | 73.8% / 74.2% |
+
+† with `rare_classes = "defer"`: Jev never used one of the task's labels.
+
+Over 100 random splits across the 5 tasks, the calibrated threshold exceeded the 2% budget once; the usual point-estimate rule exceeded it on 6–12 of 20 splits per task.
+<!-- bench:end -->
+
+Coverage tracks how consistent Jev itself is on a task, not how hard the task is: on the tweets Jev agrees with the dataset's labels only 64% and 74% of the time, so the student answers the confident quarter and forwards the rest, and the system's accuracy still matches Jev's. The threshold-rule comparison, what other targets buy, and the one-command reproduction: [docs/benchmarks.md](docs/benchmarks.md#benchmark).
 
 ## The contract
 
@@ -136,17 +173,10 @@ Agreement with teacher (audit, n=415): 99.40% [98.46%, 99.84%]   target 98%   OK
 
 ## How it works
 
-```text
-request ─► router ─┬─ confident & in-distribution ─► local student ─► answer
-                   ├─ uncertain / novel / 2% audit ─► Jev ─► answer (and a new training row)
-                   └─ no model yet ─────────────────► Jev
-                                        │
-                sample store ◄──────────┘
-                     │  train (seconds; frozen encoder + small head, soft targets)
-                     ▼
-                candidate ─► shadow on live traffic ─► passes the budget? ─► production
-                                                                  drift? ─► retrain / fall back
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/loop-dark.svg">
+  <img alt="A request goes to the router. Confident, in-distribution input is answered by the local student; uncertain, novel or audited input goes to Jev, whose answer and distribution become a training row. From the sample store a candidate is trained in seconds, shadowed on live traffic, and promoted if it stays within the budget." src="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/loop-light.svg">
+</picture>
 
 - **Encoder**: frozen sentence encoder (`bge-small/base/large`), ONNX or PyTorch. Embeddings are stored, so retraining never re-encodes.
 - **Student**: numpy logistic regression on the teacher's *distribution*, early-stopped on a validation slice.
@@ -170,7 +200,7 @@ Alpha. Validated against live Jev (above).
   - Load up to 256 concurrent callers.
 
   Results: [docs/benchmarks.md](docs/benchmarks.md).
-- **Benchmarked on five public tasks** against Jev's recorded answers (Banking77, CLINC150, AG News, TweetEval sentiment and offensive): coverage from 22% (tweets, where Jev itself is inconsistent) to 80% (news), agreement 98.7–99.7%, system accuracy equal to Jev's on every task. Over 100 random splits, the calibrated threshold broke the 2% budget once; the usual point-estimate rule broke it on 6–12 of 20 splits per task. Tables and the one-command reproduction: [docs/benchmarks.md](docs/benchmarks.md#benchmark).
+- **Benchmarked on five public tasks** against Jev's recorded answers ([above](#benchmark)); the full tables and the one-command reproduction are in [docs/benchmarks.md](docs/benchmarks.md#benchmark).
 
 See [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) for what is done and what is next.
 

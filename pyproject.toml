@@ -73,6 +73,10 @@ content-type = "text/markdown"
 path = "README.md"
 
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://)([^)\s]+\.(?:gif|png|jpe?g|svg|webp))\)'
+replacement = '](https://github.com/tomerglick57/Jevstiller/raw/main/\1)'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
 pattern = '\]\((?!https?://|#|mailto:)([^)\s]+)\)'
 replacement = '](https://github.com/tomerglick57/Jevstiller/blob/main/\1)'
 

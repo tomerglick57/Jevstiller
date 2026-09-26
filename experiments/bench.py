@@ -3,8 +3,9 @@
     python3 experiments/bench.py [--tag bench] [--write]
 
 Reads experiments/results/<dataset>-cached-<encoder>-probs-t98-<tag>/results.json (a replay per dataset, see
-bench.sh) and experiments/results/baselines-<dataset>.json (baselines.py), prints two Markdown tables, and with
-`--write` replaces the block between `<!-- bench:start -->` and `<!-- bench:end -->` in docs/benchmarks.md.
+bench.sh) and experiments/results/baselines-<dataset>.json (baselines.py), prints the Markdown tables, and with
+`--write` replaces the block between `<!-- bench:start -->` and `<!-- bench:end -->` in docs/benchmarks.md, and the
+short version of it (one table, one sentence) between the same markers in README.md.
 """
 from __future__ import annotations
 
@@ -91,6 +92,52 @@ def build(tag: str, encoder: str) -> str:
     return "\n".join(L) + "\n"
 
 
+SHORT_NAMES = {"banking77": "Banking77, 77 intents", "clinc150": "CLINC150, 150 intents", "ag_news": "AG News, 4 sections",
+               "tweet_sentiment": "TweetEval sentiment, 3 classes", "tweet_offensive": "TweetEval offensive, 2 classes"}
+
+
+def build_readme(tag: str, encoder: str) -> str:
+    """The README's version: held-out coverage, agreement and accuracy per task, and how often each threshold rule
+    broke the budget, so the README can't drift from docs/benchmarks.md."""
+    L = ["Five public tasks, replayed through the loop with Jev's recorded answers as the teacher (bge-small on CPU, "
+         "target agreement 98%). Answered locally and agreement are measured on 2,000 held-out rows against Jev; "
+         "accuracy is against the dataset's own labels, for Jev alone and for the system (student where it answers, "
+         "Jev elsewhere).", "",
+         "| Task | Answered locally | Agreement with Jev | Accuracy, Jev / system |", "|---|---:|---:|---:|"]
+    defer = False
+    for d in DATASETS:
+        p = ROOT / "experiments" / "results" / f"{d}-cached-{encoder}-probs-t98-{tag}" / "results.json"
+        if not p.exists():
+            continue
+        r = json.loads(p.read_text())
+        evals = [c for c in r["checkpoints"] if c.get("eval")]
+        if not evals:
+            continue
+        e = evals[-1]["eval"]
+        mark = " †" if r["args"].get("rare_classes") == "defer" else ""
+        defer = defer or bool(mark)
+        L.append(f"| {SHORT_NAMES.get(d, d)}{mark} | **{e['coverage']:.1%}** | **{e['system_agreement']:.2%}** "
+                 f"| {e['teacher_accuracy_vs_truth']:.1%} / {e['system_accuracy_vs_truth']:.1%} |")
+    if defer:
+        L += ["", "† with `rare_classes = \"defer\"`: Jev never used one of the task's labels."]
+    bound_viol = bound_n = 0
+    point_viol: list[int] = []
+    for d in DATASETS:
+        p = ROOT / "experiments" / "results" / f"baselines-{d}.json"
+        if not p.exists():
+            continue
+        runs = json.loads(p.read_text())["runs"]
+        bound_viol += sum(x["violated"] for x in runs["soft+bound"])
+        bound_n += len(runs["soft+bound"])
+        point_viol += [sum(x["violated"] for x in runs[rule]) for rule in ("soft+point", "hard+point")]
+    if bound_n:
+        per = bound_n // max(1, len(point_viol) // 2)
+        L += ["", f"Over {bound_n} random splits across the {len(point_viol) // 2} tasks, the calibrated threshold exceeded the 2% "
+              f"budget {'once' if bound_viol == 1 else f'{bound_viol} times'}; the usual point-estimate rule exceeded it on "
+              f"{min(point_viol)}–{max(point_viol)} of {per} splits per task."]
+    return "\n".join(L) + "\n"
+
+
 def curve_table() -> list[str]:
     p = ROOT / "experiments" / "results" / "target-curve.json"
     if not p.exists():
@@ -128,12 +175,12 @@ def main() -> None:
     table = build(a.tag, a.encoder)
     print(table)
     if a.write:
-        p = ROOT / "docs" / "benchmarks.md"
-        s = p.read_text()
         start, end = "<!-- bench:start -->", "<!-- bench:end -->"
-        i, j = s.index(start) + len(start), s.index(end)
-        p.write_text(s[:i] + "\n" + table + s[j:])
-        print(f"updated {p}")
+        for p, block in ((ROOT / "docs" / "benchmarks.md", table), (ROOT / "README.md", build_readme(a.tag, a.encoder))):
+            s = p.read_text()
+            i, j = s.index(start) + len(start), s.index(end)
+            p.write_text(s[:i] + "\n" + block + s[j:])
+            print(f"updated {p}")
 
 
 if __name__ == "__main__":

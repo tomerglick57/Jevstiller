@@ -9,6 +9,7 @@ npm install
 npm run dev        # live-reloading dev server at http://localhost:4321
 npm run preview    # build, then serve through Cloudflare's local runtime (wrangler pages dev)
 npm run deploy     # build, then deploy to production (needs `npx wrangler login` once)
+npm run media      # redraw the README's pictures (docs/media/*.svg) from src/data/banking77-live.json
 ```
 
 Hosted on Cloudflare Pages as the `jevstiller` project: https://jevstiller.pages.dev. `wrangler.jsonc`

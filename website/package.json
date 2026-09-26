@@ -10,7 +10,8 @@
     "build": "astro build",
     "preview": "npm run build && wrangler pages dev",
     "deploy": "npm run build && wrangler pages deploy --branch main",
-    "astro": "astro"
+    "astro": "astro",
+    "media": "node scripts/media.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.3",

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 860 250" width="860" height="250" role="img">
+<path d="M150 150 C 260 150, 300 150, 372 150" fill="none" stroke="#2a4744" stroke-width="1.5"/>
+<path d="M488 150 C 560 150, 600 116, 690 116" fill="none" stroke="#2a4744" stroke-width="1.5"/>
+<path d="M488 150 C 560 150, 600 196, 690 196" fill="none" stroke="#2a4744" stroke-width="1.5" stroke-dasharray="3 5"/>
+<rect x="20" y="112" width="130" height="76" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="85" y="145" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e8f2f0" text-anchor="middle">your services</text>
+<text x="85" y="166" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="middle">unchanged SDK</text>
+<g transform="translate(366 60) scale(2.05)"><path d="M32 4 C24 18 12 30 12 42 A20 20 0 0 0 52 42 C52 30 40 18 32 4 Z" fill="#3ec4bd" fill-rule="evenodd"/><path d="M32 25 C28.5 31.5 23 36.5 23 42 A9 9 0 0 0 41 42 C41 36.5 35.5 31.5 32 25 Z" fill="#0d1117"/></g>
+<text x="430" y="220" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e8f2f0" text-anchor="middle">jevstiller</text>
+<text x="430" y="240" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="middle">one process · many tasks and tenants</text>
+<rect x="690" y="80" width="160" height="72" rx="6" fill="#123634" stroke="#3ec4bd" stroke-width="1.2"/>
+<text x="770" y="104" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e8f2f0" text-anchor="middle">local model</text>
+<text x="770" y="123" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="middle">most requests</text>
+<text x="770" y="140" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="middle">~16 ms</text>
+<rect x="690" y="160" width="160" height="72" rx="6" fill="#132625" stroke="#2a4744" stroke-width="1.2"/>
+<text x="770" y="184" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e8f2f0" text-anchor="middle">Jev</text>
+<text x="770" y="203" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="middle">unsure, novel, audit</text>
+<text x="770" y="220" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="middle">~300 ms</text>
+<circle cx="200.0" cy="150.0" r="4.5" fill="#e8f2f0"/>
+<circle cx="260.0" cy="150.0" r="4.5" fill="#e8f2f0"/>
+<circle cx="320.0" cy="150.0" r="4.5" fill="#e8f2f0"/>
+<circle cx="345.0" cy="150.0" r="4.5" fill="#e8b04a"/>
+<circle cx="546.4" cy="142.7" r="4.5" fill="#e8f2f0"/>
+<circle cx="600.8" cy="128.0" r="4.5" fill="#e8f2f0"/>
+<circle cx="652.6" cy="118.1" r="4.5" fill="#e8f2f0"/>
+<circle cx="591.4" cy="176.4" r="4.5" fill="#e8b04a"/>
+<circle cx="24" cy="279" r="4" fill="#e8f2f0"/>
+<text x="34" y="283" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="start">answered locally</text>
+<circle cx="164" cy="279" r="4" fill="#e8b04a"/>
+<text x="174" y="283" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" font-weight="400" fill="#6f8d89" text-anchor="start">forwarded to Jev</text>
+</svg>
