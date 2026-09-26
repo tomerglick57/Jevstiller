@@ -51,7 +51,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: jevstiller
-          image: ghcr.io/tomerglick57/jevstiller:0.3.3
+          image: ghcr.io/tomerglick57/jevstiller:0.3.4
           args: ["serve"]
           env:
             # as a variable, not --config: `kubectl exec ... jevstiller admin` then finds the same settings

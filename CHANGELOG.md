@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4 — 2026-09-26
 
 - **Disk use no longer grows with every retrain.** The 24-hour soak's data directory reached 53 GB, 23 GB of it old model versions: every superseded version was kept (~8–10 MB each, 645 in the busiest task). Now only the newest `keep_versions` (default 3) versions of each finished state (superseded, rejected, rolled back) keep their files. Production, the shadow and candidates always stay. Older ones stay listed as `deleted`, and rollback goes back at most that far. Versions an earlier release kept are deleted on each task's first maintenance pass after the upgrade.
 - **A retrain waits for 2,000 new Jev answers, not 2,000 new requests** (`min_new_samples`). Requests the student answered counted too, so at 97% answered locally a busy task retrained every ~2 minutes on ~60 new answers, each time storing a new version. Drift and teacher changes still retrain at once. The count is an index seek, so it costs the number of new answers.

@@ -1,6 +1,6 @@
 ---
 title: Roadmap
-description: What 0.2.0 and 0.3.0 shipped, what is next, and the longer-term backlog.
+description: What has shipped, what is next, and the longer-term backlog.
 ---
 
 ## Shipped
@@ -28,6 +28,13 @@ and its own Jev key.
 - **A third security audit:** the audit channel now scores answers as they were served, calibration is split per
   request, and there is a per-key quota on new tasks.
 - **Hash-pinned release builds.**
+
+**0.3.4:**
+- **Bounded disk use.** Old model versions and stored requests that nothing reads any more are deleted. A busy task
+  levels off at ~300 MB. The 24-hour soak's data went from 53 GB to 4.3 GB.
+- **A 24-hour soak:** memory bounded, and a silent change in Jev's answers at hour 12 recovered without intervention.
+- **A benchmark on five public tasks,** with Jev's recorded answers, so anyone can rerun it.
+- `rare_classes` defaults to `defer`: a label Jev never uses no longer blocks a task's first student.
 
 ## Next
 
