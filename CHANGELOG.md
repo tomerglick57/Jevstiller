@@ -5,6 +5,7 @@
 - **Reproduce the headline result without an API key.** `bash experiments/reproduce.sh` replays Banking77 against Jev's recorded answers, which now ship with the repository (`experiments/cache/banking77.jsonl.gz`), and prints the numbers next to the published ones. `experiments/run.py` has a `--teacher cached` mode for it, and `experiments/record_answers.py` records a complete cache for a dataset.
 - **Replays are reproducible.** The per-request train/calibration split is now seeded from `Config.seed` and the task version instead of the store's file path, so the same replay gives the same result on any machine. Production behaviour is unchanged: the split is still a uniform draw per request.
 - `Status.report(events=False)` leaves out the loop events; floats in event lines are rounded to four decimals.
+- **The README opens with the proxy in front of live Jev.** `examples/proxy_demo.py` is a service that classifies 5,000 real customer messages with the unmodified SDK; recorded through `docker run ... jevstiller` it shows answers moving from Jev (~350 ms) to the local model (~40 ms at 8 concurrent callers) after about 4,000 requests, with no errors (`docs/media/proxy.gif`).
 - `examples/quickstart_synthetic.py` starts from a fresh temporary directory on every run.
 - Repository: GitHub Discussions for questions and results, a pull request template, links from the issue chooser.
 

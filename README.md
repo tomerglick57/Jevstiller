@@ -11,15 +11,16 @@ your app ──► Jev                     your app ──► Jevstiller ──�
                                                  answer
 ```
 
-![The no-key quickstart: within a few thousand requests the local student answers most of the traffic](docs/media/quickstart.gif)
+![The drop-in proxy in front of live Jev: your service unchanged, answers moving from Jev at ~350 ms to the local model at ~40 ms](docs/media/proxy.gif)
 
-Try it in a minute, no API key, CPU only. A synthetic teacher stands in for Jev; the loop is the real one:
+You already call Jev. Run Jevstiller next to your service and point the SDK at it; nothing else changes:
 
 ```bash
-pip install jevstiller
-curl -sO https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/examples/quickstart_synthetic.py
-python quickstart_synthetic.py
+docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller
+export TYPESAFE_BASE_URL=http://localhost:8080     # your service keeps its own TYPESAFE_API_KEY
 ```
+
+The recording above is [examples/proxy_demo.py](examples/proxy_demo.py): 5,000 real customer messages through the unmodified SDK, 8 threads, against live Jev. The local model took over after about 4,000 requests. `docker exec jevstiller jevstiller admin status <task>` shows the audit agreement behind it (with `-e JEVSTILLER_ADMIN_TOKEN=...` on the container).
 
 ## Why
 
@@ -96,7 +97,7 @@ As of September 2026:
 
 ## Quickstart (library)
 
-The no-key demo is at the top of this page. With Jev (`TYPESAFE_API_KEY` in your environment):
+Without a key, `python examples/quickstart_synthetic.py` runs the whole loop on CPU in half a minute with a synthetic teacher standing in for Jev. With Jev (`TYPESAFE_API_KEY` in your environment):
 
 ```python
 from jevstiller import Task, Jevstiller, load_encoder
