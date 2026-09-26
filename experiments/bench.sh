@@ -11,12 +11,17 @@ cd "$(dirname "$0")/.."
 PY=${PYTHON:-python3}
 if [ -x .venv/bin/python ]; then PY=.venv/bin/python; fi
 TASKS=${TASKS:-"banking77 clinc150 ag_news tweet_sentiment tweet_offensive"}
+ANSWERS=${ANSWERS:-https://github.com/tomerglick57/Jevstiller/releases/download/answers-2026-09-26}
 RECORD=1
 [ "${1:-}" = "--no-record" ] && RECORD=0
 
 for t in $TASKS; do
-    if [ -f "experiments/cache/$t.jsonl.gz" ] && [ ! -f "experiments/cache/$t.jsonl" ]; then
-        gunzip -k "experiments/cache/$t.jsonl.gz"
+    if [ ! -f "experiments/cache/$t.jsonl" ]; then
+        if [ ! -f "experiments/cache/$t.jsonl.gz" ]; then
+            # Banking77's answers ship in the repo; the other tasks' are release assets (~13 MB in total)
+            curl -fsSL -o "experiments/cache/$t.jsonl.gz" "$ANSWERS/$t.jsonl.gz" || rm -f "experiments/cache/$t.jsonl.gz"
+        fi
+        [ -f "experiments/cache/$t.jsonl.gz" ] && gunzip -k "experiments/cache/$t.jsonl.gz"
     fi
     if [ "$RECORD" = 1 ]; then
         echo "== recording Jev's answers: $t"

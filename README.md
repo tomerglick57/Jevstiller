@@ -71,7 +71,7 @@ Services keep their own `TYPESAFE_API_KEY`; Jevstiller forwards it and never sto
 Performance of one process (16 vCPU, bge-small on CPU, [docs/benchmarks.md](docs/benchmarks.md)):
 - **Forwarded requests:** Jev's latency plus ~1–4 ms, and up to ~585 req/s at 256 concurrent callers.
 - **Local answers:** ~16 ms p50, ~50 ms p99, up to the encoder's capacity (here ~150–340 texts/s depending on text length; a GPU raises it). Beyond that, the excess is forwarded to Jev, so the proxy is never much slower than Jev.
-- **Memory:** ~300 MB with the encoder, plus a few MB per loaded task. Flat over a 20-minute soak with 18 task reloads a second.
+- **Memory:** ~300 MB with the encoder, plus a few MB per loaded task. Bounded over a 24-hour soak with ~9 task reloads a second: ~300 MB most of the time, one hump to 654 MB that receded on its own, 308 MB at the end.
 
 Operations: a TOML config, an admin API and CLI (`jevstiller admin ...`), Prometheus `/metrics`, `/readyz`, JSON logs, `jevstiller backup`, and a Docker image and Kubernetes manifest. Docs: [deploy](docs/deploy.md), [operations](docs/operations.md), [the proxy](docs/proxy.md), [configuration](docs/configuration.md), [security](docs/security.md), [compatibility](docs/compatibility.md). Website: [jevstiller.pages.dev](https://jevstiller.pages.dev).
 
@@ -166,7 +166,7 @@ Alpha. Validated against live Jev (above).
   - Jev down, slow or rate limiting.
   - A full disk.
   - `kill -9` during training.
-  - A 40-minute soak with a silent change in Jev's answers, which it recovers from by itself.
+  - A 24-hour soak with a silent change in Jev's answers at hour 12, which it recovers from by itself (3.6 million requests, 0.012% errors).
   - Load up to 256 concurrent callers.
 
   Results: [docs/benchmarks.md](docs/benchmarks.md).
