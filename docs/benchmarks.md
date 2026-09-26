@@ -2,6 +2,16 @@
 
 Every number quoted in the README, DESIGN.md and DEPLOYMENT_PLAN.md, with the command that produced it. Unless noted, the machine is a 16-vCPU WSL2 VM (Linux 6.6, Python 3.14, numpy with OpenBLAS). Several runs on 2026-09-24 overlapped with unrelated load on the machine (load averages up to 30); those are marked, and comparisons were made under the same conditions or as medians of interleaved repeats.
 
+## Benchmark
+
+<!-- bench:start -->
+(not run yet: `bash experiments/bench.sh`)
+<!-- bench:end -->
+
+## Measurements behind the design decisions
+
+The sections below are the engineering log: one measurement per decision, with the command that produced it.
+
 ## Live Jev (2026-09-24)
 
 `python experiments/jev_profile.py` → `experiments/results/jev-profile.json`, `tests/fixtures/jev/*.json`

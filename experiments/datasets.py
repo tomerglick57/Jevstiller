@@ -45,17 +45,52 @@ def clinc150() -> dict:
             "classes": classes}
 
 
-def ag_news() -> dict:
-    from datasets import load_dataset
-    ds = load_dataset("fancyzhx/ag_news")
+def ag_news(n: int = 20_000, seed: int = 0) -> dict:
+    """A fixed 20,000-row sample of AG News (127,600 rows would cost ~$2 of Jev answers per recording)."""
+    import random
+    base = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/"
     names = ["world", "sports", "business", "scitech"]
     desc = {"world": "World news: international affairs, politics, conflicts, disasters",
             "sports": "Sports: games, athletes, teams, results",
             "business": "Business: companies, markets, economy, finance",
             "scitech": "Science and technology: research, software, hardware, internet, space"}
-    rows = [(r["text"], names[r["label"]]) for split in ("train", "test") for r in ds[split]]
-    return {"name": "ag_news", "rows": rows,
+    rows = []
+    for split in ("train", "test"):
+        with open(_fetch(base + f"{split}.csv", f"ag_news_{split}.csv"), newline="", encoding="utf-8") as f:
+            for cls, title, body in csv.reader(f):
+                rows.append((f"{title}. {body}".replace("\\", " "), names[int(cls) - 1]))
+    random.Random(seed).shuffle(rows)
+    return {"name": "ag_news", "rows": rows[:n],
             "instructions": "Which section of a news site does this article belong to?", "classes": desc}
+
+
+def _tweeteval(task: str) -> list[tuple[str, str]]:
+    base = f"https://raw.githubusercontent.com/cardiffnlp/tweeteval/main/datasets/{task}/"
+    names = _fetch(base + "mapping.txt", f"tweeteval_{task}_mapping.txt").read_text().splitlines()
+    mapping = {line.split("\t")[0]: line.split("\t")[1].strip() for line in names if line.strip()}
+    rows = []
+    for split in ("train", "val", "test"):
+        texts = _fetch(base + f"{split}_text.txt", f"tweeteval_{task}_{split}_text.txt").read_text().splitlines()
+        labels = _fetch(base + f"{split}_labels.txt", f"tweeteval_{task}_{split}_labels.txt").read_text().splitlines()
+        rows += [(t.strip(), mapping[l.strip()]) for t, l in zip(texts, labels, strict=True) if t.strip()]
+    return rows
+
+
+def tweet_sentiment() -> dict:
+    """TweetEval sentiment: 59,899 tweets, negative / neutral / positive."""
+    return {"name": "tweet_sentiment", "rows": _tweeteval("sentiment"),
+            "instructions": "What is the overall sentiment of this tweet?",
+            "classes": {"negative": "Negative: complaint, anger, sadness, disapproval",
+                        "neutral": "Neutral: factual, mixed or no clear sentiment",
+                        "positive": "Positive: praise, joy, approval, excitement"}}
+
+
+def tweet_offensive() -> dict:
+    """TweetEval offensive: 14,100 tweets, offensive or not (moderation-style traffic)."""
+    return {"name": "tweet_offensive", "rows": _tweeteval("offensive"),
+            "instructions": "Is this tweet offensive? Offensive means insults, threats, profanity aimed at "
+                            "someone, or hateful content.",
+            "classes": {"offensive": "Offensive", "not-offensive": "Not offensive"}}
 
 
 def synthetic(n: int = 20000, seed: int = 0) -> dict:
@@ -66,4 +101,5 @@ def synthetic(n: int = 20000, seed: int = 0) -> dict:
             "classes": {c: "" for c in labels}, "world": world}
 
 
-LOADERS = {"banking77": banking77, "clinc150": clinc150, "ag_news": ag_news, "synthetic": synthetic}
+LOADERS = {"banking77": banking77, "clinc150": clinc150, "ag_news": ag_news, "tweet_sentiment": tweet_sentiment,
+           "tweet_offensive": tweet_offensive, "synthetic": synthetic}
