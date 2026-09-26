@@ -105,7 +105,9 @@ class Config:
     min_train_samples: int = 1000
     min_samples_per_class: int = 50
     min_calib_samples: int = 500
-    min_new_samples: int = 2000         # retrain trigger
+    min_new_samples: int = 2000         # retrain trigger: new teacher answers since the last training
+    keep_versions: int = 3              # finished versions (superseded, rejected, rolled back) kept per state;
+                                        # older ones are deleted. Production, shadow and candidates always stay
     shadow_min_samples: int = 1000      # requests a shadow candidate must run alongside before judgement
     ood_quantile: float = 0.99
     ood_k: int = 10
@@ -149,6 +151,8 @@ class Config:
                               ("teacher_change", TEACHER_CHANGE), ("rare_classes", RARE_CLASSES)):
             if getattr(self, name) not in allowed:
                 raise ValueError(f"{name} must be one of {allowed}, got {getattr(self, name)!r}")
+        if self.keep_versions < 0:
+            raise ValueError(f"keep_versions must be >= 0, got {self.keep_versions}")
         for name, floor in (("max_train_samples", "min_train_samples"), ("max_calib_samples", "min_calib_samples")):
             cap = getattr(self, name)
             if cap < 0 or 0 < cap < getattr(self, floor):

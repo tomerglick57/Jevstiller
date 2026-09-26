@@ -31,6 +31,8 @@ and its own Jev key.
 
 ## Next
 
+- **A limit on stored requests per task.** Old model versions are now deleted, but every request stays in the
+  store (~4 KB each).
 - **A fourth security audit,** starting with HTTP path handling and forwarding.
 - **Admin controls on tasks that are loading:** a mode or target change during a load reaches the live engine.
 - **An in-process option** for teams that can't run a service: a `TypeSafeClient`-compatible wrapper over the same

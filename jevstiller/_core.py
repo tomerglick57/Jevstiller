@@ -214,7 +214,7 @@ class Jevstiller:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction,
                                  split_seed=f"{self.cfg.seed}:{task.version}")
-        self.registry = Registry(self.dir / "versions")
+        self.registry = Registry(self.dir / "versions", keep=self.cfg.keep_versions)
         self.rng = np.random.default_rng(self.cfg.seed)
         self._state = threading.Lock()
         self._maint = threading.Lock()
@@ -228,6 +228,7 @@ class Jevstiller:
         self._teacher_rate = DecayingRate(half_life_s=600)
         self._audit_new = 0                 # audit answers since the last drift check
         self._counted_at = -10**9           # store max id at the last readiness count
+        self._pruned = False                # versions past keep_versions deleted on the first maintenance pass
         self.labels = task.labels
         self._lidx = {c: i for i, c in enumerate(self.labels)}
         self._prod: Bundle | None = self._load(self.registry.production) if self.registry.production else None
@@ -551,6 +552,14 @@ class Jevstiller:
         """One maintenance pass: judge the shadow candidate, train if due, check drift. Safe from any thread;
         passes are serialised. Called automatically unless `config.training == "manual"`."""
         with self._maint:
+            if not self._pruned:                         # versions kept by earlier releases, or a lower keep_versions
+                self._pruned = True
+                try:
+                    if n := self.registry.prune():
+                        log.info("task %s: deleted %d old student versions (keep_versions=%d)", self.task.name, n,
+                                 self.cfg.keep_versions)
+                except OSError:
+                    log.exception("task %s: deleting old student versions failed", self.task.name)
             if self._pending is not None and self._pending[0].done():
                 self._finish_train()
             if self._shadow is not None:
@@ -585,10 +594,15 @@ class Jevstiller:
         return (bundle is not None and bundle.meta.get("teacher_model") in (None, self._teacher_model)
                 and bundle.meta.get("since_id", 0) >= self._since_id)
 
+    def _answers(self, after_id: int, upto_id: int | None = None) -> int:
+        return self.store.answered(self.task.version, self._teacher_model, after_id, upto_id)
+
     def _should_train(self) -> bool:
         """Cheap checks first: a pass runs about once a second per loaded task, and counting scans the store.
         Without a production student for the current data, train once the data is ready (readiness);
-        with one, retrain on request or every `min_new_samples` rows."""
+        with one, retrain on request or every `min_new_samples` new teacher answers. Only answers count: a
+        row the student answered teaches a retrain nothing, and at a high local share counting rows retrained
+        (and stored a new version) on a few dozen new answers."""
         if self._teacher_model is None:
             return False
         latest = self.store.max_id()
@@ -596,13 +610,20 @@ class Jevstiller:
         if fresh:
             if latest - self._counted_at < self.READINESS_CHECK_ROWS:
                 return False
-            tried = self._last_train_id - self._since_id  # rows when a candidate on this data last trained
-            if tried > 0 and not self._retrain_requested:  # it didn't make it: wait for 25% more data
-                if latest - self._last_train_id < min(self.cfg.min_new_samples, max(self.READINESS_CHECK_ROWS,
-                                                                                    tried // 4)):
+            tried = self._last_train_id > self._since_id  # a candidate on this data trained, and didn't make it:
+            if tried and not self._retrain_requested:     # wait for 25% more answers (at most min_new_samples)
+                self._counted_at = latest
+                had = self._answers(self._since_id, self._last_train_id)
+                if self._answers(self._last_train_id) < min(self.cfg.min_new_samples,
+                                                            max(self.READINESS_CHECK_ROWS, had // 4)):
                     return False
-        elif not self._retrain_requested and latest - self._last_train_id < self.cfg.min_new_samples:
-            return False
+        elif not self._retrain_requested:
+            if (latest - self._last_train_id < self.cfg.min_new_samples       # as many answers need as many rows
+                    or latest - self._counted_at < self.READINESS_CHECK_ROWS):
+                return False
+            self._counted_at = latest
+            if self._answers(max(self._last_train_id, self._since_id)) < self.cfg.min_new_samples:
+                return False
         self._counted_at = latest
         c = self.store.counts(self.task.version, self._teacher_model, self._since_id)
         if fresh:

@@ -71,7 +71,7 @@ def test_kill_during_save_and_promote(tmp_path):
         sys.path.insert(0, {os.path.dirname(os.path.abspath(__file__))!r})
         from test_registry import _save
         from jevstiller._registry import Registry
-        reg = Registry({str(tmp_path)!r})
+        reg = Registry({str(tmp_path)!r}, keep=2)
         print("ready", flush=True)
         while True:
             reg.promote(_save(reg))
@@ -84,9 +84,73 @@ def test_kill_during_save_and_promote(tmp_path):
         p.send_signal(signal.SIGKILL)
         p.wait()
         d = json.loads((tmp_path / "registry.json").read_text())      # never partial
-        reg = Registry(tmp_path)
+        reg = Registry(tmp_path, keep=2)
         for v in d["versions"]:
-            reg.load(v["name"])                                        # every listed version is complete
+            if not v.get("deleted"):
+                reg.load(v["name"])                                    # every version not deleted is complete
         if d["production"]:
             assert reg.state(d["production"]) == "production"
+        reg.prune()                                                    # a kill between marking and deleting
+        assert not [v for v in d["versions"] if v.get("deleted") and reg._dir(v["name"]).exists()]
     assert d["versions"], "the writer never got to save anything"
+
+
+def _on_disk(reg):
+    return sorted((p.name for p in reg.root.iterdir() if p.is_dir()), key=lambda n: int(n.split("-v")[1]))
+
+
+def test_only_the_newest_finished_versions_keep_their_files(tmp_path):
+    """24-hour soak: every superseded version stayed on disk (~10 MB each, 645 in one task by the end)."""
+    reg = Registry(tmp_path, keep=2)
+    for _ in range(5):                                         # v1..v5 promoted in turn: v1..v4 superseded
+        reg.promote(_save(reg))
+    for _ in range(3):                                         # v6..v8 rejected
+        _save(reg, state="rejected")
+    reg.promote(shadow := _save(reg))                          # v9 production, v5 superseded
+    _save(reg, state="shadow")                                 # v10 shadow, the newest
+    assert _on_disk(reg) == ["student-v4", "student-v5", "student-v7", "student-v8", "student-v9", "student-v10"]
+    listed = {v["name"]: v for v in reg.versions()}
+    assert len(listed) == 10 and listed["student:v1"]["state"] == "superseded" and listed["student:v1"]["deleted"]
+    assert _save(reg, state="rejected") == "student:v11"       # names are never reused
+    with pytest.raises(ValueError, match="deleted"):
+        reg.load("student:v1")
+    with pytest.raises(ValueError, match="deleted"):
+        reg.promote("student:v6")
+    assert reg.production == shadow and reg.rollback() == "student:v5"
+    assert reg.rollback() == "student:v4" and reg.rollback() is None     # v3 and older are gone
+
+
+def test_the_newest_version_is_kept_whatever_its_state(tmp_path):
+    """It holds the last training's position in the store (trained_to_id), read back on a restart."""
+    reg = Registry(tmp_path, keep=0)
+    reg.promote(_save(reg))
+    reg.promote(_save(reg))
+    _save(reg, state="rejected")
+    _save(reg, state="rejected")
+    assert _on_disk(reg) == ["student-v2", "student-v4"]
+    assert Registry(tmp_path).meta("student:v4") == {}
+
+
+def test_versions_kept_before_a_limit_are_deleted_by_prune(tmp_path):
+    reg = Registry(tmp_path)                                   # keep=None: every version stays
+    for _ in range(4):
+        reg.promote(_save(reg))
+    assert len(_on_disk(reg)) == 4
+    reg = Registry(tmp_path, keep=1)
+    assert _on_disk(reg) == ["student-v1", "student-v2", "student-v3", "student-v4"]   # opening deletes nothing
+    assert reg.prune() == 2 and _on_disk(reg) == ["student-v3", "student-v4"]
+    assert reg.prune() == 0
+    with pytest.raises(ValueError, match="keep"):
+        Registry(tmp_path, keep=-1)
+
+
+def test_a_crash_before_the_delete_leaves_nothing_behind(tmp_path, monkeypatch):
+    reg = Registry(tmp_path, keep=1)
+    reg.promote(_save(reg))
+    reg.promote(_save(reg))
+    monkeypatch.setattr(registry_mod.shutil, "rmtree", lambda *a, **kw: None)     # the process dies here
+    reg.promote(_save(reg))
+    monkeypatch.undo()
+    assert _on_disk(reg) == ["student-v1", "student-v2", "student-v3"]
+    assert [v["name"] for v in reg.versions() if v.get("deleted")] == ["student:v1"]
+    assert reg.prune() == 1 and _on_disk(reg) == ["student-v2", "student-v3"]

@@ -285,7 +285,12 @@ The detection lag is the price of catching a *silent* change through a 2% audit:
 - **Errors: 436 (0.012%)**: 383 client read timeouts, 37 × 504, 14 connect timeouts, 1 × 502, 1 read error. None in the first 12 hours. They sit in windows between hours 12 and 24 that coincide with other work on the same 16-core box (replays and 64-caller Jev load tests for the benchmarks); the worst window had 64 timeouts in ten seconds. The driver itself, one Python process that also hosts the fake Jev, could not hold 100 requests/s whenever the machine was busy: 38% of the windows ran below 80 requests/s.
 - **Memory is bounded, not flat.** Server RSS: ~300 MB through hour 5, a hump to a peak of 654 MB at hour 11 (training workers at 570–690 MB in the same hours), back under 410 MB from hour 18 and **308 MB at the end**, with no restart. The models held 100–170 MB throughout. The hump coincides with the busiest training hours and the external load; that is a correlation, not a cause found.
 - **Drift at hour 12:** local share 90% before. Students kept answering for ~3 minutes, then the audits confirmed the break: **9% local at +3.5 min**, 50% again at +8.6 min, 80% at +32 min, 90% at +49 min, and 92–94% for the remaining 11 hours. Slower than the 40-minute run above (50% at +2.7 min): each task had twelve hours of pre-drift data to age out, and the box was busy.
-- **Open:** repeat on current code, on an otherwise idle machine, to attribute the memory hump and the timeouts.
+- **Disk was not bounded.** The data directory grew to **53 GB** in the 24 hours:
+  - **31.7 GB of stored requests.** Every request is a row of ~4 KB (2 KB of it the 512-dim embedding), and rows are never deleted: text retention only blanks the text. Fits read only the newest 50,000 rows.
+  - **23 GB of model versions**: 2,515 of them, up to 10 MB each (the OOD reference set). Every superseded version stayed on disk.
+  - **Why so many versions:** the retrain trigger counted every new row, not every new Jev answer. In the busiest task's last 20,000 rows, 97% were answered locally, so each retrain had ~60 new answers to learn from, and the task stored a new version every ~2 minutes (645 in the day).
+  - **Since fixed in part:** the trigger counts teacher answers, and only the newest `keep_versions` (3) versions of each finished state keep their files. A limit on stored requests is still open.
+- **Open:** repeat on current code, on an otherwise idle machine, to attribute the memory hump and the timeouts; a limit on stored requests per task.
 
 ## Chaos (P6.5)
 

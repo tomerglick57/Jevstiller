@@ -486,7 +486,7 @@ The check runs after every `drift_check_every` (20) new audit answers, not on ev
 
 ### 7.10 Registry and lifecycle
 
-Explicit versions: `student:v1`, `student:v2`, … Each version is a directory containing the head weights, the routing policy, the encoder hash, training metadata (sample counts, split hashes, dates), and shadow-evaluation results. Immutable once written.
+Explicit versions: `student:v1`, `student:v2`, … Each version is a directory containing the head weights, the routing policy, the encoder hash, training metadata (sample counts, split hashes, dates), and shadow-evaluation results. Immutable once written. Only the newest `keep_versions` (3) versions of each finished state (superseded, rejected, rolled back) keep their files; older ones are deleted and stay listed in `registry.json`, marked `deleted`, so a name is never reused. Production, the shadow, candidates and the newest version always stay (the newest holds the last training's position in the store). Before this limit, the 24-hour soak kept 2,515 versions, 23 GB.
 
 ```text
    collecting
@@ -506,10 +506,10 @@ Explicit versions: `student:v1`, `student:v2`, … Each version is a directory c
                   -> production
                         |
                         +-- drift monitor step 3 -> teacher_only (rollback)
-                        +-- newer version passes shadow -> superseded (kept for rollback)
+                        +-- newer version passes shadow -> superseded (the newest 3 kept for rollback)
 ```
 
-Rollback is a pointer change: `production -> student:v3` (or `-> teacher_only`). Nothing is deleted.
+Rollback is a pointer change: `production -> student:v3` (or `-> teacher_only`), to the newest superseded version still on disk. It deletes nothing.
 
 ### 7.11 Training trigger
 
@@ -520,15 +520,15 @@ always:           ≥ min_calib_samples in the calibration split
 first training:   ≥ min_train_samples  AND  ≥ min_samples_per_class  in the train split
                   (rare_classes="defer": at least two classes with enough, the rest deferred, §7.6)
                   also after a teacher change or a confirmed drift (no student for the current data);
-                  after a candidate that didn't make it: 25% more rows first (at most min_new_samples)
-retrain:          ≥ min_new_samples since last training (kept in the version's metadata, so a reload
-                  or restart does not count from zero)
+                  after a candidate that didn't make it: 25% more teacher answers first (at most min_new_samples)
+retrain:          ≥ min_new_samples teacher answers since last training (its position in the store is kept
+                  in the version's metadata, so a reload or restart does not count from zero)
              OR   drift monitor or a teacher change requested it
              OR   elapsed time ≥ retrain_interval   (roadmap)
 never:            while a candidate is already in shadow, or a training job is queued or running
 ```
 
-Training is idempotent and cheap (frozen encoder), so being trigger-happy is fine; the shadow gate is what prevents bad promotions. The one exception is a task whose candidates keep failing (a hard task, or one still settling after a drift): it used to retrain every 100 rows, keeping a training worker busy forever. The 25% backoff bounds that to a logarithmic number of fits. The cheap checks come first (new rows since the last training); the store is only re-counted every 100 new rows, because a maintenance pass runs about once a second per loaded task.
+Training is idempotent and cheap (frozen encoder), so being trigger-happy is fine; the shadow gate is what prevents bad promotions. The one exception is a task whose candidates keep failing (a hard task, or one still settling after a drift): it used to retrain every 100 rows, keeping a training worker busy forever. The 25% backoff bounds that to a logarithmic number of fits. The cheap checks come first (new rows since the last training: as many answers need at least as many rows); the store is only re-counted every 100 new rows, because a maintenance pass runs about once a second per loaded task. Only teacher answers count, not rows: a row the student answered teaches a retrain nothing. Counting rows, the 24-hour soak's busiest task retrained every ~2 minutes at 97% local, each time on ~60 new answers, and stored 645 versions in a day. The count is an index seek from the last training's row, so it costs the number of new answers, not of rows.
 
 ### 7.12 Teacher lineage
 
@@ -693,7 +693,7 @@ Also: agreement bound over time with the target as a horizontal line; per-versio
 - **Offline-capable.** Once a student is promoted, the task keeps answering confident requests with no network. Audit and deferred requests need Jev: today the library raises `TeacherError` for them and the proxy returns 502/504. *(roadmap)* Queueing audit calls while Jev is unreachable (the student answers; the audit record is drained later), and an optional degraded mode that serves the student below threshold, flagged, when Jev is down.
 - **Single directory per task**: `<data_dir>/<task>/` in the library, `<data_dir>/tasks/<key>/` under the task manager. It holds the SQLite store, the versions and (manager) `task.json`. Copy the directory and the task moves with it; `js.export(version)` produces a standalone inference bundle (head + OOD reference + policy + task and encoder identity) with no store.
 - **Library and service share one core.** The proxy is a thin layer over the task manager, which is a thin layer over the per-task loop, so the loop can still be embedded in a worker, a batch job or a notebook.
-- **Crash-safe state.** Registry writes are atomic (temp file, fsync, rename); a version directory is staged and moved in whole; leftovers of an interrupted save are removed on the next open. A test kills a writer with SIGKILL mid-save and checks that every listed version loads.
+- **Crash-safe state.** Registry writes are atomic (temp file, fsync, rename); a version directory is staged and moved in whole; leftovers of an interrupted save are removed on the next open. A test kills a writer with SIGKILL mid-save and checks that every listed version not marked deleted loads. A deleted version is marked in the index before its directory is removed, so a crash in between leaves a directory the next write removes.
 - **Tests never call a real teacher by default.** `SyntheticTeacher` drives the full loop (bootstrap, train, calibrate, shadow, promote, drift, fall back) in seconds, on CPU. Proxy contract tests drive the unmodified `typesafe-sdk` over HTTP against a fake Jev and against responses recorded from live Jev. Live tests are opt-in (`JEVSTILLER_LIVE=1 pytest -m live`).
 - **Secrets.** In the library the Jev key is read from `TYPESAFE_API_KEY` (or a gitignored `.env`). In the proxy it is the caller's, forwarded per request and held only as a salted hash. It is never stored in a task directory, never logged, never in a sample-store row.
 

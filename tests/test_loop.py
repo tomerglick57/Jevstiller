@@ -179,3 +179,48 @@ def test_fits_use_only_the_most_recent_rows(tmp_path, task, world, teacher):
     js.close()
     with pytest.raises(ValueError, match="max_train_samples"):
         Config(min_train_samples=1000, max_train_samples=100)
+
+
+def _rows(js, task, n, answered):
+    from jevstiller._store import Record
+    return [Record(text=f"row {i}", task_version=task.version, encoder_id=js.encoder.id, embedding=None,
+                   served_by="teacher" if answered else "student", routing_reason="test",
+                   channel="audit" if answered else "student", teacher_label=task.labels[0] if answered else None,
+                   teacher_model=js._teacher_model if answered else None) for i in range(n)]
+
+
+def _promoted(tmp_path, task, world, teacher, **kw):
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual", **kw))
+    for _ in range(5):
+        js.classify_batch([t for t, _ in world.sample(200)])
+    js.train_now()
+    js.promote(js.status().shadow)
+    return js
+
+
+def test_a_retrain_waits_for_new_teacher_answers_not_rows(tmp_path, task, world, teacher):
+    """24-hour soak: the trigger counted every row, so at 97% answered locally a busy task retrained, and stored a
+    new version, every ~2 minutes on a few dozen new answers. Rows the student answered teach a retrain nothing."""
+    js = _promoted(tmp_path, task, world, teacher, min_new_samples=300)
+    assert js._current(js._prod) and not js._should_train()
+    js.store.insert(_rows(js, task, 1000, answered=False))
+    assert not js._should_train()                        # 1,000 new rows, no new answers
+    js.store.insert(_rows(js, task, 250, answered=True))
+    assert not js._should_train()                        # 250 of 300 answers
+    js.store.insert(_rows(js, task, 100, answered=True))
+    assert js._should_train()
+    js.close()
+
+
+def test_old_versions_are_deleted(tmp_path, task, world, teacher):
+    js = _promoted(tmp_path, task, world, teacher, keep_versions=5)
+    for _ in range(3):
+        js.train_now()
+        js.promote(js.status().shadow)
+    vdir = js.registry.root
+    assert len([p for p in vdir.iterdir() if p.is_dir()]) == 4       # production + 3 superseded
+    js.close()
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(training="manual", keep_versions=1))
+    js.maintain()                                        # the first pass deletes what a higher limit kept
+    assert sorted(p.name for p in vdir.iterdir() if p.is_dir()) == ["student-v3", "student-v4"]
+    js.close()

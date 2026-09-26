@@ -86,7 +86,7 @@ Measured on a 16-vCPU VM (docs/benchmarks.md):
 |---|---|
 | CPU | Serving is about 2–5 ms of CPU per locally answered request with a real encoder, plus training bursts capped at `train_workers × 2` cores (low priority). 2–4 cores cover hundreds of requests per second. |
 | Memory | ~70 MB base, the encoder (~150 MB for bge-small ONNX), and ~2–8 MB per loaded task (`max_loaded`, default 64). Plan 2 GB, and cap it with `max_memory_mb`. Set `max_loaded` above the number of tasks that are active at once: below it, tasks reload from disk many times a second. That is safe (memory stays flat: a 20-minute soak with 20 active tasks and `max_loaded = 12` held ~160 MB) but costs CPU and disk reads, and slows each task's learning. |
-| Disk | Per task: ~2 KB per stored request (text + 384-dim embedding) plus ~10 MB per model version. A task seeing 10k requests/day grows ~20 MB/day; use `text_retention_days` and `idle_ttl_days`. |
+| Disk | Per task: ~3–4 KB per stored request (text, embedding, answers and indexes; 3.9 KB measured with a 512-dim encoder) and ~8 MB per kept model version (production, shadow and at most `keep_versions`, 3, of each finished state). A task seeing 10k requests/day grows ~35 MB/day. Stored requests are not deleted yet; `text_retention_days` blanks old text, and `idle_ttl_days` deletes tasks nobody uses. |
 | Network | Only to the upstream (`api.typesafe.ai:443`) and from the callers. |
 
 ## Upgrade

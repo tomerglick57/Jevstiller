@@ -218,7 +218,9 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
     - Reloads lost shadow, retraining and drift-check progress.
     - Failing candidates retrained every 100 rows.
   - **Confirmation run** (30 min, after the manager fixes): peak 222 MB, drift recovered.
+  - **Found in the 24 h run:** the data directory grew to 53 GB, 23 GB of it model versions that were never deleted (2,515), most of them from a retrain trigger that counted rows answered locally. Fixed: the trigger counts teacher answers, and versions past `keep_versions` are deleted.
   - **Still to do:**
+    - a limit on stored requests per task (31.7 GB of the 53 GB: rows are never deleted);
     - the full 24 h run on an otherwise idle machine (the confirmation run's second half overlapped a disk backup: I/O stalls);
     - a look at the rare keep-alive `ReadError` (2 in 180k, retried by the SDK).
 - [x] **P6.7** End-to-end with live Jev through the proxy (after P0): one real task from cold start to promoted student. Record the report.

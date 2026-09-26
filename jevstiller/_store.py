@@ -133,6 +133,7 @@ class Store(Protocol):
     def redact_text(self, older_than_ts: float) -> int: ...
     def latest_teacher_model(self, task_version: str) -> str | None: ...
     def max_id(self) -> int: ...
+    def answered(self, task_version: str, teacher_model: str, after_id: int, upto_id: int | None = None) -> int: ...
     def events(self, limit: int = 20) -> list[dict]: ...
     def last_event(self, kinds: Sequence[str]) -> dict | None: ...
     def close(self) -> None: ...
@@ -423,6 +424,17 @@ class SampleStore:
 
     def max_id(self) -> int:
         return self.db.execute("SELECT COALESCE(MAX(id),0) FROM samples").fetchone()[0]
+
+    def answered(self, task_version: str, teacher_model: str, after_id: int, upto_id: int | None = None) -> int:
+        """Rows with an answer from `teacher_model` after row `after_id` (up to `upto_id`): what a retrain has
+        new to learn from. A row has a teacher model only if the teacher answered it. The split filter lets
+        the lineage index seek straight to `after_id`, so the cost is the number of answers, not of rows."""
+        sql = ("SELECT COUNT(*) FROM samples WHERE task_version=? AND teacher_model=? AND split IN ('train', 'calib') "
+               "AND id>?")
+        args: tuple = (task_version, teacher_model, after_id)
+        if upto_id is not None:
+            sql, args = sql + " AND id<=?", (*args, upto_id)
+        return self.db.execute(sql, args).fetchone()[0]
 
     def events(self, limit: int = 20) -> list[dict]:
         rows = self.db.execute("SELECT ts, kind, detail FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
