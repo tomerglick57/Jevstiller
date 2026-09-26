@@ -1,0 +1,348 @@
+---
+// The landing page. It stands outside Starlight (its own nav and a dark palette of its own); the docs start at
+// /getting-started/. The results chart is shared with nothing else but reads website/src/data/banking77-live.json,
+// so the numbers here and in docs/benchmarks.md come from the same replay.
+import ResultsChart from '../components/ResultsChart.astro';
+import '../styles/landing.css';
+
+const repo = 'https://github.com/tomerglick57/Jevstiller';
+const version = '0.3.4';
+const title = 'Jevstiller: Jev, distilled on the fly';
+const description =
+	"A drop-in proxy for Jev that learns your repeated classification questions from Jev's own answers and answers them locally, within an agreement budget you set.";
+const site = Astro.site ?? new URL('https://jevstiller.pages.dev');
+const mark =
+	'M32 4 C24 18 12 30 12 42 A20 20 0 0 0 52 42 C52 30 40 18 32 4 Z M32 25 C28.5 31.5 23 36.5 23 42 A9 9 0 0 0 41 42 C41 36.5 35.5 31.5 32 25 Z';
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<link rel="canonical" href={site.href} />
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="sitemap" href="/sitemap-index.xml" />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content={site.href} />
+		<meta property="og:site_name" content="Jevstiller" />
+		<meta property="og:image" content={new URL('/social-preview.png', site).href} />
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="theme-color" content="#0b1716" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Ubuntu:wght@500&display=swap"
+		/>
+	</head>
+	<body class="landing">
+		<header class="nav">
+			<div class="wrap">
+				<a class="brand" href="/">
+					<svg viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d={mark}></path></svg>
+					Jevstiller
+				</a>
+				<nav aria-label="Site">
+					<a href="/getting-started/">Getting started</a>
+					<a href="/concepts/how-it-works/">How it works</a>
+					<a href="/project/benchmarks/">Benchmarks</a>
+					<a href="/reference/configuration/">Reference</a>
+					<a class="gh" href={repo}>github ↗</a>
+				</nav>
+			</div>
+		</header>
+
+		<main>
+			<div class="wrap hero">
+				<div>
+					<p class="eyebrow">Drop-in proxy for Jev · <b>v{version}</b> · alpha</p>
+					<h1>Jev, distilled<br />on the <em>fly.</em></h1>
+					<p class="lede">
+						Point your services at Jevstiller instead of Jev. It learns each repeated question from Jev's own answers,
+						proves it agrees with Jev within a budget you set, then answers most requests itself in milliseconds.
+					</p>
+					<div class="cta">
+						<a class="btn primary" href="/getting-started/">$ get started</a>
+						<a class="btn" href="/concepts/guarantee/">read the guarantee</a>
+					</div>
+				</div>
+				<div class="term" aria-label="Example request log">
+					<div class="term-bar">
+						<span class="dot-live"></span><span>jevstiller serve · :8080</span><span>task support_router · student:v10</span>
+					</div>
+					<div class="log" id="log"></div>
+					<div class="term-foot">
+						<span>local <b>70.7%</b></span><span>agreement <b>99.45%</b></span><span>audit <b>2%</b></span><span>p50 <b>16 ms</b></span>
+					</div>
+				</div>
+			</div>
+
+			<div class="strip">
+				<div class="wrap">
+					<div>
+						<h2>One container, one env var</h2>
+						<p>Services keep the TypeSafe SDK and their own Jev keys. Only the base URL changes.</p>
+					</div>
+					<pre><code><span class="cmt"># run it next to your services</span>
+docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller:{version}
+
+<span class="cmt"># in each calling service; nothing else changes</span>
+<span class="kw">export</span> TYPESAFE_BASE_URL=http://jevstiller:8080</code></pre>
+				</div>
+			</div>
+
+			<section>
+				<div class="wrap">
+					<div class="sec-head">
+						<p class="eyebrow">How it works</p>
+						<div>
+							<h2>Same call. Same answers. Your hardware.</h2>
+							<p class="sec-body">
+								Every <code>Choice</code> question in the traffic becomes a task. At first every request is forwarded to Jev
+								unchanged. From Jev's answers, with their full probability distributions, a small local model is trained,
+								shadow-tested and promoted. After that the proxy answers what it is sure about, in Jev's exact response
+								format, and forwards the rest.
+							</p>
+						</div>
+					</div>
+					<div class="diagram">
+						<div class="diagram-wrap">
+							<svg
+								viewBox="0 40 860 220"
+								role="img"
+								aria-label="Requests from your services flow into Jevstiller. Most are answered by the local model in about 16 milliseconds; the uncertain ones and a 2% audit continue to Jev at about 300 milliseconds."
+							>
+								<path class="lane" d="M150 150 C 260 150, 300 150, 372 150"></path>
+								<path class="lane" d="M488 150 C 560 150, 600 116, 690 116"></path>
+								<path class="lane thin" d="M488 150 C 560 150, 600 196, 690 196"></path>
+								<rect class="box" x="20" y="112" width="130" height="76" rx="6"></rect>
+								<text class="lbl" x="85" y="145" text-anchor="middle">your services</text>
+								<text class="sm" x="85" y="166" text-anchor="middle">unchanged SDK</text>
+								<g transform="translate(366 60) scale(2.05)">
+									<path class="drop" fill-rule="evenodd" d="M32 4 C24 18 12 30 12 42 A20 20 0 0 0 52 42 C52 30 40 18 32 4 Z"></path>
+									<path class="drop-in" d="M32 25 C28.5 31.5 23 36.5 23 42 A9 9 0 0 0 41 42 C41 36.5 35.5 31.5 32 25 Z"></path>
+								</g>
+								<text class="lbl" x="430" y="220" text-anchor="middle">jevstiller</text>
+								<text class="sm" x="430" y="240" text-anchor="middle">one process · many tasks and tenants</text>
+								<rect class="box hot" x="690" y="80" width="160" height="72" rx="6"></rect>
+								<text class="lbl" x="770" y="104" text-anchor="middle">local model</text>
+								<text class="sm" x="770" y="123" text-anchor="middle">most requests</text>
+								<text class="sm" x="770" y="140" text-anchor="middle">~16 ms</text>
+								<rect class="box" x="690" y="160" width="160" height="72" rx="6"></rect>
+								<text class="lbl" x="770" y="184" text-anchor="middle">Jev</text>
+								<text class="sm" x="770" y="203" text-anchor="middle">unsure, novel, audit</text>
+								<text class="sm" x="770" y="220" text-anchor="middle">~300 ms</text>
+							</svg>
+							<div class="dots" id="dots" aria-hidden="true"></div>
+						</div>
+						<div class="legend"><span>answered locally</span><span class="slow">forwarded to Jev</span></div>
+					</div>
+				</div>
+			</section>
+
+			<section class="tight">
+				<div class="wrap">
+					<div class="sec-head">
+						<p class="eyebrow">Measured, live</p>
+						<div>
+							<h2>One task learned from Jev, while serving traffic</h2>
+							<p class="sec-body">
+								Banking77, 77 customer-support intents, replayed through Jevstiller against live Jev on CPU with the default
+								encoder. Both lines are measured on 2,000 held-out messages labelled by Jev.
+							</p>
+						</div>
+					</div>
+					<div class="chartpanel">
+						<div class="chartbox"><ResultsChart /></div>
+						<div class="stats">
+							<div class="stat teal"><div class="n">70.7%</div><div class="l">answered locally by the end of the replay</div></div>
+							<div class="stat violet"><div class="n">99.45%</div><div class="l">agreement with Jev, against a 98% target</div></div>
+							<div class="stat"><div class="n">16 ms</div><div class="l">median local answer, on CPU. Jev: ~300 ms</div></div>
+							<div class="stat"><div class="n">78.5%</div><div class="l">accuracy on the dataset's own labels, the same as Jev's</div></div>
+						</div>
+					</div>
+					<p class="caption">
+						Hover the chart for the values at each checkpoint. <a href="/project/benchmarks/">How it was measured →</a>
+					</p>
+				</div>
+			</section>
+
+			<section class="tight">
+				<div class="wrap">
+					<div class="sec-head">
+						<p class="eyebrow">The contract</p>
+						<div>
+							<h2>You set one number. The threshold is derived, not tuned.</h2>
+							<div class="contract">
+								<div class="formula">
+									<div class="big">target_agreement = <em>0.98</em></div>
+									<div class="line"><span>disagreement budget</span><b>2% of all requests</b></div>
+									<div class="line"><span>confidence</span><b>95%, exact (Clopper–Pearson)</b></div>
+									<div class="line"><span>calibration</span><b>held-out, IID, strictest threshold first</b></div>
+									<div class="line"><span>audit</span><b>2% of live traffic, forever</b></div>
+									<div class="line"><span>if broken</span><b>fall back to Jev, retrain</b></div>
+								</div>
+								<ol>
+									<li>
+										<i>01</i><span>The routing threshold is chosen so that, with 95% confidence, the share of requests answered locally <em>and</em> differently from Jev stays within the budget.</span>
+									</li>
+									<li>
+										<i>02</i><span>A random 2% of requests keeps going to Jev. If agreement drops, or Jev's model changes, the task falls back to Jev and retrains by itself.</span>
+									</li>
+									<li><i>03</i><span>Local answers only for API keys Jev has accepted. Keys are forwarded, never stored.</span></li>
+								</ol>
+							</div>
+							<div class="warn">
+								<b>Agreement with Jev is not accuracy</b>
+								<p>
+									If Jev is wrong, the student is wrong the same way. Every number Jevstiller reports is agreement with the
+									teacher, and the status report says so next to it.
+								</p>
+							</div>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="tight">
+				<div class="wrap">
+					<div class="sec-head">
+						<p class="eyebrow">Why</p>
+						<div>
+							<h2>Jev is fast, cheap and typed. It is also a ceiling.</h2>
+							<p class="sec-body">
+								1,200 requests a minute per key, ~300 ms per answer, hosted only. Jevstiller is for the workload that outgrows
+								that: decisions made one after another, latency budgets in milliseconds, boxes with no egress, or not wanting
+								every classification to depend on one external API.
+							</p>
+						</div>
+					</div>
+					<div class="props">
+						<div class="prop">
+							<div class="k">no code changes</div>
+							<h3>Set the base URL and stop</h3>
+							<p>
+								Services keep the TypeSafe SDK and get the same response shape back. <code>x-jevstiller-source</code> tells you
+								who answered.
+							</p>
+						</div>
+						<div class="prop">
+							<div class="k">bounded</div>
+							<h3>Same answers, as a bound</h3>
+							<p>A finite-sample bound on disagreement over all requests, re-verified on the audit channel for as long as the task lives.</p>
+						</div>
+						<div class="prop">
+							<div class="k">self-healing</div>
+							<h3>Checked forever</h3>
+							<p>Drift in Jev's answers is detected on the audit slice. The task falls back and retrains without anyone on call.</p>
+						</div>
+						<div class="prop">
+							<div class="k">self-hosted</div>
+							<h3>One container on CPU</h3>
+							<p>Many services and tenants from one process. Prometheus metrics, JSON logs, an admin CLI, a Kubernetes manifest. Three security audits.</p>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="tight">
+				<div class="wrap">
+					<div class="sec-head">
+						<p class="eyebrow">How it compares</p>
+						<div>
+							<h2>Online learning, with a guarantee</h2>
+							<p class="sec-body">
+								Research has done each half: students trained online from an LLM's answers without a bound, and bounds on
+								agreement without a student that keeps learning. Jevstiller combines the two, with a permanent audit and
+								automatic fallback on top.{' '}
+								<a href="/concepts/comparison/">How it compares to stuntd, cloud distillation, routers and caches →</a>
+							</p>
+						</div>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<footer>
+			<div class="wrap">
+				<p>
+					<b>{version}, alpha.</b> The drop-in proxy works end to end with the unmodified TypeSafe SDK. Validated against live Jev,
+					tested under failure (Jev down, slow or rate limiting, a full disk, <code>kill -9</code> during training), load (256
+					concurrent callers) and a silent change in Jev's answers, and audited three times. See the <a href="/project/roadmap/">roadmap</a> for what's next.
+				</p>
+				<p>
+					Jevstiller is an independent open-source project (Apache 2.0). It is not affiliated with, endorsed by, or supported by
+					TypeSafe. <a href={`${repo}/blob/main/CHANGELOG.md`}>Changelog</a> · <a href={`${repo}/blob/main/DESIGN.md`}>Design document</a>
+				</p>
+			</div>
+		</footer>
+
+		<script>
+			const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+			// The request log: sample customer messages, routed the way the proxy routes them once a student is promoted
+			// (about 70% local, a 2% audit, the rest forwarded).
+			{
+				const msgs: [string, string][] = [
+					['My invoice is wrong', 'billing'], ['Please cancel my subscription', 'cancellation'], ['The webhook returns 502', 'technical'],
+					['Do you have a plan for 20 seats?', 'sales'], ['Charged twice this month', 'billing'], ["Can't log in after the update", 'technical'],
+					['How do I export my data?', 'other'], ['Refund for the annual plan', 'billing'], ['Is there an on-prem option?', 'sales'],
+					['Downgrade to the free tier', 'cancellation'], ['API key stopped working', 'technical'], ['Where is my receipt?', 'billing'],
+					['Quote for the enterprise plan', 'sales'], ['Integration with Slack broken', 'technical'], ['Close my account please', 'cancellation'],
+				];
+				const log = document.getElementById('log')!;
+				let t = new Date();
+				t.setHours(14, 2, 11, 482);
+				let i = 0;
+				const row = (first: boolean) => {
+					const [text, label] = msgs[i++ % msgs.length];
+					const r = Math.random();
+					const src = r < 0.02 ? 'audit' : r < 0.29 ? 'upstream' : 'local';
+					const ms = src === 'local' ? 12 + Math.round(Math.random() * 9) : 268 + Math.round(Math.random() * 90);
+					t = new Date(t.getTime() + ms + 40 + Math.random() * 300);
+					const d = document.createElement('div');
+					d.className = 'row' + (first ? '' : ' new');
+					const ts = t.toTimeString().slice(0, 8) + '.' + String(t.getMilliseconds()).padStart(3, '0');
+					d.innerHTML = `<span class="t">${ts}</span><span class="q">${text} <b>→ ${label}</b></span><span class="src ${src}">${src}</span><span class="ms">${ms} ms</span>`;
+					log.appendChild(d);
+					while (log.children.length > 14) log.removeChild(log.firstChild!);
+				};
+				for (let k = 0; k < 14; k++) row(true);
+				if (!reduced) setInterval(() => row(false), 900);
+			}
+
+			// Travelling requests along the diagram lanes, in the SVG's coordinates (the overlay is scaled to the SVG).
+			{
+				const wrap = document.querySelector<HTMLElement>('.diagram-wrap')!;
+				const svg = wrap.querySelector('svg')!;
+				const box = document.getElementById('dots')!;
+				const localPath = 'M150 150 C 260 150, 300 150, 372 150 L 488 150 C 560 150, 600 116, 690 116';
+				const jevPath = 'M150 150 C 260 150, 300 150, 372 150 L 488 150 C 560 150, 600 196, 690 196';
+				const fit = () => {
+					const r = svg.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+					const k = r.width / 860;
+					box.style.left = `${r.left - w.left}px`;
+					box.style.top = `${r.top - w.top - 40 * k}px`;
+					box.style.transform = `scale(${k})`;
+				};
+				fit();
+				window.addEventListener('resize', fit);
+				for (let i = 0; i < 14; i++) {
+					const d = document.createElement('div');
+					const slow = i % 4 === 3;
+					d.className = 'dot' + (slow ? ' slow' : '');
+					d.style.offsetPath = `path('${slow ? jevPath : localPath}')`;
+					d.style.setProperty('--dur', `${slow ? 9 : 5.5}s`);
+					d.style.setProperty('--delay', `${-i * 0.9}s`);
+					d.style.setProperty('--rest', `${8 + i * 6}%`);
+					box.appendChild(d);
+				}
+			}
+		</script>
+	</body>
+</html>

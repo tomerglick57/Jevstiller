@@ -1,11 +1,35 @@
-/* Accent: a muted teal instead of Starlight's default purple. */
+/* The docs share the landing page's palette and typefaces (src/styles/landing.css): a teal accent, and in dark mode
+   the same teal-black ground. The fonts are loaded from Google Fonts by the `head` entries in astro.config.mjs. */
 :root {
-	--sl-color-accent-low: #0c2b2b;
-	--sl-color-accent: #1f8a86;
+	--sl-font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--sl-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+	/* dark mode */
+	--sl-color-white: #e8f2f0;
+	--sl-color-gray-1: #d5e3e0;
+	--sl-color-gray-2: #a9bfbc;
+	--sl-color-gray-3: #6f8d89;
+	--sl-color-gray-4: #3f5c59;
+	--sl-color-gray-5: #22403d;
+	--sl-color-gray-6: #132625;
+	--sl-color-black: #0b1716;
+	--sl-color-accent-low: #0e3634;
+	--sl-color-accent: #3ec4bd;
 	--sl-color-accent-high: #b6ebe7;
+	--sl-hue-orange: 41;
+	--sl-hue-purple: 262;
 }
 
 :root[data-theme='light'] {
+	--sl-color-white: #121c1b;
+	--sl-color-gray-1: #2a3a38;
+	--sl-color-gray-2: #435553;
+	--sl-color-gray-3: #748684;
+	--sl-color-gray-4: #a9bab8;
+	--sl-color-gray-5: #d3dcdb;
+	--sl-color-gray-6: #eef3f2;
+	--sl-color-gray-7: #f6f8f8;
+	--sl-color-black: #ffffff;
 	--sl-color-accent-low: #cdeeec;
 	--sl-color-accent: #137572;
 	--sl-color-accent-high: #0a3634;

@@ -1,7 +1,8 @@
 # Jevstiller website
 
 The project site and docs, built with [Starlight](https://starlight.astro.build) and hosted on Cloudflare.
-Pages are Markdown files in `src/content/docs/`; the sidebar is in `astro.config.mjs`.
+The landing page is `src/pages/index.astro` (with `src/styles/landing.css`); docs pages are Markdown files in
+`src/content/docs/`, and the sidebar is in `astro.config.mjs`.
 
 ```bash
 npm install
