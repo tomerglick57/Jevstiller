@@ -474,7 +474,8 @@ class SampleStore:
         with self._write_lock:
             mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
             if mode == 2:                                                 # INCREMENTAL
-                conn.execute("PRAGMA incremental_vacuum").fetchall()     # stepped to the end
+                conn.executescript("PRAGMA incremental_vacuum;")  # executescript steps it to the end on every
+                                                                   # Python (3.11's execute+fetchall frees one page)
             elif mode == 0 and finished:
                 free = conn.execute("PRAGMA freelist_count").fetchone()[0]
                 if free > conn.execute("PRAGMA page_count").fetchone()[0] // 2:
