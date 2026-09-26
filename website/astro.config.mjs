@@ -10,6 +10,11 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Jevstiller',
+			logo: {
+				light: './src/assets/logo-light.svg',
+				dark: './src/assets/logo-dark.svg',
+				replacesTitle: true,
+			},
 			description:
 				'A drop-in proxy for Jev that learns your repeated classification questions and answers them locally, within an agreement budget you set.',
 			social: [{ icon: 'github', label: 'GitHub', href: repo }],
