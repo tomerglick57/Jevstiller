@@ -31,12 +31,24 @@ Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-0
 | Accuracy against the dataset's true labels | Jev 78.5%; the Jevstiller system 78.5% |
 | Jev's own confidence | median 0.98; 11.8% of messages below 0.6 |
 | Jev latency | 291 ms mean |
-| Student path throughput (held-out, CPU) | 129 rows/s, encoder-bound at 7 ms/text on this machine (Jev's ceiling: 20 rows/s) |
+| Student path throughput (held-out, CPU) | 129 rows/s, encoder-bound at 7 ms/text on this machine (Jev's published limit: 20 rows/s; measured 190/s, see below) |
 | Wall-clock for the whole replay | 11 min |
 
 **Reproduction (2026-09-26).** `bash experiments/reproduce.sh` replays the shipped answers with `--teacher cached`: held-out coverage **71.9%**, system agreement **99.50%**, accuracy against the dataset's labels 78.5% (Jev: 78.5%), 8,666 cache hits and no misses. The replay is deterministic since the train/calibration split is seeded from the config (before, from the store's file path). Four earlier replays of the same stream with different splits gave 66.8–70.7% coverage at 99.45–99.65% agreement: the split moves coverage by a few points, agreement stays inside the contract every time.
 
 With a live teacher, coverage came out higher than with the "oracle" labels and the same encoder (65.7%). A plausible explanation, not tested: a model's labels are more consistent with the surface of the text than human labels, so they're easier to reproduce.
+
+### Jev alone, under load (2026-09-26)
+
+`examples/race.py` lanes straight to `api.typesafe.ai`, one key, the 6-class routing question, real Banking77 messages. The published limit is 1,200 requests/minute; none of these runs saw a 429.
+
+| Callers | Duration | Answered | Rate | p50 | p99 |
+|---|---|---|---|---|---|
+| 16 | 60 s | 3,169 | 53/s | 296 ms | 421 ms |
+| 64 | 20 s | 3,894 | 195/s | 303 ms | 1,187 ms |
+| 64 | 60 s | 11,372 | 190/s | 300–336 ms | 430–607 ms (1,833 ms in the first 10 s) |
+
+Jev's latency is flat in concurrency: the argument for a local model is the ~300 ms per answer and the dependency, not the request rate. TypeSafe says its limits adjust dynamically, so another key or another day may see the published limit enforced.
 
 ### Through the proxy, cold start (P6.7)
 
@@ -148,7 +160,7 @@ Latency is the server's own measurement (its access log). The clients share the 
 
 What it shows:
 
-- **Forwarding adds ~1–4 ms** up to 64 callers. At 256 callers one process forwards ~585 req/s, which is 30 Jev keys' worth at Jev's 1,200 requests/minute limit.
+- **Forwarding adds ~1–4 ms** up to 64 callers. At 256 callers one process forwards ~585 req/s, which is 30 keys' worth of Jev's published 1,200 requests/minute limit (and three times what one key actually sustained on 2026-09-26, below).
 - **The local path is bounded by the encoder:** bge-small on this CPU embeds ~150 of these synthetic texts a second (~340/s for short English sentences). Below that, local answers take 11–25 ms p50. Above it, backpressure (`max_encoder_wait_ms`) sends the excess to Jev, so throughput keeps rising with load (424 req/s at 256 callers) instead of collapsing. At 256 callers the machine is CPU-bound, and local answers slow to ~350 ms, still no slower than Jev.
 - **The local shares here are not meaningful:** a language-model encoder can't make sense of the synthetic `w123` vocabulary, so fewer answers pass the confidence gate than with real text (compare the live Banking77 run).
 - **Found and fixed on the way:**

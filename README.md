@@ -24,9 +24,9 @@ The recording above is [examples/proxy_demo.py](examples/proxy_demo.py): 5,000 r
 
 ## Why
 
-Jev is fast, cheap and typed. It is also a ceiling: **1,200 requests per minute** per key, ~300 ms per answer, hosted only. Jevstiller is for the workload that outgrows that — bursts, backlogs, latency budgets in milliseconds, boxes with no egress, or simply not wanting every classification to depend on one external API.
+Jev is fast, cheap and typed. It is also ~300 ms away, per answer, at every load we tried (16 to 64 concurrent callers, up to 190 requests/s, p50 300 ms), and it is hosted: every classification is a network call to one vendor, under a published limit of 1,200 requests per minute that TypeSafe enforces at its own discretion. Jevstiller is for the workload where that hurts: decisions made one after another (an agent loop, a game tick, classify-then-act pipelines), latency budgets in milliseconds, boxes with no egress, or simply not wanting every classification to depend on one external API.
 
-Against live Jev, in a replay of Banking77 (77 customer-support intents), the local model answered **70.7% of held-out messages at 99.45% agreement with Jev** (target 98%), taking over most live traffic from about 5,000 messages on, and kept Jev's accuracy (78.5% vs Jev's 78.5% on the dataset's labels). On CPU the student path ran at ~130 messages/s, 6.5× Jev's rate limit. On a GPU it runs at ~2,000/s.¹
+Against live Jev, in a replay of Banking77 (77 customer-support intents), the local model answered **70.7% of held-out messages at 99.45% agreement with Jev** (target 98%), taking over most live traffic from about 5,000 messages on, and kept Jev's accuracy (78.5% vs Jev's 78.5% on the dataset's labels). A local answer takes ~15 ms on CPU (p50), about 20× faster than Jev; one CPU process answers ~130 messages/s, a GPU ~2,000/s.¹
 
 ## The contract
 

