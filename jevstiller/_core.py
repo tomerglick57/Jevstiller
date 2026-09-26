@@ -230,7 +230,7 @@ class Jevstiller:
         self._audit_new = 0                 # audit answers since the last drift check
         self._counted_at = -10**9           # store max id at the last readiness count
         self._pruned = False                # versions past keep_versions deleted on the first maintenance pass
-        self._rows_pruned_at = -10**9       # store max id at the last row prune
+        self._rows_unpruned: int | None = None   # rows recorded since the last row prune (None: not checked yet)
         self._prune_more = False            # the last row prune stopped at its limit: continue on the next pass
         self.labels = task.labels
         self._lidx = {c: i for i, c in enumerate(self.labels)}
@@ -480,6 +480,9 @@ class Jevstiller:
             if results[i] is not None:
                 results[i].latency_ms = dt
         self.store.insert([r for i, r in enumerate(recs) if i not in failed])
+        with self._state:
+            if self._rows_unpruned is not None:
+                self._rows_unpruned += n - len(failed)
         answered = [recs[i].teacher_model for i in to_teacher if i not in failed]
         if answered:
             self._observe_teacher(answered)
@@ -584,15 +587,15 @@ class Jevstiller:
         """Delete the rows nothing reads any more (`store.prune`). Training and calibration read at most the newest
         `max_train_samples` / `max_calib_samples` rows of a lineage, so older ones go. So do rows the student
         answered alone past `keep_local_rows`: they teach nothing. A shadow's rows stay until it is judged."""
-        latest = self.store.max_id()
-        if not self._prune_more and latest - self._rows_pruned_at < self.PRUNE_EVERY_ROWS:
-            return
-        self._rows_pruned_at = latest
-        keeps = (self.cfg.max_train_samples, self.cfg.max_calib_samples, self.cfg.keep_local_rows)
-        if not any(keeps) or latest <= min(k for k in keeps if k):   # never held more rows than any limit
-            return
-        with self._state:
+        with self._state:                                # most passes stop here, without touching the store
+            unpruned = self._rows_unpruned
+            if not self._prune_more and unpruned is not None and unpruned < self.PRUNE_EVERY_ROWS:
+                return
+            self._rows_unpruned = 0
             keep_after = self._shadow_started_id if self._shadow is not None else None
+        keeps = (self.cfg.max_train_samples, self.cfg.max_calib_samples, self.cfg.keep_local_rows)
+        if not any(keeps) or self.store.max_id() <= min(k for k in keeps if k):   # never held more than a limit
+            return
         try:
             n, self._prune_more = self.store.prune(self.cfg.max_train_samples, self.cfg.max_calib_samples,
                                                    self.cfg.keep_local_rows, keep_after_id=keep_after)
@@ -670,16 +673,19 @@ class Jevstiller:
 
     def _carry_state(self) -> dict:
         """In-memory progress worth keeping across an unload and reload of this task (TaskManager keeps it):
-        audit answers towards the next drift check, and the recent rate of teacher calls."""
+        audit answers towards the next drift check, the recent rate of teacher calls, and how far the pruning of old
+        versions and rows has got (so a reload doesn't redo it)."""
         with self._state:
-            return {"audit_new": self._audit_new, "teacher_rate": self._teacher_rate,
-                    "rows_pruned_at": self._rows_pruned_at, "prune_more": self._prune_more}
+            return {"audit_new": self._audit_new, "teacher_rate": self._teacher_rate, "pruned": self._pruned,
+                    "rows_unpruned": self._rows_unpruned, "prune_more": self._prune_more}
 
     def _restore_state(self, carry: dict) -> None:
         with self._state:
             self._audit_new += carry.get("audit_new", 0)
             self._teacher_rate = carry.get("teacher_rate", self._teacher_rate)
-            self._rows_pruned_at = carry.get("rows_pruned_at", self._rows_pruned_at)
+            self._pruned = self._pruned or carry.get("pruned", False)
+            if carry.get("rows_unpruned") is not None:
+                self._rows_unpruned = carry["rows_unpruned"] + (self._rows_unpruned or 0)
             self._prune_more = carry.get("prune_more", self._prune_more)
 
     def _training_priority(self) -> float:
