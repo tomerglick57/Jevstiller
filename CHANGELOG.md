@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **`rare_classes` defaults to `"defer"`.** A task whose teacher never uses one of its labels used to wait for that label forever before training its first student (the benchmark's CLINC150 run: Jev never answered `reminder_update` in 12,000 messages). Now the loop trains once the other thresholds are met and keeps forwarding any request the student would label with a class that is still below `min_samples_per_class`. Set `rare_classes = "wait"` for the old behaviour.
 - **Reproduce the headline result without an API key.** `bash experiments/reproduce.sh` replays Banking77 against Jev's recorded answers, which now ship with the repository (`experiments/cache/banking77.jsonl.gz`), and prints the numbers next to the published ones. `experiments/run.py` has a `--teacher cached` mode for it, and `experiments/record_answers.py` records a complete cache for a dataset.
 - **Replays are reproducible.** The per-request train/calibration split is now seeded from `Config.seed` and the task version instead of the store's file path, so the same replay gives the same result on any machine. Production behaviour is unchanged: the split is still a uniform draw per request.
 - `Status.report(events=False)` leaves out the loop events; floats in event lines are rounded to four decimals.

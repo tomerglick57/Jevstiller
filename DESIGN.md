@@ -421,7 +421,7 @@ The policy is fitted at `(1 − fit_headroom) · β` (default 85% of the budget)
 
 The policy is versioned together with the model it was fitted for. A model without a policy cannot be routed to.
 
-**Rare classes.** With `rare_classes="defer"`, classes with fewer than `min_samples_per_class` training rows become the policy's `deferred_labels`. The student never answers a request it would label with one of them (`routing_reason="rare_class"`), and calibration only counts rows the student may answer, so the bound stays honest. The default, `wait`, holds back the first student until every class has enough samples, and `status()` names the classes it is waiting for.
+**Rare classes.** With `rare_classes="defer"`, classes with fewer than `min_samples_per_class` training rows become the policy's `deferred_labels`. The student never answers a request it would label with one of them (`routing_reason="rare_class"`), and calibration only counts rows the student may answer, so the bound stays honest. This is the default since 0.3.4: the benchmark's CLINC150 run showed Jev never using one of a task's 151 labels, which under `wait` holds back the first student for good. `wait` is still available; with it, `status()` names the classes it is waiting for.
 
 Roadmap: per-class thresholds, and a *class-weighted* budget ("a wrong `cancellation` costs five times a wrong `other`").
 

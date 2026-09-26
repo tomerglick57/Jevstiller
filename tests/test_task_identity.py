@@ -188,7 +188,7 @@ PRIORS = [1, 1, 1, 1, 0.004]                             # "other" is rare
 
 
 def test_readiness_names_the_blocking_class(tmp_path, task, world, teacher):
-    js = Jevstiller(task, teacher, tmp_path, config=_cfg())
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(rare_classes="wait"))
     for _ in range(15):
         js.classify_batch([t for t, _ in world.sample(200, priors=PRIORS)])
     st = js.status()

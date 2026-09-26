@@ -128,10 +128,11 @@ class Config:
                                         #   model passes shadow; audit: keep serving, raise the audit rate,
                                         #   retrain, and let the drift monitor decide
     teacher_change_confirm: int = 20    # consecutive answers from a new model before switching lineage
-    rare_classes: str = "wait"          # a class below min_samples_per_class:
-                                        # wait: no first student until every class has enough samples
+    rare_classes: str = "defer"         # a class below min_samples_per_class:
                                         # defer: train without waiting; a prediction of a rare class goes
                                         #   to the teacher until the class has enough samples
+                                        # wait: no first student until every class has enough samples
+                                        #   (a label the teacher never uses then blocks the task for good)
     store_text: bool = True             # False: keep only the hash + embedding (no raw text in the store)
     seed: int = 0
     student_epochs: int = 2000          # upper bound; early stopping on a validation slice decides

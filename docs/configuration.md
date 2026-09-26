@@ -44,7 +44,7 @@ A task's target is `Task.target_agreement` (default 0.98). The disagreement budg
 |---|---|---|
 | `min_train_samples` | `1000` | Teacher-labelled training rows before the first student. |
 | `min_samples_per_class` | `50` | Per class, before the first student (see `rare_classes`). |
-| `rare_classes` | `"wait"` | `wait`: no first student until every class has `min_samples_per_class`. `defer`: train anyway; the policy never lets the student answer a rare class (`routing_reason="rare_class"`). |
+| `rare_classes` | `"defer"` | `defer`: train as soon as the other thresholds are met; the policy never lets the student answer a class that is still below `min_samples_per_class` (`routing_reason="rare_class"`), so those requests keep going to the teacher. `wait`: no first student until every class has enough samples; a label the teacher never uses then blocks the task for good (CLINC150 in the benchmark). |
 | `min_new_samples` | `2000` | New rows since the last training before a retrain. |
 | `shadow_min_samples` | `1000` | Requests a candidate runs alongside production before it's judged. |
 | `training` | `"background"` | `background`: a worker thread per task runs maintenance off the request path. `inline`: maintenance runs inside `classify_batch` (deterministic; for replays and tests). `manual`: only when you call `maintain()` / `train_now()`. |
