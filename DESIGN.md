@@ -292,13 +292,20 @@ A `SyntheticTeacher` (deterministic rules + injectable noise + fake distribution
 
 ### 7.2 Sample store
 
-An append-only log of **every** request, whether served by student or teacher. Backend: one SQLite file per task (portable, zero-ops; tasks never share a writer; deleting a task is deleting its directory). The interface is the `Store` protocol; *(roadmap)* a Postgres backend for multiple replicas.
+A log of **every** request, whether served by student or teacher, of which it keeps what the loop can still read (retention, below). Backend: one SQLite file per task (portable, zero-ops; tasks never share a writer; deleting a task is deleting its directory). The interface is the `Store` protocol; *(roadmap)* a Postgres backend for multiple replicas.
 
 Implementation notes:
 
 - **Write-behind.** `insert` queues records and returns. One writer thread per store commits them in batches, so no request waits on the disk; this took throughput from 19 to ~500 req/s with a 50 ms teacher. Every read through the store waits for earlier inserts first, and a crash loses at most the few milliseconds still queued.
 - **Connections.** One SQLite connection per thread (WAL), and writers queue on an in-process lock instead of SQLite's sleeping busy handler.
 - **Schema version.** `PRAGMA user_version` records it, so setup is skipped when current (reopening costs ~0.4 ms), and older stores are migrated in place (e.g. the `state_type` column).
+- **Retention.** The 24-hour soak's stores kept every request and grew to 31.7 GB in a day. Now each maintenance pass deletes the rows nothing reads any more (`prune`), every 5,000 new rows:
+  - **Rows with a teacher answer:** per task version and teacher lineage, all but the newest `max_train_samples` training rows and the newest `max_calib_samples` calibration rows. Training and calibration read at most exactly those.
+  - **Rows the student answered alone:** all but the newest `keep_local_rows` (10,000). They teach nothing.
+  - **What stays anyway:** a shadow's rows, until it's judged. The audit window (the newest 500 audit rows of production) is far more recent than any cut in practice. If it ever reached past one, the audit would count fewer rows and give a wider interval, never a biased one: rows go by id within a split, and splits are independent draws.
+  - **Totals:** deleted rows are added to `deleted_rows`, so the status totals (requests, who answered, teacher calls and cost) still count them.
+  - **Cost:** transactions of 5,000 rows (~0.6 s), at most 20,000 rows per pass, so a large backlog goes over many passes without holding up the writer.
+  - **Disk space:** a new store uses `auto_vacuum=INCREMENTAL` and hands the space back after each prune. A store from an earlier release is rebuilt once (`VACUUM`), after the prune that clears its backlog, if more than half of it is free then.
 
 Per record:
 

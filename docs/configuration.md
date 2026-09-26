@@ -63,8 +63,9 @@ A task's target is `Task.target_agreement` (default 0.98). The disagreement budg
 | `ood_k` | `10` | kNN size for the out-of-distribution score. |
 | `ood_quantile` | `0.99` | OOD threshold = this quantile of the training reference's leave-one-out scores (never the calibration rows, which only test the policy). |
 | `ood_max_ref` | `5000` | Reference embeddings kept per version, sampled stratified by class. Memory and per-request cost scale with it. |
-| `max_train_samples` | `50000` | A fit reads at most this many of the most recent training rows (`0`: all). Bounds training time and the training worker's memory as a task's history grows. |
+| `max_train_samples` | `50000` | A fit reads at most this many of the most recent training rows (`0`: all). Bounds training time and the training worker's memory as a task's history grows. The store keeps no more than this many training rows with a teacher answer per teacher lineage; older ones are deleted. |
 | `max_calib_samples` | `20000` | The same for calibration rows. At 20,000 rows the Clopper–Pearson bound is already within ~0.2 points of the observed rate. |
+| `keep_local_rows` | `10000` | Rows the student answered alone (no teacher answer) kept in the store, newest first (`0`: all). Older ones are deleted: they teach nothing, and the status totals still count them. |
 
 ### Drift and teacher changes
 

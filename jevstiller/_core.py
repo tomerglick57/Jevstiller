@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import shutil
+import sqlite3
 import threading
 import time
 import weakref
@@ -229,6 +230,8 @@ class Jevstiller:
         self._audit_new = 0                 # audit answers since the last drift check
         self._counted_at = -10**9           # store max id at the last readiness count
         self._pruned = False                # versions past keep_versions deleted on the first maintenance pass
+        self._rows_pruned_at = -10**9       # store max id at the last row prune
+        self._prune_more = False            # the last row prune stopped at its limit: continue on the next pass
         self.labels = task.labels
         self._lidx = {c: i for i, c in enumerate(self.labels)}
         self._prod: Bundle | None = self._load(self.registry.production) if self.registry.production else None
@@ -573,6 +576,32 @@ class Jevstiller:
                         self._audit_new = 0
                 if due:
                     self._check_drift()
+            self._prune_rows()
+
+    PRUNE_EVERY_ROWS = 5_000        # delete old rows every this many new rows (every pass while a backlog remains)
+
+    def _prune_rows(self) -> None:
+        """Delete the rows nothing reads any more (`store.prune`). Training and calibration read at most the newest
+        `max_train_samples` / `max_calib_samples` rows of a lineage, so older ones go. So do rows the student
+        answered alone past `keep_local_rows`: they teach nothing. A shadow's rows stay until it is judged."""
+        latest = self.store.max_id()
+        if not self._prune_more and latest - self._rows_pruned_at < self.PRUNE_EVERY_ROWS:
+            return
+        self._rows_pruned_at = latest
+        keeps = (self.cfg.max_train_samples, self.cfg.max_calib_samples, self.cfg.keep_local_rows)
+        if not any(keeps) or latest <= min(k for k in keeps if k):   # never held more rows than any limit
+            return
+        with self._state:
+            keep_after = self._shadow_started_id if self._shadow is not None else None
+        try:
+            n, self._prune_more = self.store.prune(self.cfg.max_train_samples, self.cfg.max_calib_samples,
+                                                   self.cfg.keep_local_rows, keep_after_id=keep_after)
+        except sqlite3.Error:
+            self._prune_more = False
+            log.exception("task %s: deleting old rows failed", self.task.name)
+            return
+        if n:
+            log.debug("task %s: deleted %d old rows%s", self.task.name, n, " (more to go)" if self._prune_more else "")
 
     def _readiness(self, c: dict) -> dict:
         """What the first student is waiting for, from `store.counts` of the current lineage."""
@@ -643,12 +672,15 @@ class Jevstiller:
         """In-memory progress worth keeping across an unload and reload of this task (TaskManager keeps it):
         audit answers towards the next drift check, and the recent rate of teacher calls."""
         with self._state:
-            return {"audit_new": self._audit_new, "teacher_rate": self._teacher_rate}
+            return {"audit_new": self._audit_new, "teacher_rate": self._teacher_rate,
+                    "rows_pruned_at": self._rows_pruned_at, "prune_more": self._prune_more}
 
     def _restore_state(self, carry: dict) -> None:
         with self._state:
             self._audit_new += carry.get("audit_new", 0)
             self._teacher_rate = carry.get("teacher_rate", self._teacher_rate)
+            self._rows_pruned_at = carry.get("rows_pruned_at", self._rows_pruned_at)
+            self._prune_more = carry.get("prune_more", self._prune_more)
 
     def _training_priority(self) -> float:
         """How much training this task could save: its recent rate of teacher calls (decayed, per minute)."""

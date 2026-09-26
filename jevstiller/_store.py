@@ -94,9 +94,14 @@ CREATE INDEX IF NOT EXISTS ix_samples_tv_split ON samples(task_version, split, c
 CREATE INDEX IF NOT EXISTS ix_samples_shadow ON samples(shadow_version);
 CREATE INDEX IF NOT EXISTS ix_samples_ts ON samples(ts);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts REAL, kind TEXT, detail TEXT);
+CREATE TABLE IF NOT EXISTS deleted_rows (
+  task_version TEXT NOT NULL, served_by TEXT NOT NULL, channel TEXT NOT NULL, split TEXT NOT NULL,
+  n INTEGER NOT NULL, teacher_calls INTEGER NOT NULL, teacher_cost_usd REAL NOT NULL,
+  PRIMARY KEY (task_version, served_by, channel, split)
+);
 """
 
-SCHEMA_VERSION = 1                     # PRAGMA user_version; 0 = a 0.1.0 store (or a new file)
+SCHEMA_VERSION = 2                     # PRAGMA user_version; 0 = a 0.1.0 store (or a new file); 2 adds deleted_rows
 
 # columns added after 0.1.0: (name, type). Existing stores get them via ALTER TABLE on open.
 _ADDED_COLUMNS = (("state_type", "TEXT"),)
@@ -133,6 +138,8 @@ class Store(Protocol):
     def redact_text(self, older_than_ts: float) -> int: ...
     def latest_teacher_model(self, task_version: str) -> str | None: ...
     def max_id(self) -> int: ...
+    def prune(self, keep_train: int, keep_calib: int, keep_unanswered: int, keep_after_id: int | None = None,
+              max_rows: int = 20_000) -> tuple[int, bool]: ...
     def answered(self, task_version: str, teacher_model: str, after_id: int, upto_id: int | None = None) -> int: ...
     def events(self, limit: int = 20) -> list[dict]: ...
     def last_event(self, kinds: Sequence[str]) -> dict | None: ...
@@ -178,6 +185,8 @@ class SampleStore:
         if not read_only:
             conn = self._conn()
             if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:   # new or older store
+                if not conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0]:
+                    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")  # a new file: `prune` can hand space back
                 conn.execute("PRAGMA journal_mode=WAL")                            # persists in the file
                 conn.executescript(_SCHEMA)
                 have = {r[1] for r in conn.execute("PRAGMA table_info(samples)")}
@@ -372,7 +381,8 @@ class SampleStore:
                 np.array([r[3] for r in rows], dtype=object))
 
     def counts(self, task_version: str, teacher_model: str | None = None, since_id: int = 0) -> dict:
-        """Totals over every teacher; the labelled counts (what training can use) over one lineage if given."""
+        """Totals over every teacher, deleted rows included (`prune`); the labelled counts (what training can use)
+        over one lineage if given, of the rows still stored."""
         lin, lin_args = _lineage(teacher_model, since_id)
         c = {}
         c["total"] = self.db.execute("SELECT COUNT(*) FROM samples WHERE task_version=?", (task_version,)).fetchone()[0]
@@ -391,7 +401,88 @@ class SampleStore:
         c["teacher_calls"] = self.db.execute(
             "SELECT COUNT(*) FROM samples WHERE task_version=? AND teacher_label IS NOT NULL",
             (task_version,)).fetchone()[0]
+        for sb, ch, sp, n, calls, cost in self.db.execute(
+                "SELECT served_by, channel, split, n, teacher_calls, teacher_cost_usd FROM deleted_rows "
+                "WHERE task_version=?", (task_version,)).fetchall():
+            c["total"] += n
+            for k, v in (("served_by", sb), ("channel", ch), ("split", sp)):
+                v = v or None                                # stored as '' for NULL (a primary key column)
+                c[k][v] = c[k].get(v, 0) + n
+            c["teacher_calls"] += calls
+            c["teacher_cost_usd"] += cost
         return c
+
+    def prune(self, keep_train: int, keep_calib: int, keep_unanswered: int, keep_after_id: int | None = None,
+              max_rows: int = 20_000, batch: int = 5_000) -> tuple[int, bool]:
+        """Delete the rows no reader can use any more, oldest first. For each task version and teacher lineage,
+        keep the newest `keep_train` training rows and the newest `keep_calib` calibration rows. Of the rows
+        without a teacher answer, keep the newest `keep_unanswered`. 0 keeps every row of that kind. Rows after
+        `keep_after_id` are all kept (e.g. those of a shadow not judged yet).
+
+        Training and calibration take at most the newest `max_train_samples` / `max_calib_samples` rows of one
+        lineage and split, so with those as `keep_train` / `keep_calib` nothing they read is deleted (the audit
+        window and a shadow's rows: DESIGN §7.2). Deleted rows still count in `counts()` (table `deleted_rows`);
+        secure_delete zeroes their text. Deletes at most `max_rows`,
+        in transactions of `batch`, so the writer is never held up for long and a backlog goes over several calls.
+        Returns (rows deleted, whether more may remain)."""
+        if self.read_only:
+            raise sqlite3.ProgrammingError("the sample store is read-only")
+        self.flush()
+        conn = self._conn()
+        groups = conn.execute("SELECT DISTINCT task_version, teacher_model, split FROM samples").fetchall()
+        where = "task_version=? AND teacher_model IS ? AND split=?"
+        deleted = 0
+        for tv, tm, split in groups:
+            keep = keep_unanswered if tm is None else keep_calib if split == "calib" else keep_train
+            row = conn.execute(f"SELECT id FROM samples WHERE {where} ORDER BY id DESC LIMIT 1 OFFSET ?",
+                               (tv, tm, split, keep - 1)).fetchone() if keep else None
+            if row is None:
+                continue
+            oldest_kept = row[0] if keep_after_id is None else min(row[0], keep_after_id + 1)
+            # a teacher answer always comes with its model (Jevstiller.complete); a row inserted without one is kept
+            only = " AND teacher_label IS NULL" if tm is None else ""
+            while True:
+                n = min(batch, max_rows - deleted)
+                if n <= 0:
+                    self._release_space(conn, finished=False)
+                    return deleted, True
+                with self._write_lock, conn:
+                    ids = conn.execute(f"SELECT id FROM samples WHERE {where} AND id<?{only} ORDER BY id LIMIT ?",
+                                       (tv, tm, split, oldest_kept, n)).fetchall()
+                    if not ids:
+                        break
+                    rng = (tv, tm, split, ids[0][0], ids[-1][0])
+                    conn.execute(
+                        "INSERT INTO deleted_rows SELECT task_version, COALESCE(served_by, ''), COALESCE(channel, ''), "
+                        "COALESCE(split, ''), COUNT(*), COUNT(teacher_label), COALESCE(SUM(teacher_cost_usd), 0) "
+                        f"FROM samples WHERE {where} AND id BETWEEN ? AND ?{only} GROUP BY 1, 2, 3, 4 "
+                        "ON CONFLICT DO UPDATE SET n = n + excluded.n, teacher_calls = teacher_calls + "
+                        "excluded.teacher_calls, teacher_cost_usd = teacher_cost_usd + excluded.teacher_cost_usd", rng)
+                    conn.execute(f"DELETE FROM samples WHERE {where} AND id BETWEEN ? AND ?{only}", rng)
+                deleted += len(ids)
+                if len(ids) < n:
+                    break
+        if deleted:
+            self._release_space(conn, finished=True)
+        return deleted, False
+
+    def _release_space(self, conn: sqlite3.Connection, finished: bool) -> None:
+        """Hand the pages of deleted rows back to the file system. A store created with auto_vacuum does that
+        after every prune. An older one (0.3.3 and before) is rebuilt once, after the prune that clears its
+        backlog, if more than half of the file is then free: VACUUM copies only the rows left and turns
+        auto_vacuum on (the 24-hour soak's biggest store: 8.6 GB down to 294 MB in 8–15 s)."""
+        with self._write_lock:
+            mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+            if mode == 2:                                                 # INCREMENTAL
+                conn.execute("PRAGMA incremental_vacuum").fetchall()     # stepped to the end
+            elif mode == 0 and finished:
+                free = conn.execute("PRAGMA freelist_count").fetchone()[0]
+                if free > conn.execute("PRAGMA page_count").fetchone()[0] // 2:
+                    t0 = time.monotonic()
+                    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                    conn.execute("VACUUM")
+                    log.info("sample store %s: rebuilt without %d free pages in %.1f s", self.path, free,
+                             time.monotonic() - t0)
 
     def redact_text(self, older_than_ts: float) -> int:
         """Blank the stored text of rows older than `older_than_ts` (hash, embedding and answers stay, so

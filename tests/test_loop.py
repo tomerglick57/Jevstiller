@@ -224,3 +224,21 @@ def test_old_versions_are_deleted(tmp_path, task, world, teacher):
     js.maintain()                                        # the first pass deletes what a higher limit kept
     assert sorted(p.name for p in vdir.iterdir() if p.is_dir()) == ["student-v3", "student-v4"]
     js.close()
+
+
+def test_the_store_keeps_only_what_the_loop_reads(tmp_path, task, world, teacher):
+    """The loop learns, promotes and audits as before while old rows are deleted, and the status totals still count
+    every request."""
+    js = Jevstiller(task, teacher, tmp_path, config=_cfg(max_train_samples=500, max_calib_samples=200,
+                                                          keep_local_rows=300))
+    js.PRUNE_EVERY_ROWS = 500
+    for _ in range(40):
+        js.classify_batch([t for t, _ in world.sample(200)])
+    st = js.status()
+    assert st.production is not None and st.requests == 8000 and st.served_by_student > 1000, st.report()
+    assert st.teacher_calls == st.served_by_teacher and st.audit_n > 0
+    per = dict(((tm is None, sp), n) for tm, sp, n in js.store.db.execute(
+        "SELECT teacher_model, split, COUNT(*) FROM samples GROUP BY 1, 2").fetchall())
+    assert per[(True, "train")] <= 300 + 500 + 200 and per[(False, "train")] <= 500 + 500 and per[(False, "calib")] <= 200 + 500
+    assert sum(per.values()) < 8000 / 2
+    js.close()

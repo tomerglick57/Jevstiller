@@ -16,7 +16,7 @@ Jevstiller is a self-hosted proxy on a company network. Services call it with th
 
 Per task, under `<data_dir>/tasks/<key>/` (directories 0700, files 0600 when run with `jevstiller serve`):
 
-- `samples.sqlite`: one row per request. It holds the state's text or canonical JSON (unless `store_text = false`), a 64-bit HMAC of it (keyed with the deployment salt), the embedding, Jev's answer and distribution, the student's answer, routing metadata, and the upstream request id. There's no API key and no caller identity beyond the tenant.
+- `samples.sqlite`: one row per request, kept while the loop can use it (see Controls). It holds the state's text or canonical JSON (unless `store_text = false`), a 64-bit HMAC of it (keyed with the deployment salt), the embedding, Jev's answer and distribution, the student's answer, routing metadata, and the upstream request id. There's no API key and no caller identity beyond the tenant.
 - `versions/`: trained models (numpy arrays, JSON policies). They contain up to 5,000 training embeddings per version (the OOD reference).
 - `task.json`: the question (instructions and criteria), tenant, requested model, and timestamps.
 
@@ -25,6 +25,7 @@ Plus `<data_dir>/key-salt` (32 random bytes, 0600). It is used to hash API keys 
 Controls:
 - `store_text = false`: keep no request text at all.
 - `text_retention_days`: blank text older than N days. The old text is securely deleted: `secure_delete` plus a WAL truncate.
+- Rows the loop no longer reads are deleted: beyond the newest `max_train_samples` (50,000) training and `max_calib_samples` (20,000) calibration rows with a Jev answer, per lineage, and beyond the newest `keep_local_rows` (10,000) rows the student answered alone. They are securely deleted too, and only their counts are kept.
 - `jevstiller admin delete <key>` / `delete-tenant <tenant>`: remove a task or a tenant's tasks completely.
 - Back up the data directory as you would a database of your traffic (`jevstiller backup`). Backups and restored data directories get the same modes (files 0600, directories 0700). Text retention doesn't reach backups: rotate them within the retention period.
 
