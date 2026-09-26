@@ -45,12 +45,25 @@ One replay per task (`experiments/bench.sh`): the dataset's labels are hidden, 2
 | TweetEval offensive (2) | hard labels, bound, OOD gate | 28.0% | 1.09% | 1.65% | 0/20 | 73.9% |
 | TweetEval offensive (2) | soft labels, point estimate | 36.8% | 1.81% | 2.70% | 6/20 | 74.0% |
 | TweetEval offensive (2) | hard labels, point estimate (stuntd's recipe) | 35.7% | 1.83% | 2.55% | 7/20 | 74.0% |
+
+### What the agreement target buys
+
+`experiments/target_curve.py`: each replay's production student, its calibration rows, and the loop's own rule (the bound, with headroom, on the fixed grid) refitted at other targets, then measured on the 2,000 held-out rows. Each cell is held-out coverage at the agreement with Jev actually reached; the last column is the system's accuracy against the dataset's labels across all targets, next to Jev's. `jevstiller admin target <task> 0.95` moves a running task along this curve. The refit uses every calibration row of the version's lineage, where the loop caps them at `max_calib_samples`, so a long stream (TweetEval sentiment) can differ by a few points from the replay table.
+
+| Task | target 99% | target 98% | target 97% | target 95% | target 93% | target 90% | Accuracy (Jev / system) |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Banking77 (77 intents) | 54% @ 100.0% | 72% @ 99.5% | 77% @ 99.0% | 84% @ 97.5% | 89% @ 96.0% | 93% @ 94.5% | 78.5% / 78.5%–78.8% |
+| CLINC150 (150 intents + other, 12k sample) | 50% @ 99.9% | 69% @ 99.7% | 72% @ 99.4% | 82% @ 98.4% | 87% @ 97.5% | 94% @ 95.1% | 90.1% / 89.8%–90.3% |
+| AG News (4 sections, 20k sample) | 66% @ 100.0% | 80% @ 99.4% | 87% @ 98.7% | 93% @ 97.5% | 94% @ 97.2% | 97% @ 95.9% | 88.7% / 87.8%–88.7% |
+| TweetEval sentiment (3) | 8% @ 99.8% | 18% @ 98.9% | 25% @ 98.3% | 32% @ 97.8% | 40% @ 96.2% | 48% @ 94.6% | 64.2% / 64.3%–65.0% |
+| TweetEval offensive (2) | 8% @ 99.8% | 24% @ 98.8% | 32% @ 98.0% | 44% @ 96.2% | 49% @ 95.2% | 56% @ 93.5% | 73.8% / 73.9%–74.5% |
 <!-- bench:end -->
 
 What the tables say, read together:
 
 - **The bound holds; the point estimate does not.** Over 100 splits across five tasks, Jevstiller's rule exceeded the 2% budget once (TweetEval sentiment, 2.10%); the point-estimate rule, which is what most local-model recipes use, exceeded it on 6 to 12 of 20 splits per task, by up to a full point. The price is four to eight points of coverage. The soft labels buy two to three points of coverage on the many-class tasks and nothing on the easy ones.
 - **Coverage tracks Jev's own consistency, not the task's difficulty.** On the two tweet tasks Jev agrees with the dataset's labels only 64% and 74% of the time, so its answers near the class boundaries are noisy, and a student cannot reproduce noise within a 2% budget: it answers the confident quarter and forwards the rest. The system's accuracy still matches Jev's. The budget is a promise about agreement with Jev, and these tasks show what that costs when Jev itself is unsure.
+- **The target is a dial, and accuracy does not move with it.** Going from 98% to 95% roughly doubles what the tweet tasks answer locally (18% → 32%, 24% → 44%) and lifts the intent tasks from ~70% to 82–84%; at 90% the easy tasks answer nearly everything. Across the whole range the system's accuracy against the datasets' labels stays within a point of Jev's, because where the student differs from Jev it is about as often right as Jev was. That is a property of these five tasks, not a law: on a task where Jev is much better than the student at the margin, accuracy would fall with the target.
 - **A label Jev never uses blocks the default configuration.** CLINC150 has 151 labels and Jev never answered `reminder_update` in 12,000 messages, so `rare_classes = "wait"` waited for it for the whole stream. With `defer` the loop trains on the classes it has and forwards the rest. Whether the default should change is open.
 
 ## Measurements behind the design decisions

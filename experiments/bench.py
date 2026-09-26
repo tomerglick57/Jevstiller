@@ -87,7 +87,36 @@ def build(tag: str, encoder: str) -> str:
           "|---|---|---:|---:|---:|---:|---:|"]
     rows = [r for d in DATASETS for r in baseline_rows(d)]
     L += rows or ["| (not run yet) | | | | | | |"]
+    L += curve_table()
     return "\n".join(L) + "\n"
+
+
+def curve_table() -> list[str]:
+    p = ROOT / "experiments" / "results" / "target-curve.json"
+    if not p.exists():
+        return []
+    c = json.loads(p.read_text())
+    if not c:
+        return []
+    targets = [pt["target"] for pt in next(iter(c.values()))["points"]]
+    L = ["", "### What the agreement target buys", "",
+         "`experiments/target_curve.py`: each replay's production student, its calibration rows, and the loop's own "
+         "rule (the bound, with headroom, on the fixed grid) refitted at other targets, then measured on the 2,000 "
+         "held-out rows. Each cell is held-out coverage at the agreement with Jev actually reached; the last "
+         "column is the system's accuracy against the dataset's labels across all targets, next to Jev's. "
+         "`jevstiller admin target <task> 0.95` moves a running task along this curve. The refit uses every calibration "
+         "row of the version's lineage, where the loop caps them at `max_calib_samples`, so a long stream (TweetEval "
+         "sentiment) can differ by a few points from the replay table.", "",
+         "| Task | " + " | ".join(f"target {t:.0%}" for t in targets) + " | Accuracy (Jev / system) |",
+         "|---|" + "---:|" * len(targets) + "---|"]
+    for d, r in c.items():
+        cells = []
+        for pt in r["points"]:
+            cells.append("–" if pt["threshold"] is None else f"{pt['coverage']:.0%} @ {pt['agreement']:.1%}")
+        accs = [pt["accuracy"] for pt in r["points"] if pt["threshold"] is not None]
+        acc = f"{r['jev_accuracy']:.1%} / {min(accs):.1%}–{max(accs):.1%}" if accs else f"{r['jev_accuracy']:.1%} / –"
+        L.append(f"| {NAMES.get(d, d)} | " + " | ".join(cells) + f" | {acc} |")
+    return L
 
 
 def main() -> None:

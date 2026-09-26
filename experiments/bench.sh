@@ -32,4 +32,5 @@ for t in $TASKS; do
     echo "== baselines: $t"
     "$PY" experiments/baselines.py --dataset "$t"
 done
+"$PY" experiments/target_curve.py
 "$PY" experiments/bench.py --write
