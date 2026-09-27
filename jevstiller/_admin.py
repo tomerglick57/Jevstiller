@@ -6,6 +6,7 @@ call needs `Authorization: Bearer <admin token>`.
     GET    /jevstiller/v1/tasks/{key}/versions       its student versions
     POST   /jevstiller/v1/tasks/{key}/mode           {"mode": "auto" | "teacher_only" | "cascade"}   (persisted)
     POST   /jevstiller/v1/tasks/{key}/target         {"target_agreement": 0.99}                      (persisted)
+    POST   /jevstiller/v1/tasks/{key}/floor          {"confidence_floor": 0.6 | null}                (persisted)
     POST   /jevstiller/v1/tasks/{key}/train          train a candidate now (waits for it)
     POST   /jevstiller/v1/tasks/{key}/promote        {"version": "student:v3"}
     POST   /jevstiller/v1/tasks/{key}/rollback
@@ -33,6 +34,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from ._manager import TaskManager
+from ._task import check_floor
 
 PREFIX = "/jevstiller/v1"
 PAGE_CACHE_S = 5.0                                      # the status page is redrawn at most this often
@@ -113,8 +115,9 @@ class Admin:
         loaded = set(self.manager.loaded())
         tenant = request.query_params.get("tenant")
         return _ok([{"key": i.key, "tenant": i.tenant, "model": i.model, "classes": len(i.classes),
-                     "target_agreement": i.target_agreement, "mode": i.mode, "created": i.created,
-                     "last_seen": i.last_seen, "loaded": i.key in loaded} for i in self.manager.tasks(tenant)])
+                     "target_agreement": i.target_agreement, "confidence_floor": i.confidence_floor, "mode": i.mode,
+                     "created": i.created, "last_seen": i.last_seen, "loaded": i.key in loaded}
+                    for i in self.manager.tasks(tenant)])
 
     async def task(self, request: Request) -> Response:
         if (denied := self.authorized(request)) is not None:
@@ -160,6 +163,21 @@ class Admin:
         except ValueError as e:
             return _err(422, str(e))
         return _ok({"key": key, "target_agreement": float(value)})
+
+    async def floor(self, request: Request) -> Response:
+        if (denied := self.authorized(request)) is not None:
+            return denied
+        if (key := self._key(request)) is None:
+            return _err(404, "unknown task")
+        body = await self._body(request)
+        if "confidence_floor" not in body:              # null removes the floor, so a missing value must not
+            return _err(422, "confidence_floor is required: a number in [0, 1], or null for none")
+        try:
+            floor = check_floor(body["confidence_floor"])
+            await anyio.to_thread.run_sync(self.manager.set_confidence_floor, key, floor)
+        except ValueError as e:
+            return _err(422, str(e))
+        return _ok({"key": key, "confidence_floor": floor})
 
     async def train(self, request: Request) -> Response:
         if (denied := self.authorized(request)) is not None:
@@ -254,6 +272,7 @@ class Admin:
             Route(f"{p}/tasks/{{key}}/versions", self.versions, methods=["GET"]),
             Route(f"{p}/tasks/{{key}}/mode", self.mode, methods=["POST"]),
             Route(f"{p}/tasks/{{key}}/target", self.target, methods=["POST"]),
+            Route(f"{p}/tasks/{{key}}/floor", self.floor, methods=["POST"]),
             Route(f"{p}/tasks/{{key}}/train", self.train, methods=["POST"]),
             Route(f"{p}/tasks/{{key}}/promote", self.promote, methods=["POST"]),
             Route(f"{p}/tasks/{{key}}/rollback", self.rollback, methods=["POST"]),

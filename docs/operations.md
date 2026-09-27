@@ -29,11 +29,12 @@ Details:
 Enable it with `admin_token_file` (or `JEVSTILLER_ADMIN_TOKEN`). The CLI reads the token from `--token-file`, `--token` or `JEVSTILLER_ADMIN_TOKEN`, and the URL from `--url` or `JEVSTILLER_ADMIN_URL`. Without them it uses the server's own settings (the same config file and `JEVSTILLER_*` variables), so next to the server no flags are needed: `docker exec jevstiller jevstiller admin tasks`.
 
 ```bash
-jevstiller admin tasks                       # every task: key, tenant, model, classes, target, mode, last seen
+jevstiller admin tasks                       # every task: key, tenant, model, classes, target, floor, mode, last seen
 jevstiller admin tasks <tenant>              # one tenant's tasks
 jevstiller admin status <key>                # the status report (below); --json for the raw data
 jevstiller admin versions <key>              # student versions and their states
 jevstiller admin target <key> 0.99           # change the target agreement (persisted)
+jevstiller admin floor <key> 0.6             # set the confidence floor (persisted; "none" removes it): retrains for it
 jevstiller admin mode <key> teacher_only     # pin a mode: auto | teacher_only | cascade (persisted); "mode <key>" with no value unpins
 jevstiller admin train <key>                 # train a candidate now (waits)
 jevstiller admin promote <key> student:v3    # force a version into production

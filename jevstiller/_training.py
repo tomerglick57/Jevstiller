@@ -26,7 +26,8 @@ from ._calibrate import RoutingPolicy, fit_policy, threshold_grid
 from ._ood import KnnOOD
 from ._student import LinearStudent
 
-FIT_PARAMS = ("budget", "delta", "ood_quantile", "ood_k", "epochs", "l2", "patience", "seed", "threads")
+FIT_PARAMS = ("budget", "delta", "ood_quantile", "ood_k", "epochs", "l2", "patience", "seed", "threads",
+              "confidence_floor")
 
 
 @dataclass
@@ -43,15 +44,20 @@ class Candidate:
 def fit_candidate(X: np.ndarray, Y: np.ndarray, w: np.ndarray | None, Xc: np.ndarray, yc: np.ndarray,
                   *, budget: float, delta: float, ood_quantile: float, ood_k: int, epochs: int, l2: float,
                   patience: int, seed: int, threads: int = 0, labels: list[str] | None = None,
-                  deferred_labels: list[str] = (), ood_max_ref: int = 5_000) -> Candidate:
+                  deferred_labels: list[str] = (), ood_max_ref: int = 5_000, yc_conf: np.ndarray | None = None,
+                  confidence_floor: float | None = None) -> Candidate:
     """X, Y, w: training embeddings, teacher distributions, importance weights (None = unweighted).
     Xc, yc: IID calibration embeddings and teacher argmax indices. `budget` is the disagreement budget the
     policy is fitted at (already reduced by any headroom). `threads`: BLAS threads for the fit (0 = no cap).
     The cap is process-wide while the fit runs, so in thread mode serving shares it; serving's matrices are
     small enough not to notice. `deferred_labels` (names from `labels`): the policy never lets the student
-    answer when it predicts one of them."""
+    answer when it predicts one of them. `confidence_floor` (Task.confidence_floor) with `yc_conf`, the
+    teacher's confidence on each calibration row: a row the teacher answered with less confidence than the
+    floor counts as a disagreement wherever the student would answer it."""
+    if confidence_floor is not None and (yc_conf is None or len(yc_conf) != len(yc)):
+        raise ValueError("confidence_floor needs the teacher's confidence for every calibration row (yc_conf)")
     args = (X, Y, w, Xc, yc, budget, delta, ood_quantile, ood_k, epochs, l2, patience, seed, labels,
-            list(deferred_labels), ood_max_ref)
+            list(deferred_labels), ood_max_ref, yc_conf, confidence_floor)
     if threads > 0:
         with threadpool_limits(limits=threads, user_api="blas"):
             return _fit(*args)
@@ -59,7 +65,7 @@ def fit_candidate(X: np.ndarray, Y: np.ndarray, w: np.ndarray | None, Xc: np.nda
 
 
 def _fit(X, Y, w, Xc, yc, budget, delta, ood_quantile, ood_k, epochs, l2, patience, seed, labels,
-         deferred_labels, ood_max_ref) -> Candidate:
+         deferred_labels, ood_max_ref, yc_conf, confidence_floor) -> Candidate:
     student = LinearStudent(X.shape[1], Y.shape[1])
     fit = student.fit(X, Y, epochs=epochs, l2=l2, seed=seed, sample_weight=w, patience=patience)
     ood = KnnOOD(ood_k)
@@ -67,6 +73,8 @@ def _fit(X, Y, w, Xc, yc, budget, delta, ood_quantile, ood_k, epochs, l2, patien
     Pc = student.predict_proba(Xc)
     conf = Pc.max(axis=1)
     agree = Pc.argmax(axis=1) == yc
+    if confidence_floor is not None:
+        agree &= np.asarray(yc_conf) >= confidence_floor
     oodc = ood.score(Xc)
     pred = None
     eligible = None
@@ -78,7 +86,8 @@ def _fit(X, Y, w, Xc, yc, budget, delta, ood_quantile, ood_k, epochs, l2, patien
     # the OOD cutoff comes from the training data, the candidates from a fixed grid: the calibration rows
     # only test, which is what makes the bound hold (calibrate.fit_policy)
     policy = fit_policy(conf, agree, oodc, budget, delta, ood_threshold=ood.threshold(ood_quantile, seed=seed),
-                        candidates=threshold_grid(Y.shape[1]), eligible=eligible, deferred_labels=deferred_labels)
+                        candidates=threshold_grid(Y.shape[1]), eligible=eligible, deferred_labels=deferred_labels,
+                        confidence_floor=confidence_floor)
     acc = policy.accepts(conf, oodc, pred)
     return Candidate(student, ood, policy, fit, float(agree.mean()), int(acc.sum()), int((acc & ~agree).sum()))
 
@@ -124,8 +133,8 @@ def run_fit_job(job: FitJob) -> FitResult:
     try:
         X, Y, y, w = store.training_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model,
                                         job.since_id, job.max_train)
-        Xc, _, yc, _ = store.calib_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model,
-                                       job.since_id, job.max_calib)
+        Xc, _, yc, _, cc = store.calib_set(job.task_version, job.encoder_id, job.labels, job.dim, job.teacher_model,
+                                           job.since_id, job.max_calib, with_confidence=True)
     finally:
         store.close()
     if len(X) == 0 or len(Xc) == 0:
@@ -137,7 +146,7 @@ def run_fit_job(job: FitJob) -> FitResult:
         per_class = np.bincount(y[y >= 0], minlength=len(job.labels))
         deferred = [c for c, n in zip(job.labels, per_class, strict=True) if n < job.min_samples_per_class]
     cand = fit_candidate(X, Y, w if job.importance_weighting else None, Xc, yc, labels=job.labels,
-                         deferred_labels=deferred, **job.fit)
+                         deferred_labels=deferred, yc_conf=cc, **job.fit)
     prod_cov = None
     if job.prod_dir:
         d = Path(job.prod_dir)

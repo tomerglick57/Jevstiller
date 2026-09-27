@@ -75,6 +75,8 @@ target_agreement = 0.98      →  disagreement budget = 2% of all requests
 
 The routing threshold is chosen on a held-out, IID calibration set so that, with 95% confidence, the share of requests the local model answers *and* gets different from Jev stays within the budget. It uses an exact finite-sample bound (Clopper–Pearson), testing candidate thresholds strictest-first. It is not tuned by eye, and it is re-verified forever on the audit channel. If the audit shows the contract is broken, everything falls back to Jev automatically.
 
+If your code also acts on Jev's `confidence`, for example sending answers below 0.6 to review, set that number as the task's `confidence_floor`. The bound then also counts the requests Jev would have been less sure about than that, and local answers report at least that confidence. See [configuration](docs/configuration.md).
+
 **Agreement with Jev is not accuracy.** If Jev is wrong, the student is wrong the same way. The status report says so next to every number. See [DESIGN.md §2](DESIGN.md).
 
 ## Install

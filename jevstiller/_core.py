@@ -14,7 +14,7 @@ import weakref
 from collections.abc import Sequence
 from concurrent.futures import Executor, Future
 from concurrent.futures import wait as futures_wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -22,10 +22,10 @@ import numpy as np
 from ._calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper
 from ._registry import Bundle, Registry
 from ._store import Record, SampleStore, text_hash
-from ._task import MAX_TEXT_CHARS, MODES, Config, State, Task, state_text
+from ._task import MAX_TEXT_CHARS, MODES, Config, State, Task, check_floor, state_text
 from ._training import FitJob, run_fit_job
 from .encoders import Encoder, HashEncoder
-from .teachers import Teacher, TeacherOutput
+from .teachers import Teacher, TeacherOutput, peakedness
 
 log = logging.getLogger("jevstiller")
 
@@ -34,11 +34,20 @@ log = logging.getLogger("jevstiller")
 class Result:
     label: str | None           # None only when the teacher call failed (see `error`)
     probs: dict[str, float]
-    confidence: float
+    confidence: float           # the teacher's own for its answers; for the student's, the teacher's definition
+                                # (peakedness of `probs`), at least the confidence floor its version was calibrated for
     source: str                 # "teacher" | "student:vN" | "error"
     routing_reason: str
     latency_ms: float
     error: Exception | None = None
+
+
+def reported_confidence(probs: dict[str, float], policy: RoutingPolicy) -> float:
+    """The confidence a student's answer reports: Jev's definition, the peakedness of the distribution
+    (`teachers.peakedness`), and at least the confidence floor the version was calibrated for. With a floor, a
+    local answer stands for "the teacher would have given this label with at least this confidence", which the
+    routing policy bounds, so a caller's check against the floor keeps it (Task.confidence_floor)."""
+    return max(peakedness(probs), policy.confidence_floor or 0.0)
 
 
 class DecayingRate:
@@ -101,6 +110,19 @@ class TrainReport:
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
+def _disagrees(s_lab: np.ndarray, t_lab: np.ndarray, t_conf: np.ndarray, policy: RoutingPolicy) -> np.ndarray:
+    """Rows where a student's answer counts as disagreeing with the teacher, as the version's policy was calibrated:
+    a different label or, with a confidence floor, a teacher less confident than the floor."""
+    wrong = np.asarray(s_lab != t_lab, dtype=bool)
+    if policy.confidence_floor is not None:
+        wrong |= np.asarray(t_conf, float) < policy.confidence_floor
+    return wrong
+
+
+def _floor_text(floor: float | None) -> str:
+    return "none" if floor is None else f"{floor:.2f}"
+
+
 def _inert(x) -> str:
     """`x` as text with control characters escaped: class names come from callers, and the report is printed
     to operators' terminals (`jevstiller admin status`), where escape sequences would run."""
@@ -137,12 +159,14 @@ class Status:
     teacher_errors: int = 0                 # failed teacher calls since this process started
     teacher_model: str | None = None        # the teacher lineage the loop trains and audits against
     readiness: dict | None = None           # before the first student: what training is waiting for
+    confidence_floor: float | None = None   # the task's (Task.confidence_floor); production's own is in `policy`
 
     def report(self, events: bool = True) -> str:
         """The status as text. `events=False` leaves out the last five loop events."""
         L = []
         L.append(f"Task: {self.task}   version {self.task_version}   mode: {self.mode}   "
-                 f"audit rate {self.audit_rate:.0%}")
+                 f"audit rate {self.audit_rate:.0%}"
+                 + (f"   confidence floor {self.confidence_floor:.2f}" if self.confidence_floor is not None else ""))
         L.append(f"Production: {self.production or '-'}   Shadow: {self.shadow or '-'}")
         L.append(f"Requests: {self.requests:,}   student {self.student_share:.1%}   teacher {self.teacher_share:.1%}")
         ch = "   ".join(f"{k} {v:,}" for k, v in sorted(self.channels.items()))
@@ -160,6 +184,8 @@ class Status:
             L.append(f"Agreement with teacher (audit, n={self.audit_n:,}): {self.audit_agreement:.2%} "
                      f"[{self.audit_agreement_lb:.2%}, {self.audit_agreement_ub:.2%}]   "
                      f"target {self.target_agreement:.0%}   {ok}")
+            if (floor := (self.policy or {}).get("confidence_floor")) is not None:
+                L.append(f"  disagreeing: a different label, or the teacher less confident than {floor:.2f}")
             L.append("  note: agreement with the teacher is not accuracy.")
         L.append(f"Labelled: train {self.labelled_train:,}   calib {self.labelled_calib:,}"
                  + (f"   teacher {self.teacher_model}" if self.teacher_model else ""))
@@ -180,6 +206,10 @@ class Status:
                      " of requests")
             if p.get("deferred_labels"):
                 L.append(f"  rare classes, always sent to the teacher: {', '.join(map(_inert, p['deferred_labels']))}")
+            if p.get("confidence_floor") != self.confidence_floor:
+                L.append(f"  calibrated for confidence floor {_floor_text(p.get('confidence_floor'))}, not the task's "
+                         f"{_floor_text(self.confidence_floor)}: a student calibrated for it takes over once it passes "
+                         "shadow")
         for e in self.events[-5:] if events else []:
             L.append(f"  event: {_inert(e['kind'])} "
                      + " ".join(f"{_inert(k)}={_inert(round(v, 4) if isinstance(v, float) else v)}"
@@ -239,6 +269,8 @@ class Jevstiller:
         self._shadow: Bundle | None = self._load(shadows[-1]) if shadows else None
         if self._shadow is not None:
             self._shadow_started_id = self._shadow.meta.get("shadow_from_id", self.store.max_id())
+        if any(b is not None and not self._calibrated(b) for b in (self._prod, self._shadow)):
+            self._retrain_requested = True               # the confidence floor changed while the task was unloaded
         versions = self.registry.versions()             # the last training, whatever became of its result
         if versions:
             with contextlib.suppress(OSError, ValueError):
@@ -319,6 +351,24 @@ class Jevstiller:
                 self.forced_fallback = False
         if cleared:
             self.store.event("fallback_cleared", mode=mode)
+
+    def set_confidence_floor(self, floor: float | None) -> None:
+        """Change the task's confidence floor (Task.confidence_floor; None or 0: none). A student calibrated for
+        the new floor trains at once and takes over once it passes shadow. Until then the production version
+        keeps serving as calibrated: its answers report, and its audit counts, the floor it was calibrated for."""
+        floor = check_floor(floor)
+        with self._state:
+            previous = self.task.confidence_floor
+            if floor == previous:
+                return
+            self.task = replace(self.task, confidence_floor=floor)
+            self._retrain_requested = True
+        self.store.event("confidence_floor", previous=previous, current=floor)
+        self._kick()
+
+    def _calibrated(self, bundle: Bundle | None) -> bool:
+        """The version's routing policy was calibrated for the task's confidence floor."""
+        return bundle is not None and bundle.policy.confidence_floor == self.task.confidence_floor
 
     @property
     def audit_rate(self) -> float:
@@ -433,7 +483,7 @@ class Jevstiller:
                 accept = pol.usable and conf[i] >= pol.conf_threshold and ood[i] <= pol.ood_threshold and not rare
                 if accept:
                     r.served_by, r.channel, r.routing_reason = "student", "student", "confident"
-                    results[i] = Result(r.student_label, r.student_probs, r.student_confidence,
+                    results[i] = Result(r.student_label, r.student_probs, reported_confidence(r.student_probs, pol),
                                         prod.name, "confident", 0.0)
                 else:
                     r.channel = "deferred"
@@ -701,8 +751,10 @@ class Jevstiller:
         with self._state:
             self._last_train_id = self.store.max_id()
             self._retrain_requested = False
-            lineage, since = self._teacher_model, self._since_id
-        prod = self._prod if self._current(self._prod) else None   # else: other data, not a fair comparison
+            lineage, since, floor = self._teacher_model, self._since_id, self.task.confidence_floor
+        # production is compared on the same calibration rows, unless it was trained on other data or calibrated
+        # for another confidence floor: then the comparison isn't fair
+        prod = self._prod if self._current(self._prod) and self._calibrated(self._prod) else None
         staged = self.registry.staging_dir()
         job = FitJob(store_path=str(self.store.path), task_version=tv, encoder_id=eid, labels=self.labels,
                      dim=self.encoder.dim, out_dir=str(staged),
@@ -710,7 +762,8 @@ class Jevstiller:
                               ood_quantile=self.cfg.ood_quantile, ood_k=self.cfg.ood_k,
                               epochs=self.cfg.student_epochs, l2=self.cfg.student_l2,
                               patience=self.cfg.student_patience, seed=self.cfg.seed,
-                              threads=self.cfg.train_threads, ood_max_ref=self.cfg.ood_max_ref),
+                              threads=self.cfg.train_threads, ood_max_ref=self.cfg.ood_max_ref,
+                              confidence_floor=floor),
                      hard_labels=self.cfg.label_target == "hard",
                      importance_weighting=self.cfg.importance_weighting,
                      prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None,
@@ -760,6 +813,12 @@ class Jevstiller:
             return TrainReport(None, res.n_train, res.n_calib, res.policy, float("nan"), res.calib_agreement,
                                False, "teacher changed during training" if self._teacher_model != lineage
                                else "drift during training")
+        if res.policy.confidence_floor != self.task.confidence_floor:     # the floor changed while it trained
+            shutil.rmtree(staged, ignore_errors=True)
+            with self._state:
+                self._retrain_requested = True
+            return TrainReport(None, res.n_train, res.n_calib, res.policy, float("nan"), res.calib_agreement,
+                               False, "confidence floor changed during training")
         policy, fit = res.policy, res.fit
         meta = {"n_train": res.n_train, "n_calib": res.n_calib, "train_loss": fit["loss"], "epochs": fit["epochs"],
                 "prod_calib_coverage": res.prod_calib_coverage,
@@ -788,13 +847,19 @@ class Jevstiller:
 
     def _judge_shadow(self) -> None:
         sh = self._shadow
-        if not self._current(sh):
+        current = self._current(sh)
+        if not current or not self._calibrated(sh):
             self.registry.set_state(sh.name, "rejected")
             with self._state:
                 self._shadow = None
-            other = sh.meta.get("teacher_model") not in (None, self._teacher_model)
-            self.store.event("rejected", version=sh.name,
-                             reason="trained on another teacher model" if other else "trained before a drift")
+                self._retrain_requested = self._retrain_requested or current   # only its floor is stale: retrain
+            if current:
+                reason = "calibrated for another confidence floor"
+            elif sh.meta.get("teacher_model") not in (None, self._teacher_model):
+                reason = "trained on another teacher model"
+            else:
+                reason = "trained before a drift"
+            self.store.event("rejected", version=sh.name, reason=reason)
             return
         if self.store.max_id() - self._shadow_started_id < self.cfg.shadow_min_samples:
             return
@@ -806,12 +871,14 @@ class Jevstiller:
         s_conf = np.array([r[1] for r in rows], float)
         s_ood = np.array([r[2] for r in rows], float)
         t_lab = np.array([r[3] for r in rows])
+        t_conf = np.array([1.0 if r[7] is None else r[7] for r in rows], float)
         acc = sh.policy.accepts(s_conf, s_ood, s_lab)
         # Pool the calibration rows (used to fit the policy) with the fresh shadow rows: both are IID
         # teacher-labelled traffic, and pooling keeps the test powered while adding out-of-time evidence.
-        # Same loss as the calibration: answered and disagreeing, over every row, bounded at the full budget.
+        # Same loss as the calibration: answered and disagreeing (a different label, or a teacher less confident
+        # than the version's confidence floor), over every row, bounded at the full budget.
         n = int(acc.sum()) + sh.meta.get("calib_accepted", 0)
-        k = int((acc & (s_lab != t_lab)).sum()) + sh.meta.get("calib_disagree", 0)
+        k = int((acc & _disagrees(s_lab, t_lab, t_conf, sh.policy)).sum()) + sh.meta.get("calib_disagree", 0)
         N_pool = N + sh.meta.get("n_calib", 0)
         ub = clopper_pearson_upper(k, N_pool, 1 - self.cfg.confidence)
         cov = n / N_pool
@@ -839,14 +906,16 @@ class Jevstiller:
     def _audit_stats(self, prod: Bundle):
         """System agreement on the recent audit window: the audit rows served while `prod` was in production,
         scored as they were served. Re-scoring them with `prod` itself measured it on rows it had since been
-        trained on (audit rows are training data), which overstated agreement (security audit run 3)."""
-        s_lab, conf, ood, t_lab = self.store.audit_served(self.task.version, prod.name, self.cfg.drift_window,
-                                                          self._teacher_model, self._since_id)
+        trained on (audit rows are training data), which overstated agreement (security audit run 3).
+        Disagreeing counts as in calibration: a different label, or a teacher less confident than the confidence
+        floor `prod` was calibrated for (and reports)."""
+        s_lab, conf, ood, t_lab, t_conf = self.store.audit_served(self.task.version, prod.name, self.cfg.drift_window,
+                                                                  self._teacher_model, self._since_id)
         N = len(t_lab)
         if N == 0:
             return 0, None, None, None
         acc = prod.policy.accepts(conf, ood, s_lab)
-        k = int((acc & (s_lab != t_lab)).sum())
+        k = int((acc & _disagrees(s_lab, t_lab, t_conf, prod.policy)).sum())
         d = 1 - self.cfg.confidence
         return N, 1 - k / N, 1 - clopper_pearson_upper(k, N, d), 1 - clopper_pearson_lower(k, N, d)
 
@@ -931,7 +1000,8 @@ class Jevstiller:
             teacher_cost_avoided_usd=avoided * avg_cost, labelled_train=c["labelled_train"],
             labelled_calib=c["labelled_calib"], policy=prod.policy.__dict__ if prod else None,
             events=self.store.events(), teacher_errors=teacher_errors, teacher_model=lineage,
-            readiness=None if self._current(prod) else self._readiness(c))
+            readiness=None if self._current(prod) else self._readiness(c),
+            confidence_floor=self.task.confidence_floor)
 
     def versions(self) -> list[dict]:
         """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back)."""
@@ -950,18 +1020,21 @@ class Jevstiller:
         shutil.copytree(src, dst)
         (dst / "task.json").write_text(json.dumps({
             "name": self.task.name, "instructions": self.task.instructions, "classes": self.task.classes,
-            "target_agreement": self.task.target_agreement, "task_version": self.task.version,
+            "target_agreement": self.task.target_agreement, "confidence_floor": self.task.confidence_floor,
+            "task_version": self.task.version,
             "encoder_id": self.encoder.id, "version": name, "labels": self.labels,
             "teacher_model": self.registry.load(name).meta.get("teacher_model"), "config": self.cfg.to_dict()},
             indent=2, ensure_ascii=False))
         return dst
 
     def evaluate(self, texts: Sequence[State], teacher_labels: Sequence[str], version: str | None = None,
-                 X: np.ndarray | None = None) -> dict:
+                 X: np.ndarray | None = None, teacher_confidences: Sequence[float] | None = None) -> dict:
         """Offline check of a version's routing policy against teacher labels on held-out texts.
 
         Returns coverage, selective disagreement, system agreement (= 1 - coverage * selective
-        disagreement), and per-row decisions. Does not touch the store.
+        disagreement), and per-row decisions. Does not touch the store. For a version calibrated with a confidence
+        floor, pass the teacher's `teacher_confidences` too: a disagreement then also counts the rows the teacher
+        was less confident about than the floor, as calibration and the audit do. Without them, only labels count.
         """
         b = self._prod if version is None else self._load(version)
         if b is None:
@@ -973,7 +1046,10 @@ class Jevstiller:
         acc = b.policy.accepts(conf, ood, pred)
         t = np.asarray(teacher_labels)
         n = int(acc.sum())
-        k = int((acc & (pred != t)).sum())
+        if teacher_confidences is None:
+            k = int((acc & (pred != t)).sum())
+        else:
+            k = int((acc & _disagrees(pred, t, np.asarray(teacher_confidences, float), b.policy)).sum())
         cov = n / len(t) if len(t) else 0.0
         sel = k / n if n else 0.0
         return {"version": b.name, "n": len(t), "coverage": cov, "selective_disagreement": sel,

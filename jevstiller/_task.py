@@ -31,6 +31,16 @@ def state_text(state: State) -> str:
     raise TypeError(f"state must be str, dict or list, got {type(state).__name__}")
 
 
+def check_floor(floor: Any) -> float | None:
+    """A valid `Task.confidence_floor`: None, or a number in [0, 1], where 0 means none (a teacher's confidence
+    is never below 0)."""
+    if floor is None:
+        return None
+    if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not 0.0 <= floor <= 1.0:
+        raise ValueError(f"confidence_floor must be a number in [0, 1] (0 or none: no floor), got {floor!r}")
+    return float(floor) or None
+
+
 @dataclass(frozen=True)
 class Task:
     """What is being classified. Everything here defines the *teacher's* behaviour.
@@ -39,12 +49,19 @@ class Task:
     `criteria`), so they are part of the task version. Like `instructions`, a description may be text, a
     JSON object or array, or None ("interpreted by its name alone"). A plain list of names means empty
     descriptions.
+
+    `confidence_floor`: the teacher confidence below which the caller treats an answer as unsure (sends it to
+    review, or to another model). With a floor, a local answer also counts as a disagreement when the teacher
+    would have answered with less confidence than the floor, so `target_agreement` covers the caller's
+    unsure decision as well as the label; local answers report at least this confidence. None (or 0): only
+    the label counts. Neither field changes what the teacher is asked, so neither is part of the version.
     """
 
     name: str
     instructions: Any
     classes: Mapping[str, Any] | Sequence[str]
     target_agreement: float = 0.98
+    confidence_floor: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.classes, Mapping):
@@ -59,6 +76,7 @@ class Task:
             raise ValueError(f"a task needs between 2 and {MAX_CLASSES} classes, got {len(self.classes)}")
         if not 0.5 <= self.target_agreement < 1.0:
             raise ValueError("target_agreement must be in [0.5, 1)")
+        object.__setattr__(self, "confidence_floor", check_floor(self.confidence_floor))
         try:
             json.dumps({"i": self.instructions, "c": self.classes})
         except (TypeError, ValueError) as e:

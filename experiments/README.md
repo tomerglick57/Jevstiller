@@ -11,6 +11,7 @@ python3 experiments/run.py --dataset banking77 --teacher oracle --encoder base  
 python3 experiments/run.py --dataset synthetic --teacher synthetic --encoder hash  # no downloads, no GPU, ~1 min
 python3 experiments/jev_profile.py                                                 # live Jev latency + wire fixtures
 python3 experiments/record_answers.py --dataset banking77                          # record Jev's answer for every message into the cache (~$0.35)
+python3 experiments/confidence_floor.py --dataset banking77                        # a caller's confidence check, with and without Task.confidence_floor (no key)
 ```
 
 More options: `--backend onnx --device cpu` (CPU-only), `--ood-max-ref N` (size of the OOD reference, default 5,000),

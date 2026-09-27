@@ -50,7 +50,7 @@ Same JSON as Jev:
 ```
 
 - `model` is the concrete Jev version the task's student was trained against (what `jev-latest` resolved to).
-- `confidence` uses Jev's definition, the peakedness of the distribution `(K·max − 1)/(K − 1)`, computed on the student's probabilities.
+- `confidence` uses Jev's definition, the peakedness of the distribution `(K·max − 1)/(K − 1)`, computed on the student's probabilities. With a confidence floor (`confidence_floor`, [configuration](configuration.md)), it is at least the floor, and the task's target also counts requests Jev would have answered with less confidence. Set the floor if your code treats low-confidence answers differently ([compatibility](compatibility.md)).
 - `usage` is zero: no Jev tokens were spent.
 - `x-typesafe-request-id` is `jvs_<uuid>`. The SDK requires the header, and the prefix tells you it was local.
 

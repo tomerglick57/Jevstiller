@@ -58,6 +58,8 @@ class RoutingPolicy:
     delta: float
     n_calib: int
     deferred_labels: list[str] = field(default_factory=list)   # the student never answers these (rare classes)
+    confidence_floor: float | None = None   # a disagreement also counted rows the teacher answered with less
+                                            # confidence (Task.confidence_floor); answers report at least this
 
     @property
     def usable(self) -> bool:
@@ -92,13 +94,16 @@ def threshold_grid(n_labels: int, size: int = 400) -> np.ndarray:
 
 def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: float, delta: float = 0.05,
                ood_threshold: float = math.inf, candidates: np.ndarray | None = None,
-               eligible: np.ndarray | None = None, deferred_labels: Sequence[str] = ()) -> RoutingPolicy:
+               eligible: np.ndarray | None = None, deferred_labels: Sequence[str] = (),
+               confidence_floor: float | None = None) -> RoutingPolicy:
     """The loosest confidence threshold whose rate of *answered and disagreeing* requests is at most `budget`,
     with probability at least 1 - `delta`.
 
     Rows come from an IID calibration set: the student's max-prob, whether it agrees with the teacher, and its
     OOD score. The loss per row is 1[the student answers and disagrees], so its rate over all rows is exactly
-    what the budget limits (disagreement over all requests).
+    what the budget limits (disagreement over all requests). What agreeing means is the caller's: with a
+    confidence floor, the label must match and the teacher's confidence must be at least the floor. Each row's
+    loss is still fixed before the scan, so nothing below changes; the floor is only recorded in the policy.
 
     Candidates are tested strictest first with an exact Clopper-Pearson bound at `delta`, and the scan stops at
     the first failure (fixed-sequence testing, as in "Learn Then Test"). The loss can only grow as the
@@ -128,6 +133,6 @@ def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: flo
                 best = (float(t), int(sel.sum()) / N, ub, k / N)
     ood_thr = float(ood_threshold) if math.isfinite(ood_threshold) else float(np.max(ood, initial=0.0))
     if best is None:
-        return RoutingPolicy(None, ood_thr, 0.0, 1.0, 0.0, budget, delta, N, deferred)
+        return RoutingPolicy(None, ood_thr, 0.0, 1.0, 0.0, budget, delta, N, deferred, confidence_floor)
     t, cov, ub, rate = best
-    return RoutingPolicy(t, ood_thr, cov, ub, rate, budget, delta, N, deferred)
+    return RoutingPolicy(t, ood_thr, cov, ub, rate, budget, delta, N, deferred, confidence_floor)

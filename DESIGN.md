@@ -428,6 +428,19 @@ The policy is fitted at `(1 − fit_headroom) · β` (default 85% of the budget)
 
 The policy is versioned together with the model it was fitted for. A model without a policy cannot be routed to.
 
+**Confidence floor (added 2026-09-27).** Jev's docs tell callers to treat low-confidence answers as unsure, for example sending them to review below 0.6. The label-only contract says nothing about that:
+- A student answers only when it is confident, so a local answer never reports a low confidence.
+- Its confidence is its own. On the benchmark's five tasks it was below Jev's on 80–90% of local answers.
+- At a 0.6 check, 8–37% of the requests Jev would have flagged came back with a confident local answer.
+- Counting a changed label or a changed flag, the caller's outcome changed on more than 2% of requests in 20 of 25 splits at a 0.6 check and in 25 of 25 at 0.8, while the label bound held in all of them. See `experiments/confidence_floor.py` and docs/benchmarks.md.
+
+`Task.confidence_floor` puts the flag under the contract:
+- **The loss:** a row scores 1 if the student would answer it *and* the label differs *or* Jev's reported confidence is below the floor. It is still one fixed indicator per row, so the argument above is unchanged. Only what the bound covers grows.
+- **The answers:** a local answer then stands for "Jev would have given this label with at least this confidence". It reports `max(peakedness, floor)`, so the caller's check keeps it. The shadow test and the audit use the same loss.
+- **Versioning:** a policy records the floor it was fitted for (`RoutingPolicy.confidence_floor`). A version is judged, audited and reported at its own floor. When the task's floor changes, a version calibrated for the new floor trains at once, and production keeps serving under its old contract until the new version passes shadow. A drift fallback here would restart the training data, which is wrong: the answers are still valid, only the loss changed.
+- **Cost:** on the five tasks, 4–12 points of coverage at a floor of 0.6 and 10–19 at 0.8.
+- **An alternative that bought little:** teach the student an extra "Jev unsure" class. In an exploratory run on the same splits it stayed within ±1.7 points of coverage of the loss change alone; that script isn't in `experiments/`. The student trains on Jev's full distributions, so its confidence already drops where Jev's does. The class may matter more for a student trained on labels and confidences alone, without the distributions.
+
 **Rare classes.** With `rare_classes="defer"`, classes with fewer than `min_samples_per_class` training rows become the policy's `deferred_labels`. The student never answers a request it would label with one of them (`routing_reason="rare_class"`), and calibration only counts rows the student may answer, so the bound stays honest. This is the default since 0.3.4: the benchmark's CLINC150 run showed Jev never using one of a task's 151 labels, which under `wait` holds back the first student for good. `wait` is still available; with it, `status()` names the classes it is waiting for.
 
 Roadmap: per-class thresholds, and a *class-weighted* budget ("a wrong `cancellation` costs five times a wrong `other`").
@@ -714,10 +727,12 @@ Also: agreement bound over time with the target as a horizontal line; per-versio
 js = Jevstiller(task, teacher, data_dir=..., encoder=None, config=Config(), train_executor=None)
 
 js.classify(state, teacher=None) -> Result(label, probs, confidence, source, routing_reason, latency_ms, error)
+    # confidence: Jev's own for its answers; Jev's definition for the student's (>= the floor, §7.6)
 js.classify_batch(states, errors="raise" | "return", teacher=None) -> list[Result]   # TeacherError on failures
 routed = js.route(states); js.defer(routed, i, reason); js.complete(routed, teacher_outputs)
 js.status() -> Status  ;  js.status().report()
 js.set_mode("teacher_only" | "cascade" | "auto")
+js.set_confidence_floor(0.6 | None)          # Task.confidence_floor; retrains for it (§7.6)
 js.train_now() ; js.maintain() ; js.drain() ; js.promote("student:v3") ; js.rollback()
 js.versions() ; js.export(path, version=None) ; js.evaluate(states, teacher_labels)
 js.training_priority() ; js.busy() ; js.footprint_bytes() ; js.close()
