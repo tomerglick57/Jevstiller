@@ -61,8 +61,9 @@ def _agreement(st) -> str:
         return '<span class="dim">–</span>'
     a, lb, ub, t = st.audit_agreement, st.audit_agreement_lb, st.audit_agreement_ub, st.target_agreement
     verdict = ("OK", "green") if lb >= t else ("inconclusive", "amber") if ub >= t else ("BROKEN", "red")
+    floor = (st.policy or {}).get("confidence_floor")          # what the audit counted as disagreeing
     return (f"{a:.2%} {_badge(verdict[0], verdict[1])}<br><span class=dim>[{lb:.2%}, {ub:.2%}] n={st.audit_n:,}"
-            f" · target {t:.0%}</span>")
+            f" · target {t:.0%}" + (f" · floor {floor:.2f}" if floor is not None else "") + "</span>")
 
 
 def _progress(st) -> str:

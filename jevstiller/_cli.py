@@ -5,7 +5,7 @@
     jevstiller key-hash --data-dir DIR  < key                salted hash of an API key, for the tenants map
     jevstiller backup --data-dir DIR --out BACKUP            consistent copy, safe while serving
     jevstiller restore --from BACKUP --data-dir DIR          into an empty data dir (server stopped)
-    jevstiller admin [--url URL] [--token T] <command>       the admin API: tasks, status, mode, target, ...
+    jevstiller admin [--url URL] [--token T] <command>       the admin API: tasks, status, mode, target, floor, ...
 
 Settings: built-in defaults < config file (--config or JEVSTILLER_CONFIG) < JEVSTILLER_* environment < flags.
 See docs/configuration.md.
@@ -113,7 +113,8 @@ def _serve(a: argparse.Namespace) -> None:
         max_new_tasks_per_caller=s.max_new_tasks_per_key,
         idle_ttl_s=s.idle_ttl_days * 86400 if s.idle_ttl_days else None,
         text_retention_s=s.text_retention_days * 86400 if s.text_retention_days else None,
-        train_executor=scheduler, blas_threads=s.blas_threads, hash_key=salt, task_overrides=s.tasks)
+        train_executor=scheduler, blas_threads=s.blas_threads, hash_key=salt, task_overrides=s.tasks,
+        confidence_floor=s.confidence_floor)
     settings = ProxySettings(upstream=s.upstream, upstream_timeout_s=s.upstream_timeout_s,
                              max_upstream_inflight=s.max_upstream_inflight, tenancy=s.tenancy,
                              key_ttl_s=s.key_ttl_s, price_per_mtok=s.price_per_mtok, tenant_map=s.tenants,
@@ -213,6 +214,8 @@ def _admin(a: argparse.Namespace) -> None:
     base = a.url.rstrip("/") + "/jevstiller/v1"
     if a.action not in ("tasks", "stats") and not a.key:
         raise SystemExit(f"`admin {a.action}` needs a {'tenant' if a.action == 'delete-tenant' else 'task key'}")
+    if a.action == "floor" and a.value is None:                # none is a value here: it removes the floor
+        raise SystemExit("`admin floor` needs a value: a confidence in [0, 1], or none")
     k = quote(a.key or "", safe="")                    # a name with # or ? must not address another tenant
     calls = {
         "tasks": ("GET", "/tasks", None),
@@ -220,6 +223,8 @@ def _admin(a: argparse.Namespace) -> None:
         "versions": ("GET", f"/tasks/{k}/versions", None),
         "mode": ("POST", f"/tasks/{k}/mode", {"mode": a.value}),
         "target": ("POST", f"/tasks/{k}/target", {"target_agreement": _num(a.value)}),
+        "floor": ("POST", f"/tasks/{k}/floor",
+                  {"confidence_floor": None if str(a.value).lower() in ("none", "off") else _num(a.value)}),
         "train": ("POST", f"/tasks/{k}/train", None),
         "promote": ("POST", f"/tasks/{k}/promote", {"version": a.value}),
         "rollback": ("POST", f"/tasks/{k}/rollback", None),
@@ -263,6 +268,8 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--backend")
         p.add_argument("--device")
         p.add_argument("--target-agreement", type=float)
+        p.add_argument("--confidence-floor", type=float,
+                       help="for new tasks: Jev's confidence below which callers treat an answer as unsure (0: none)")
         p.add_argument("--tenancy", choices=["shared", "per_key"])
         p.add_argument("--admit-after", type=int, help="requests before a new question becomes a task")
         p.add_argument("--max-loaded", type=int)
@@ -318,10 +325,10 @@ def main(argv: list[str] | None = None) -> None:
     ad.add_argument("--token")
     ad.add_argument("--token-file")
     ad.add_argument("--json", action="store_true", help="raw JSON for `status`")
-    ad.add_argument("action", choices=["tasks", "status", "versions", "mode", "target", "train", "promote",
+    ad.add_argument("action", choices=["tasks", "status", "versions", "mode", "target", "floor", "train", "promote",
                                        "rollback", "delete", "delete-tenant", "stats"])
     ad.add_argument("key", nargs="?", help="task key (tenant for `tasks` / `delete-tenant`)")
-    ad.add_argument("value", nargs="?", help="mode, target agreement or version")
+    ad.add_argument("value", nargs="?", help="mode, target agreement, confidence floor (or none) or version")
     ad.set_defaults(func=_admin)
 
     a = ap.parse_args(argv)

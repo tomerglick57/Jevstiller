@@ -180,11 +180,6 @@ def _error(status: int, detail: str, retry_after: float | None = None) -> JSONRe
     return JSONResponse({"detail": detail}, status_code=status, headers=headers)
 
 
-def _peakedness(probs: Mapping[str, float]) -> float:
-    k = len(probs)
-    return 1.0 if k < 2 else max(0.0, (k * max(probs.values()) - 1.0) / (k - 1.0))
-
-
 def _under(path: str, base: str) -> bool:
     """`path` is `base` or below it (no dot segments can remain in an httpx-merged path)."""
     return not base or path == base or path.startswith(base + "/")
@@ -621,9 +616,9 @@ class Proxy:
                 r = routings[spec]
                 released.add(spec)                       # complete() releases the engine even if it raises
                 [res] = await anyio.to_thread.run_sync(self.manager.complete, r, [], "jev")
-                for name in names:
+                for name in names:     # confidence: Jev's definition, at least the floor the student was calibrated for
                     answers[name] = {"type": "choice", "choice": res.label,
-                                     "confidence": _peakedness(res.probs), "probabilities": res.probs}
+                                     "confidence": res.confidence, "probabilities": res.probs}
                     detail[name] = res.source
                 lineage = r.engine._teacher_model or ""
                 model = model or (lineage[4:] if lineage.startswith("jev:") else None)

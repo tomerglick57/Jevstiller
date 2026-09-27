@@ -37,7 +37,7 @@ from ._core import Jevstiller, Result, Routed, TeacherError
 from ._registry import atomic_write_text
 from ._scheduler import TaskExecutor, TrainScheduler
 from ._store import SampleStore
-from ._task import Config, State, Task, canonical_json
+from ._task import Config, State, Task, canonical_json, check_floor
 from .encoders import Encoder
 from .teachers import Teacher, TeacherOutput
 
@@ -134,9 +134,10 @@ class TaskInfo:
     last_seen: float
     model: str | None = None            # the teacher model requested by callers, part of the key
     mode: str | None = None             # operator override of Config.mode (admin API / config file)
+    confidence_floor: float | None = None   # Task.confidence_floor
 
     def task(self) -> Task:
-        return Task(self.key, self.instructions, self.classes, self.target_agreement)
+        return Task(self.key, self.instructions, self.classes, self.target_agreement, self.confidence_floor)
 
 
 class Admission:
@@ -189,7 +190,10 @@ class TaskManager:
     - `max_tasks`: new questions beyond this many tasks stay pass-through (`task_limit`).
     - `hash_key`: key for the per-row text hash (HMAC), e.g. the deployment salt, so `store_text=False` keeps
       no plain hash of the text.
-    - `task_overrides`: {task key: {"target_agreement": x, "mode": m}} written into those tasks at startup.
+    - `confidence_floor`: Task.confidence_floor for new tasks (None: none). Like `target_agreement`, each task
+      keeps its own; change it with `set_confidence_floor` or `task_overrides`.
+    - `task_overrides`: {task key: {"target_agreement": x, "mode": m, "confidence_floor": f}} written into those
+      tasks at startup.
     Directories are created with mode 0700.
 
     One `encoder` (wrap it in `BatchingEncoder` to merge concurrent calls) and one `train_executor` are shared
@@ -204,7 +208,7 @@ class TaskManager:
                  janitor_interval_s: float = 5.0, blas_threads: int | None = 1,
                  text_retention_s: float | None = None, max_tasks: int | None = 10_000,
                  hash_key: bytes | None = None, task_overrides: Mapping[str, Mapping[str, Any]] | None = None,
-                 max_new_tasks_per_caller: int | None = 100):
+                 max_new_tasks_per_caller: int | None = 100, confidence_floor: float | None = None):
         if blas_threads:
             # Serving runs many small matrix products from many threads; BLAS's default of one thread per
             # core for each of them oversubscribes the CPU (1 thread: 2.4x throughput, 4x lower p99 in
@@ -218,6 +222,7 @@ class TaskManager:
         self.teacher, self.encoder = teacher, encoder
         self.cfg = config or Config()
         self.target_agreement = target_agreement
+        self.confidence_floor = check_floor(confidence_floor)
         self.max_loaded, self.max_memory_mb = max_loaded, max_memory_mb
         self.admission = admission if admission is not None else Admission()
         self.max_tasks_per_tenant, self.idle_ttl_s = max_tasks_per_tenant, idle_ttl_s
@@ -252,6 +257,8 @@ class TaskManager:
                     self.set_target(key, float(o["target_agreement"]))
                 if "mode" in o:
                     self.set_mode(key, o["mode"])
+                if "confidence_floor" in o:
+                    self.set_confidence_floor(key, o["confidence_floor"])
             else:
                 log.warning("config overrides for unknown task %s ignored", key)
         self._stop = threading.Event()
@@ -300,17 +307,29 @@ class TaskManager:
         if e is not None:
             e.set_mode(mode or self.cfg.mode)
 
+    def set_confidence_floor(self, key: str, floor: float | None) -> None:
+        """Change a task's confidence floor (Task.confidence_floor; None or 0: none). Persisted; the loaded engine
+        starts training a student calibrated for it at once (Jevstiller.set_confidence_floor)."""
+        floor = check_floor(floor)
+        with self._lock:
+            info = self._index[key]
+            info.confidence_floor = floor
+            e = self._engines.get(key)
+        self._write_info(info)
+        if e is not None:
+            e.set_confidence_floor(floor)
+
     # ---- lookup -----------------------------------------------------------------
     def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
                 model: str | None = None) -> tuple[str, Task]:
         """The key and Task for a question, without creating anything. Raises ValueError for a question
         that cannot be a task (fewer than 2 or more than 255 classes, non-JSON values)."""
-        spec = Task("_", instructions, classes, self.target_agreement)
+        spec = Task("_", instructions, classes, self.target_agreement, self.confidence_floor)
         key = task_key(tenant, spec, model=model)
         info = self._index.get(key)
         if info is not None:
             return key, info.task()
-        return key, Task(key, spec.instructions, spec.classes, self.target_agreement)
+        return key, Task(key, spec.instructions, spec.classes, self.target_agreement, self.confidence_floor)
 
     def tasks(self, tenant: str | None = None) -> list[TaskInfo]:
         with self._lock:
@@ -469,7 +488,7 @@ class TaskManager:
             now = time.time()
             self._note_caller(caller, now)
             info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now,
-                            model)
+                            model, confidence_floor=task.confidence_floor)
             (self.root / key).mkdir(parents=True, exist_ok=True, mode=0o700)
             self._write_info(info)
             self._index[key] = info

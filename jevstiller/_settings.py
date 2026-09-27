@@ -14,6 +14,7 @@ allow_networks = ["10.0.0.0/8"]
 
 [manager]
 target_agreement = 0.98
+confidence_floor = 0.6   # callers treat Jev's answers below this confidence as unsure (default: none)
 text_retention_days = 30
 
 [encoder]
@@ -25,6 +26,7 @@ audit_rate = 0.03
 [tasks."3f1c...e2"]      # per-task overrides, by task key
 target_agreement = 0.99
 mode = "teacher_only"
+confidence_floor = 0.8   # 0: none
 ```
 
 Unknown keys are errors (a typo must not silently do nothing), and so are values of the wrong type (a quoted
@@ -114,6 +116,7 @@ class ServeSettings:
     price_per_mtok: float = 0.042
     # [manager]
     target_agreement: float = 0.98
+    confidence_floor: float | None = None       # Task.confidence_floor for new tasks
     max_loaded: int = 64
     max_memory_mb: float | None = None
     admit_after: int = 50
@@ -137,7 +140,7 @@ class ServeSettings:
     def validate(self) -> ServeSettings:
         import math
 
-        from ._task import Config
+        from ._task import Config, check_floor
         for f in fields(self):
             if (problem := _type_problem(f.name, getattr(self, f.name), f.type)) is not None:
                 raise ValueError(problem)
@@ -166,6 +169,7 @@ class ServeSettings:
             raise ValueError(f"log_format must be 'text' or 'json', got {self.log_format!r}")
         if not 0.5 <= self.target_agreement < 1:
             raise ValueError("target_agreement must be in [0.5, 1)")
+        self.confidence_floor = check_floor(self.confidence_floor)
         if bool(self.ssl_certfile) != bool(self.ssl_keyfile):
             raise ValueError("ssl_certfile and ssl_keyfile go together")
         try:
@@ -173,9 +177,14 @@ class ServeSettings:
         except TypeError as e:
             raise ValueError(f"[engine]: {e}") from None
         for key, o in self.tasks.items():
-            unknown = set(o) - {"target_agreement", "mode"}
+            unknown = set(o) - {"target_agreement", "mode", "confidence_floor"}
             if unknown:
                 raise ValueError(f"[tasks.{key!r}]: unknown keys {sorted(unknown)}")
+            if "confidence_floor" in o:
+                try:
+                    check_floor(o["confidence_floor"])
+                except ValueError as e:
+                    raise ValueError(f"[tasks.{key!r}]: {e}") from None
         for name in ("max_tasks", "max_tasks_per_tenant", "max_new_tasks_per_key"):
             if (v := getattr(self, name)) is not None and v < 0:
                 raise ValueError(f"{name} must be >= 0 (or none: no limit)")
@@ -245,7 +254,8 @@ SECTIONS = {
     "proxy": ("upstream", "upstream_timeout_s", "max_upstream_inflight", "tenancy", "key_ttl_s", "access_token",
               "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_questions",
               "max_encoder_wait_ms", "tenants", "tenants_file", "price_per_mtok"),
-    "manager": ("target_agreement", "max_loaded", "max_memory_mb", "admit_after", "admit_window_s", "max_tasks",
+    "manager": ("target_agreement", "confidence_floor", "max_loaded", "max_memory_mb", "admit_after", "admit_window_s",
+                "max_tasks",
                 "max_tasks_per_tenant", "max_new_tasks_per_key", "idle_ttl_days", "text_retention_days", "store_text",
                 "train_workers",
                 "blas_threads"),

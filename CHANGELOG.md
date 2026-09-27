@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The guarantee can cover your confidence check too: `confidence_floor`.** Jev's docs suggest treating a low-confidence answer as unsure, for example sending it to review. Until now only the label was covered.
+  - **The problem:** the local model answers only when it's confident, so a local answer never reports a low confidence. Its confidence is its own number, and on the same request it runs lower than Jev's 80–90% of the time. With a check at 0.6, 8–37% of the requests Jev would have flagged came back confident, depending on the task. Counting a different label or a lost flag, the caller's outcome changed on more than 2% of requests in 20 of 25 benchmark splits, while the label bound held in all 25.
+  - **With a floor** (per task: `Task.confidence_floor`, `[manager] confidence_floor` for new tasks, `[tasks."<key>"]`, `jevstiller admin floor <key> 0.6`, `POST /jevstiller/v1/tasks/{key}/floor`):
+    - A local answer also counts as disagreeing when Jev would have answered with less confidence than the floor, in calibration, the shadow test and the audit. So `target_agreement` covers the caller's unsure decision.
+    - Local answers report at least the floor, so your check keeps them.
+    - Requests Jev would be unsure about go to Jev, and its own confidence comes back.
+  - **The cost** is coverage. On the five benchmark tasks it was 4–12 points at a floor of 0.6 and 10–19 at 0.8 (`experiments/confidence_floor.py`, docs/benchmarks.md).
+  - **Changing a task's floor** trains a student calibrated for it at once. Production keeps serving as it was calibrated until the new one passes shadow; the status report says so.
+  - `Jevstiller.evaluate(..., teacher_confidences=...)` counts the same way offline.
+  - Tasks without a floor behave as before.
+- **A local answer's `Result.confidence` in the Python API is now Jev's definition** (the peakedness of the distribution), as the proxy already returned. It used to be the student's top probability, so the same number meant different things depending on who answered: with 2 classes, 0.8 there is 0.6 in Jev's terms. Routing is unchanged: its threshold and the stored `student_confidence` are still the top probability.
 - **The license is now Apache 2.0** (was MIT). It is just as permissive, and adds an explicit patent grant from contributors and a `NOTICE` file that redistributions keep. Releases up to 0.3.4 stay available under MIT.
 
 ## 0.3.4 — 2026-09-26

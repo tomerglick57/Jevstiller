@@ -64,13 +64,14 @@ module jevstiller
       def complete(self, routed: 'Routed', outs: 'Sequence[TeacherOutput | Exception]', teacher_name: 'str | None' = None) -> 'list[Result]'
       def defer(self, routed: 'Routed', i: 'int', reason: 'str') -> 'None'
       def drain(self, timeout: 'float | None' = None) -> 'bool'
-      def evaluate(self, texts: 'Sequence[State]', teacher_labels: 'Sequence[str]', version: 'str | None' = None, X: 'np.ndarray | None' = None) -> 'dict'
+      def evaluate(self, texts: 'Sequence[State]', teacher_labels: 'Sequence[str]', version: 'str | None' = None, X: 'np.ndarray | None' = None, teacher_confidences: 'Sequence[float] | None' = None) -> 'dict'
       def export(self, path: 'str | Path', version: 'str | None' = None) -> 'Path'
       def maintain(self) -> 'None'
       property mode
       def promote(self, version: 'str') -> 'None'
       def rollback(self) -> 'str | None'
       def route(self, texts: 'Sequence[State]', stexts: 'Sequence[str] | None' = None, X: 'np.ndarray | None' = None) -> 'Routed'
+      def set_confidence_floor(self, floor: 'float | None') -> 'None'
       def set_mode(self, mode: 'str') -> 'None'
       def status(self) -> 'Status'
       def train_now(self) -> 'TrainReport'
@@ -103,7 +104,7 @@ module jevstiller
       field caller: str | None
       property local
   jevstiller.State = str | dict | list
-  class jevstiller.Status(task: 'str', task_version: 'str', mode: 'str', audit_rate: 'float', production: 'str | None', shadow: 'str | None', requests: 'int', served_by_student: 'int', served_by_teacher: 'int', channels: 'dict', student_share: 'float', teacher_share: 'float', audit_n: 'int', audit_agreement: 'float | None', audit_agreement_lb: 'float | None', audit_agreement_ub: 'float | None', target_agreement: 'float', teacher_calls: 'int', teacher_calls_avoided: 'int', teacher_cost_usd: 'float', teacher_cost_avoided_usd: 'float', labelled_train: 'int', labelled_calib: 'int', policy: 'dict | None', events: 'list' = <factory>, teacher_errors: 'int' = 0, teacher_model: 'str | None' = None, readiness: 'dict | None' = None) -> None
+  class jevstiller.Status(task: 'str', task_version: 'str', mode: 'str', audit_rate: 'float', production: 'str | None', shadow: 'str | None', requests: 'int', served_by_student: 'int', served_by_teacher: 'int', channels: 'dict', student_share: 'float', teacher_share: 'float', audit_n: 'int', audit_agreement: 'float | None', audit_agreement_lb: 'float | None', audit_agreement_ub: 'float | None', target_agreement: 'float', teacher_calls: 'int', teacher_calls_avoided: 'int', teacher_cost_usd: 'float', teacher_cost_avoided_usd: 'float', labelled_train: 'int', labelled_calib: 'int', policy: 'dict | None', events: 'list' = <factory>, teacher_errors: 'int' = 0, teacher_model: 'str | None' = None, readiness: 'dict | None' = None, confidence_floor: 'float | None' = None) -> None
       field task: str
       field task_version: str
       field mode: str
@@ -132,22 +133,24 @@ module jevstiller
       field teacher_errors: int
       field teacher_model: str | None
       field readiness: dict | None
+      field confidence_floor: float | None
       def report(self, events: 'bool' = True) -> 'str'
   class jevstiller.SyntheticTeacher(world: 'SyntheticWorld', temperature: 'float' = 0.7, noise: 'float' = 0.5, price_per_mtok: 'float' = 0.042)
       def answer(self, text: 'str', task: 'Task') -> 'TeacherOutput'
       def classify(self, texts: 'Sequence[State]', task: 'Task') -> 'list[TeacherOutput]'
   class jevstiller.SyntheticWorld(labels: 'Sequence[str]', seed: 'int' = 0, vocab_size: 'int' = 30, shared_size: 'int' = 60, signal: 'float' = 0.6, length: 'tuple[int, int]' = (5, 12))
       def sample(self, n: 'int', priors: 'Sequence[float] | None' = None, drift: 'float' = 0.0) -> 'list[tuple[str, str]]'
-  class jevstiller.Task(name: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', target_agreement: 'float' = 0.98) -> None
+  class jevstiller.Task(name: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', target_agreement: 'float' = 0.98, confidence_floor: 'float | None' = None) -> None
       field name: str
       field instructions: Any
       field classes: Mapping[str, Any] | Sequence[str]
       field target_agreement: float
+      field confidence_floor: float | None
       property budget
       property fingerprint
       property labels
       property version
-  class jevstiller.TaskInfo(key: 'str', tenant: 'str', instructions: 'Any', classes: 'dict', target_agreement: 'float', created: 'float', last_seen: 'float', model: 'str | None' = None, mode: 'str | None' = None) -> None
+  class jevstiller.TaskInfo(key: 'str', tenant: 'str', instructions: 'Any', classes: 'dict', target_agreement: 'float', created: 'float', last_seen: 'float', model: 'str | None' = None, mode: 'str | None' = None, confidence_floor: 'float | None' = None) -> None
       field key: str
       field tenant: str
       field instructions: Any
@@ -157,8 +160,9 @@ module jevstiller
       field last_seen: float
       field model: str | None
       field mode: str | None
+      field confidence_floor: float | None
       def task(self) -> 'Task'
-  class jevstiller.TaskManager(data_dir: 'str | Path', teacher: 'Teacher', encoder: 'Encoder', config: 'Config | None' = None, *, target_agreement: 'float' = 0.98, max_loaded: 'int' = 64, max_memory_mb: 'float | None' = None, admission: 'Admission | None' = None, max_tasks_per_tenant: 'int | None' = None, idle_ttl_s: 'float | None' = None, train_executor: 'Executor | None' = None, janitor_interval_s: 'float' = 5.0, blas_threads: 'int | None' = 1, text_retention_s: 'float | None' = None, max_tasks: 'int | None' = 10000, hash_key: 'bytes | None' = None, task_overrides: 'Mapping[str, Mapping[str, Any]] | None' = None, max_new_tasks_per_caller: 'int | None' = 100)
+  class jevstiller.TaskManager(data_dir: 'str | Path', teacher: 'Teacher', encoder: 'Encoder', config: 'Config | None' = None, *, target_agreement: 'float' = 0.98, max_loaded: 'int' = 64, max_memory_mb: 'float | None' = None, admission: 'Admission | None' = None, max_tasks_per_tenant: 'int | None' = None, idle_ttl_s: 'float | None' = None, train_executor: 'Executor | None' = None, janitor_interval_s: 'float' = 5.0, blas_threads: 'int | None' = 1, text_retention_s: 'float | None' = None, max_tasks: 'int | None' = 10000, hash_key: 'bytes | None' = None, task_overrides: 'Mapping[str, Mapping[str, Any]] | None' = None, max_new_tasks_per_caller: 'int | None' = 100, confidence_floor: 'float | None' = None)
       def apply_retention(self) -> 'int'
       def classify(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', states: 'Sequence[State]', *, teacher: 'Teacher | None' = None, errors: 'str' = 'raise', model: 'str | None' = None) -> 'list[Result]'
       def close(self) -> 'None'
@@ -172,6 +176,7 @@ module jevstiller
       def observe(self, routing: 'Routing') -> 'bool'
       def resolve(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', model: 'str | None' = None) -> 'tuple[str, Task]'
       def route(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str]', states: 'Sequence[State]', model: 'str | None' = None, stexts: 'Sequence[str] | None' = None, X: 'Any' = None, admit: 'bool' = True, caller: 'str | None' = None) -> 'Routing'
+      def set_confidence_floor(self, key: 'str', floor: 'float | None') -> 'None'
       def set_mode(self, key: 'str', mode: 'str | None') -> 'None'
       def set_target(self, key: 'str', target_agreement: 'float') -> 'None'
       def sweep(self) -> 'None'

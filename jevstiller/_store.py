@@ -26,6 +26,12 @@ _dropped = 0                                        # records every store in thi
 _dropped_lock = threading.Lock()
 
 
+def _teacher_confidences(values: Iterable[float | None]) -> np.ndarray:
+    """The teacher's reported confidences as an array. Every teacher records one (`TeacherOutput.confidence`); a
+    row without one counts as confident."""
+    return np.array([1.0 if v is None else v for v in values], np.float64)
+
+
 def dropped_records() -> int:
     """Records the write-behind stores of this process could not commit (disk full, I/O errors), since start."""
     return _dropped
@@ -129,8 +135,10 @@ class Store(Protocol):
     def event(self, kind: str, **detail) -> None: ...
     def flush(self, timeout: float | None = None) -> bool: ...
     def counts(self, task_version: str, teacher_model: str | None = None, since_id: int = 0) -> dict: ...
-    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0): ...
-    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0): ...
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0,
+                     with_confidence=False): ...
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0,
+                  with_confidence=False): ...
     def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None,
                        since_id: int = 0): ...
     def audit_served(self, task_version: str, version: str, limit: int, teacher_model: str | None = None,
@@ -312,7 +320,7 @@ class SampleStore:
                             (time.time(), kind, json.dumps(detail, default=str)))
 
     # ---- reads --------------------------------------------------------------
-    def _matrix(self, rows: list, labels: Sequence[str], dim: int):
+    def _matrix(self, rows: list, labels: Sequence[str], dim: int, with_confidence: bool = False):
         X = np.frombuffer(b"".join(r[0] for r in rows), dtype=np.float32).reshape(len(rows), dim) if rows \
             else np.zeros((0, dim), np.float32)
         idx = {c: i for i, c in enumerate(labels)}
@@ -327,58 +335,69 @@ class SampleStore:
         s = Y.sum(axis=1, keepdims=True)
         np.divide(Y, s, out=Y, where=s > 0)
         w = np.array([r[3] if len(r) > 3 and r[3] is not None else 1.0 for r in rows], np.float64)
-        return X, Y, y, w
+        if not with_confidence:
+            return X, Y, y, w
+        return X, Y, y, w, _teacher_confidences(r[4] for r in rows)
 
     def labelled(self, task_version: str, encoder_id: str, labels: Sequence[str], dim: int,
                  split: str, channels: Iterable[str] = TEACHER_CHANNELS, teacher_model: str | None = None,
-                 since_id: int = 0, limit: int = 0):
+                 since_id: int = 0, limit: int = 0, with_confidence: bool = False):
         """Embeddings X, teacher distributions Y, teacher argmax y, importance weights w for teacher-labelled rows
         (of one teacher lineage when `teacher_model` is given, after row `since_id`), oldest first. With `limit`,
-        only the most recent `limit` rows."""
+        only the most recent `limit` rows. `with_confidence` adds a fifth array: the confidence the teacher
+        reported for each row (what a caller's confidence floor is compared with)."""
         ch = tuple(channels)
         lin, lin_args = _lineage(teacher_model, since_id)
+        extra = ", teacher_confidence" if with_confidence else ""
         rows = self.db.execute(
-            f"SELECT embedding, teacher_probs, teacher_label, weight FROM samples "
-            f"WHERE task_version=? AND encoder_id=?{lin} "
+            f"SELECT embedding, teacher_probs, teacher_label, weight{extra} "
+            f"FROM samples WHERE task_version=? AND encoder_id=?{lin} "
             f"AND split=? AND teacher_label IS NOT NULL AND channel IN ({','.join('?' * len(ch))}) "
             + ("ORDER BY id DESC LIMIT ?" if limit else "ORDER BY id"),
             (task_version, encoder_id, *lin_args, split, *ch, *((limit,) if limit else ()))).fetchall()
-        return self._matrix(rows[::-1] if limit else rows, labels, dim)
+        return self._matrix(rows[::-1] if limit else rows, labels, dim, with_confidence)
 
-    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0):
+    def training_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0,
+                     with_confidence=False):
         return self.labelled(task_version, encoder_id, labels, dim, "train", teacher_model=teacher_model,
-                             since_id=since_id, limit=limit)
+                             since_id=since_id, limit=limit, with_confidence=with_confidence)
 
-    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0):
+    def calib_set(self, task_version, encoder_id, labels, dim, teacher_model=None, since_id=0, limit=0,
+                  with_confidence=False):
         return self.labelled(task_version, encoder_id, labels, dim, "calib", IID_CHANNELS, teacher_model, since_id,
-                             limit)
+                             limit, with_confidence)
 
     def shadow_records(self, shadow_version: str, task_version: str, teacher_model: str | None = None,
                        since_id: int = 0):
-        """IID rows where the shadow candidate ran alongside a teacher answer."""
+        """IID rows where the shadow candidate ran alongside a teacher answer: the shadow's label, confidence and
+        OOD score, the teacher's label, production's label, confidence and OOD score, and the teacher's
+        confidence (None where a row has none)."""
         ch = IID_CHANNELS
         lin, lin_args = _lineage(teacher_model, since_id)
         rows = self.db.execute(
             f"SELECT shadow_label, shadow_confidence, shadow_ood, teacher_label, student_label, student_confidence, "
-            f"ood_score FROM samples WHERE shadow_version=? AND task_version=?{lin} AND teacher_label IS NOT NULL "
-            f"AND channel IN ({','.join('?' * len(ch))})", (shadow_version, task_version, *lin_args, *ch)).fetchall()
+            f"ood_score, teacher_confidence FROM samples WHERE shadow_version=? AND task_version=?{lin} "
+            f"AND teacher_label IS NOT NULL AND channel IN ({','.join('?' * len(ch))})",
+            (shadow_version, task_version, *lin_args, *ch)).fetchall()
         return rows
 
     def audit_served(self, task_version: str, version: str, limit: int, teacher_model: str | None = None,
                      since_id: int = 0):
         """The most recent audit rows served while `version` was in production: what that student said at the
-        time (label, confidence, OOD score) and the teacher's label. Scoring these rows as served, not re-scored by
-        a model that may since have trained on them, keeps the audit an out-of-sample estimate."""
+        time (label, confidence, OOD score), the teacher's label and the teacher's confidence. Scoring these rows as
+        served, not re-scored by a model that may since have trained on them, keeps the audit an out-of-sample
+        estimate."""
         lin, lin_args = _lineage(teacher_model, since_id)
         rows = self.db.execute(
-            f"SELECT student_label, student_confidence, ood_score, teacher_label FROM samples "
+            f"SELECT student_label, student_confidence, ood_score, teacher_label, teacher_confidence FROM samples "
             f"WHERE task_version=? AND student_version=?{lin} AND channel='audit' AND teacher_label IS NOT NULL "
             f"AND student_label IS NOT NULL ORDER BY id DESC LIMIT ?",
             (task_version, version, *lin_args, limit)).fetchall()
         return (np.array([r[0] for r in rows], dtype=object),
                 np.array([r[1] if r[1] is not None else 0.0 for r in rows], np.float64),
                 np.array([r[2] if r[2] is not None else np.inf for r in rows], np.float64),
-                np.array([r[3] for r in rows], dtype=object))
+                np.array([r[3] for r in rows], dtype=object),
+                _teacher_confidences(r[4] for r in rows))
 
     def counts(self, task_version: str, teacher_model: str | None = None, since_id: int = 0) -> dict:
         """Totals over every teacher, deleted rows included (`prune`); the labelled counts (what training can use)

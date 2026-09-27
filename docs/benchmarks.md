@@ -66,6 +66,44 @@ What the tables say, read together:
 - **The target is a dial, and accuracy does not move with it.** Going from 98% to 95% roughly doubles what the tweet tasks answer locally (18% → 32%, 24% → 44%) and lifts the intent tasks from ~70% to 82–84%; at 90% the easy tasks answer nearly everything. Across the whole range the system's accuracy against the datasets' labels stays within a point of Jev's, because where the student differs from Jev it is about as often right as Jev was. That is a property of these five tasks, not a law: on a task where Jev is much better than the student at the margin, accuracy would fall with the target.
 - **A label Jev never uses blocks the default configuration.** CLINC150 has 151 labels and Jev never answered `reminder_update` in 12,000 messages, so `rare_classes = "wait"` waited for it for the whole stream. With `defer` the loop trains on the classes it has and forwards the rest. Whether the default should change is open.
 
+### A caller's confidence check (`confidence_floor`, 2026-09-27)
+
+`experiments/confidence_floor.py --dataset <task>` uses the splits and head of the threshold-rule table: 5 splits per task, bge-small, target 98%. A caller checks each answer's `confidence` against a cut-off and treats answers below it as unsure. The routing policy is fitted twice on the same calibration rows:
+- **Today:** only a different label counts as disagreeing.
+- **With the floor set to the cut-off** (`Task.confidence_floor`): a row also counts as disagreeing when Jev's own confidence was below it.
+
+The columns:
+- **Flags lost:** of the requests Jev would have flagged, the share that got a local answer at or above the cut-off.
+- **Flags added:** local answers below the cut-off where Jev was sure, as a share of all requests.
+- **Outcome changed:** a different label or the other side of the cut-off, as a share of all requests. **Over 2%** counts the splits where it broke the budget.
+
+Each cell is today → with the floor. (This run encoded on a GPU through PyTorch. ONNX on CPU gives the same embeddings to 1e-6 cosine, and training is the library's numpy code either way.)
+
+**Cut-off 0.6** (Jev's own suggestion for review):
+
+| Task | Jev flags | Coverage | Flags lost | Outcome changed | Over 2% |
+|---|---:|---:|---:|---:|---:|
+| Banking77 | 11.5% | 74.7% → 68.1% | 15.5% → 7.7% | 2.32% → 1.22% | 3/5 → 0/5 |
+| CLINC150 | 5.9% | 78.6% → 74.8% | 19.0% → 12.6% | 2.01% → 1.29% | 2/5 → 0/5 |
+| AG News | 5.0% | 86.7% → 81.9% | 36.8% → 21.2% | 2.54% → 1.43% | 5/5 → 0/5 |
+| TweetEval sentiment | 25.1% | 24.1% → 16.9% | 8.2% → 4.8% | 2.75% → 1.59% | 5/5 → 0/5 |
+| TweetEval offensive | 26.7% | 27.8% → 16.1% | 8.6% → 2.9% | 2.67% → 0.90% | 5/5 → 0/5 |
+
+**Cut-off 0.8:**
+
+| Task | Jev flags | Coverage | Flags lost | Flags added | Outcome changed | Over 2% |
+|---|---:|---:|---:|---:|---:|---:|
+| Banking77 | 24.0% | 74.7% → 56.0% | 16.3% → 4.9% | 3.3% → 0 | 7.65% → 1.24% | 5/5 → 0/5 |
+| CLINC150 | 13.4% | 78.6% → 67.1% | 17.8% → 9.1% | 2.7% → 0 | 5.72% → 1.29% | 5/5 → 0/5 |
+| AG News | 9.9% | 86.7% → 76.6% | 31.2% → 14.1% | 1.8% → 0 | 5.30% → 1.42% | 5/5 → 0/5 |
+| TweetEval sentiment | 40.4% | 24.1% → 13.0% | 7.2% → 3.3% | 2.3% → 0 | 5.85% → 1.48% | 5/5 → 0/5 |
+| TweetEval offensive | 39.0% | 27.8% → 13.0% | 8.0% → 2.6% | 2.7% → 0 | 6.11% → 1.05% | 5/5 → 0/5 |
+
+- **Without a floor, the label bound holds and the check doesn't.** The label disagreement stayed within 2% in every split (worst 1.75%). But the student answers only when confident: no local answer reported less than 0.70, and on the same request its confidence was below Jev's 80–90% of the time. At 0.6, flags are lost. At 0.8, flags are also added on messages Jev was sure about. Counting both, the caller's outcome broke the budget in 20 of 25 splits at 0.6 and in all 25 at 0.8.
+- **With the floor, the budget covers the check:** 0 of 50 splits over.
+- **The price is coverage:** 4–12 points at 0.6 and 10–19 at 0.8, most on the tweet tasks, where Jev itself is unsure about a quarter to two fifths of messages.
+- **Some flags are still lost** (3–21%). The budget is shared between wrong labels and lost flags, and it counts all requests, so on a task where Jev flags 5%, a fifth of the flags fits in 1%.
+
 ## Measurements behind the design decisions
 
 The sections below are the engineering log: one measurement per decision, with the command that produced it.

@@ -35,9 +35,9 @@ The same JSON as Jev's, so the SDK parses it into the same objects. The differen
 
 | Field | Local answer |
 |---|---|
-| `answers.<name>.choice` | The student's label. It matches Jev's on at least `target_agreement` of requests, as a statistical bound (DESIGN.md §7.6), not on every request. |
+| `answers.<name>.choice` | The student's label. It matches Jev's on at least `target_agreement` of requests, as a statistical bound (DESIGN.md §7.6), not on every request. With a confidence floor, the bound also counts the requests Jev would have been less confident about than the floor. |
 | `answers.<name>.probabilities` | The student's distribution over the question's classes |
-| `answers.<name>.confidence` | Jev's definition (the peakedness of the distribution), computed on the student's probabilities |
+| `answers.<name>.confidence` | Jev's definition (the peakedness of the distribution), computed on the student's probabilities, and at least the task's confidence floor if it has one. It is the student's own number, not a prediction of Jev's: without a floor, nothing bounds it. |
 | `model` | The concrete Jev version the student learned from (e.g. `jev-1.13.0`, not `jev-latest`) |
 | `usage` | Zero tokens |
 | `x-typesafe-request-id` | `jvs_<uuid>` (Jev's own ids start with `req_`) |
@@ -45,6 +45,13 @@ The same JSON as Jev's, so the SDK parses it into the same objects. The differen
 | Latency | Typically 11–25 ms at the median on CPU ([benchmarks](benchmarks.md)), against Jev's ~290 ms |
 
 Errors the proxy produces itself (a 429 while Jev's `retry-after` lasts, 502/503/504, 4xx from access checks) use Jev's error shape, so the SDK raises and retries as it does against Jev.
+
+**If your code acts on `confidence`,** for example sending answers below 0.6 to review, set the task's confidence floor to that number (`confidence_floor`, [configuration](configuration.md)). Without it, only the label is covered. The student answers only when it is confident, so a local answer never reports a low confidence (none went below 0.70 in the benchmark), even where Jev would have. On Banking77 with a check at 0.6:
+- **Messages sent to review:** 11.5% calling Jev directly, 9.7% through Jevstiller.
+- **Flags lost:** 15.5% of the messages Jev would have flagged came back with a confident local answer ([benchmarks](benchmarks.md#a-callers-confidence-check-confidence_floor-2026-09-27)).
+- **Higher cut-offs** also flag messages Jev was sure about, because the student's numbers run lower than Jev's.
+
+With the floor set, a local answer stands for "Jev would have given this label with at least this confidence", and the target bounds how often that's wrong.
 
 **Agreement is not accuracy.** Every number Jevstiller reports is agreement with Jev. Where Jev is wrong, the student is wrong the same way, and the audit reports full agreement. Measuring accuracy needs labels from outside Jev.
 
