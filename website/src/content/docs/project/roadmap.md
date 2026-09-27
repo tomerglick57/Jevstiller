@@ -36,6 +36,13 @@ and its own Jev key.
 - **A benchmark on five public tasks,** with Jev's recorded answers, so anyone can rerun it.
 - `rare_classes` defaults to `defer`: a label Jev never uses no longer blocks a task's first student.
 
+**0.4.0:**
+- **The guarantee can cover your confidence check.** Set a task's `confidence_floor` to the Jev confidence below
+  which your code treats answers as unsure. The target then counts those requests too, and local answers report at
+  least the floor. Without it, a check at 0.6 lost 8–37% of the flags Jev would have raised, on the benchmark.
+- **A local answer's `Result.confidence`** in the Python API uses Jev's definition, as the proxy already did.
+- **Apache 2.0** instead of MIT.
+
 ## Next
 
 - **A fourth security audit,** starting with HTTP path handling and forwarding.

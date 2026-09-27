@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-09-27
+
+The agreement guarantee can now cover a caller's confidence check, not just the label.
+
+**Upgrading from 0.3.x:**
+- **Nothing changes until you set a floor.** Existing tasks have none after the upgrade, and `[manager] confidence_floor` applies to new tasks. Set an existing task's floor with `jevstiller admin floor <key> 0.6` or `[tasks."<key>"] confidence_floor`; it retrains once for it.
+- **Python API:** a local answer's `Result.confidence` is now Jev's definition. If your code compares it with a threshold tuned on the old values, retune it. With K classes, the new value is `(K·top − 1)/(K − 1)` for the old value `top` (2 classes: 0.8 becomes 0.6). The proxy's responses are unchanged.
+- **Data directories** from 0.3.x work as they are. 0.4.0 writes a `confidence_floor` field into each task's `task.json` and into new routing policies, and 0.3.x can't read those. To go back, restore a backup taken before the upgrade (docs/compatibility.md).
+- **License:** Apache 2.0 from this release on. 0.3.4 and earlier stay under MIT.
 
 - **The guarantee can cover your confidence check too: `confidence_floor`.** Jev's docs suggest treating a low-confidence answer as unsure, for example sending it to review. Until now only the label was covered.
   - **The problem:** the local model answers only when it's confident, so a local answer never reports a low confidence. Its confidence is its own number, and on the same request it runs lower than Jev's 80–90% of the time. With a check at 0.6, 8–37% of the requests Jev would have flagged came back confident, depending on the task. Counting a different label or a lost flag, the caller's outcome changed on more than 2% of requests in 20 of 25 benchmark splits, while the label bound held in all 25.
