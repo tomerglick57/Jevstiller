@@ -54,6 +54,26 @@ Two margins on top:
 The student's confidence never has to be a true probability. It only has to *rank* inputs so that low-confidence
 ones disagree more often.
 
+## If your code acts on `confidence`
+
+The contract above is about the label. Many callers also check Jev's `confidence` and treat a low one as unsure,
+for example sending it to review below 0.6, as Jev's docs suggest. A local answer's confidence is the student's own
+number, and the student only answers when it is confident, so a local answer never reports a low confidence. On the
+benchmark, a check at 0.6 lost 8–37% of the flags Jev would have raised, and never showed the caller why.
+
+Set the task's `confidence_floor` to the number your code checks, and the contract covers the check too:
+
+```text
+P(the student answers and (disagrees or Jev's confidence < floor)) ≤ β          over all requests
+```
+
+- **Local answers** report at least the floor, so your check keeps them.
+- **Requests Jev would be unsure about** go to Jev, and its own confidence comes back.
+- **Calibration, the shadow test and the audit below** all count it the same way.
+
+The price is coverage: on the benchmark, 4–12 points at a floor of 0.6 and 10–19 at 0.8. See
+[configuration](/reference/configuration/).
+
 ## Checked forever
 
 The bound holds for each student version as it is promoted. Traffic can change after that, and every retrain spends

@@ -3,7 +3,7 @@ title: Python API
 description: Task, Jevstiller, TaskManager, results and status, teachers, encoders and training executors.
 ---
 
-Everything below is importable from `jevstiller` unless noted. It documents 0.3.0. The public API is what
+Everything below is importable from `jevstiller` unless noted. It documents 0.4.0. The public API is what
 `jevstiller`, `jevstiller.server`, `jevstiller.encoders` and `jevstiller.teachers` export; modules starting with
 `_` are internal. Until 1.0, the Python API may
 change in a minor release ([compatibility](/proxy/compatibility/#versions-and-upgrades)); the proxy's HTTP
@@ -12,7 +12,7 @@ behaviour and its settings are what stay stable.
 ## `Task`
 
 ```python
-Task(name: str, instructions, classes, target_agreement: float = 0.98)
+Task(name: str, instructions, classes, target_agreement: float = 0.98, confidence_floor: float | None = None)
 ```
 
 What is being classified: exactly what Jev is asked.
@@ -21,6 +21,10 @@ What is being classified: exactly what Jev is asked.
 - `instructions` may be text or any JSON value, as in Jev's `Choice`.
 - `task.version` is a hash of the instructions and classes (not their order); changing either starts a new lineage.
 - `task.budget` is `1 − target_agreement`, and `target_agreement` is in `[0.5, 1)`.
+- `confidence_floor` is the Jev confidence below which your code treats an answer as unsure. With it, a local answer
+  also counts as disagreeing when Jev would have been less confident, and reports at least the floor
+  ([the guarantee](/concepts/guarantee/#if-your-code-acts-on-confidence)). `None` or `0`: none. Neither it nor
+  `target_agreement` changes `task.version`.
 
 ## `Jevstiller`: one task
 
@@ -56,7 +60,7 @@ with `label=None` and `error` set. Failed items are never recorded.
 |---|---|
 | `label` | the answer |
 | `probs` | distribution over all classes |
-| `confidence` | Jev's confidence, or the student's |
+| `confidence` | Jev's own for its answers. For the student's: Jev's definition (the peakedness of `probs`), at least the confidence floor its version was calibrated for |
 | `source` | `"teacher"` or `"student:vN"` |
 | `routing_reason` | see [routing reasons](/concepts/how-it-works/#routing-reasons) |
 | `latency_ms` | |
@@ -73,17 +77,19 @@ the teacher's answers and returns the results. Always call `complete`, even when
 | `status()` | a `Status` with counts, shares, audit agreement and its bounds, cost, policy, readiness and recent events. `status().report()` gives the text report. |
 | `versions()` | every student version and its state: `candidate`, `shadow`, `production`, `superseded`, `rejected`, `rolled_back` |
 | `set_mode(mode)` | `"auto"` (default), `"teacher_only"`, or `"cascade"` |
+| `set_confidence_floor(floor)` | change the task's confidence floor. A student calibrated for it trains at once and takes over after shadow; until then production serves as it was calibrated |
 | `train_now()` | train a candidate now and wait for it; returns a `TrainReport` |
 | `maintain()` / `drain()` | run one maintenance pass (with `Config(training="manual")`) / wait for background work |
 | `promote(version)` / `rollback()` | make a version production by hand / go back to the previous one |
 | `export(path, version=None)` | copy a version (head, OOD reference, policy, task and encoder identity) into a standalone directory |
-| `evaluate(states, teacher_labels, version=None)` | offline check of a version's policy: coverage, selective disagreement, system agreement |
+| `evaluate(states, teacher_labels, version=None, teacher_confidences=None)` | offline check of a version's policy: coverage, selective disagreement, system agreement. With `teacher_confidences`, a version's confidence floor counts as in calibration |
 | `close()` | stop background work, flush and close the store |
 
 ## `TaskManager`: many tasks
 
 ```python
-TaskManager(data_dir, teacher, encoder, config=None, *, target_agreement=0.98, max_loaded=64, admission=None, ...)
+TaskManager(data_dir, teacher, encoder, config=None, *, target_agreement=0.98, confidence_floor=None, max_loaded=64,
+            admission=None, ...)
 ```
 
 The engine behind the proxy. A task is found by `(tenant, question, model)`, so callers asking the same question
@@ -95,7 +101,7 @@ share one student. Engines load on demand and unload least-recently-used past `m
 | `classify(tenant, instructions, classes, states, model=None)` | like `Jevstiller.classify_batch`, for any question |
 | `route(..., caller=None)` / `complete(routing, outputs)` | the split form, when the caller calls the teacher; `caller` (e.g. an API key's hash) is counted against `max_new_tasks_per_caller` |
 | `tasks(tenant=None)` / `loaded()` | registered / loaded tasks |
-| `set_mode(key, mode)`, `set_target(key, target)` | persisted per task |
+| `set_mode(key, mode)`, `set_target(key, target)`, `set_confidence_floor(key, floor)` | persisted per task; `target_agreement` and `confidence_floor` above are the defaults for new tasks |
 | `delete(key)` / `delete_tenant(tenant)` | remove tasks and all their data |
 | `apply_retention()`, `close()` | blank old text now; shut down |
 
