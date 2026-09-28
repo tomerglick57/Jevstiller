@@ -46,6 +46,9 @@ and its own Jev key.
 ## Next
 
 - **A fourth security audit,** starting with HTTP path handling and forwarding.
+- **An OpenAI-compatible endpoint.** The proxy speaks Jev's API only. A `/v1/chat/completions` front that maps a
+  constrained-choice prompt onto the same task loop would let the same local model, guarantee and audit sit in front
+  of other providers' classification calls. Jev stays the only teacher until then.
 - **Admin controls on tasks that are loading:** a mode or target change during a load reaches the live engine.
 - **An in-process option** for teams that can't run a service: a `TypeSafeClient`-compatible wrapper over the same
   engine.

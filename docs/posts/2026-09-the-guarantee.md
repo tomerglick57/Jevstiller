@@ -59,6 +59,12 @@ Four decisions, each small, together make the contract hold with probability at 
 
 The first version of this got two of the four wrong: it bounded the selective rate and multiplied by an estimated coverage as if it were exact, and it kept the loosest of 200 thresholds that each passed on their own, which selects on noise just like the point estimate. A prior-art review caught both. The corrected rule cost nothing on the Banking77 replay: coverage moved from 70.6% to 70.7%.
 
+## The second promise: "was Jev unsure?"
+
+Jev returns a confidence with every answer, and its docs suggest treating a low one as "unsure": send it to a human, ask again, take the safe branch. A local model that answers only when *it* is confident silently breaks that pattern, because a local answer never comes back unsure. On the benchmark tasks, a check at 0.6 lost 8 to 37% of the flags Jev would have raised.
+
+Since 0.4.0 a task can carry a `confidence_floor`: the Jev confidence below which your code treats an answer as unsure. The calibration, the shadow test and the audit then count a local answer as a disagreement not only when its label differs from Jev's but also when Jev would have answered below the floor. The same 2% budget covers both. Requests Jev would be unsure about go to Jev, and its own confidence comes back. It costs coverage, 4 to 12 points at a floor of 0.6 on the five tasks, and it is off unless you set it.
+
 ## Keeping it true after the first day
 
 A bound at promotion time is not enough, for two reasons. The local model retrains as traffic accumulates, and every retrain spends the 5% again, so over many versions some will miss. And traffic changes, or Jev's answers do.
@@ -91,4 +97,4 @@ bash experiments/reproduce.sh          # the Banking77 result, from Jev's record
 bash experiments/bench.sh --no-record  # all five tasks and the threshold-rule comparison, an hour or two
 ```
 
-Or put it in front of your own Jev calls: `docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller`, point `TYPESAFE_BASE_URL` at it, and read the status report after a few thousand requests. It prints the bound it achieved, and the interval the audit has measured since.
+Apache 2.0. Or put it in front of your own Jev calls: `docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller`, point `TYPESAFE_BASE_URL` at it, and read the status report after a few thousand requests. It prints the bound it achieved, and the interval the audit has measured since.

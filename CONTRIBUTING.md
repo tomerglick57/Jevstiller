@@ -43,6 +43,21 @@ Performance claims come from `benchmarks/` (see `benchmarks/README.md`); every n
 
 A change that touches any of these needs a test.
 
+## How this project is built
+
+Jevstiller is written with an AI coding assistant (Claude Code) by a single maintainer, and says so: commits up to
+0.4.0 carry a `Co-Authored-By: Claude ...` trailer, later ones `Assisted-by: Claude ...`. What that does and does not
+mean:
+
+- **Every number in the docs was run, not generated.** `docs/benchmarks.md` lists the command behind each one, and
+  the headline results replay from recorded Jev answers with `experiments/reproduce.sh` and `experiments/bench.sh`.
+- **The design and the calibration math are the maintainer's responsibility.** `DESIGN.md` records the reasoning,
+  including the two flaws a prior-art review found in the first version of the bound and how they were fixed.
+- **Three security audits** were run against the code and their findings fixed (`docs/security.md`).
+
+Contributions made with AI tools are welcome on the same terms: disclose the tool in the PR (a trailer is enough),
+run the tests, and if you claim a number, include the command that produced it.
+
 ## Pull requests
 
 - One change per PR; keep the diff readable.
