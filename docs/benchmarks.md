@@ -169,6 +169,8 @@ Jev's latency is flat in concurrency: the argument for a local model is the ~300
 
 2.4× end to end. The 67 forwarded decisions cost 21 of the 24.7 seconds: with a 33% forwarded share the chain cannot get much past 3× no matter how fast the local path is, so the number to push is coverage, not encoder speed. The 20× only shows per local answer. One local answer took 1.8 s (a training pass on the CPU encoder); the rest were under 60 ms.
 
+Re-run on 2026-09-28 against the published 0.4.0 image, same script, same machine: Jev direct 65.7 s (p50 321 ms that day), via Jevstiller **16.9 s** with 157 of 200 answered locally at a 10.7 ms median, 0 errors; the warm-up pass ended at 70% local over its last 500 requests, p50 16 ms.
+
 The task's audit at the end of the session, after 15,000 requests and four student versions: agreement with Jev 97.5% on 161 audited requests, 95% interval [94.4%, 99.1%], against a 98% target. Inconclusive, not broken: the interval straddles the target, so the proxy keeps forwarding what the student is unsure about and keeps auditing. The race above was served by the first two versions, whose audits stood at 100% on 100 and 22 samples.
 
 
