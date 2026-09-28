@@ -75,7 +75,7 @@ Agreement is with Jev, not accuracy.
 | `jevstiller_requests_total{route, source}` | `route` = systemone / passthrough; `source` = local / upstream |
 | `jevstiller_request_duration_seconds{source}` | Latency of systemone requests, local vs forwarded |
 | `jevstiller_questions_total{outcome}` | Questions answered locally, or why they went to Jev (`co_deferred`, `key_unverified`, `not_admitted`, `unsupported`, …) |
-| `jevstiller_upstream_responses_total{status}` | `2xx` / `4xx` / `5xx` / `timeout` / `unreachable` / `backoff` / `overload` |
+| `jevstiller_upstream_responses_total{status}` | Jev's `2xx` / `4xx` / `5xx`, or the proxy's own: `timeout` (504), `unreachable` / `error` (502), `invalid_url` (400), `backoff` (429 during `retry-after`), `overload` (503). `retried` counts the one retry of a connection Jev had just closed. |
 | `jevstiller_upstream_duration_seconds` | Jev latency as seen by the proxy |
 | `jevstiller_rejected_total{reason}` | Refused by the proxy: `network`, `token`, `duplicate_auth`, `path`, `body` |
 | `jevstiller_tasks`, `jevstiller_tasks_loaded`, `jevstiller_student_memory_bytes` | Task counts and memory |
@@ -84,6 +84,7 @@ Agreement is with Jev, not accuracy.
 | `jevstiller_task_teacher_calls_per_minute{task, production, mode}` | Per loaded task: how much training it would save |
 | `jevstiller_encoder_wait_seconds` | How long a request would now wait for the shared encoder. Above `max_encoder_wait_ms`, requests are forwarded (`questions_total{outcome="overloaded"}`). |
 | `jevstiller_store_dropped_records_total` | Records the sample stores could not write (disk full, I/O errors). Serving goes on; those requests just don't train anything. |
+| `jevstiller_data_dir_writable` | 1 if the data directory accepts writes, 0 if not (a full disk?). Readiness doesn't depend on it. |
 
 Useful alerts:
 - **Local share:** `rate(requests_total{source="local"}) / rate(requests_total)` dropping suddenly usually means a fallback. Check the tasks' status for `fallback` or `teacher_changed` events.
@@ -121,9 +122,9 @@ Events worth watching (logger `jevstiller`):
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
-| Nothing is answered locally | Tasks not admitted yet (`admit_after`), the first student still collecting (`status` shows what it waits for), or the caller's key not yet accepted | `jevstiller admin tasks` / `status <key>`; wait, or lower `admit_after` / `min_train_samples` in `[engine]` |
+| Nothing is answered locally | Tasks not admitted yet (`admit_after`), the first student still collecting (`status` shows what it waits for), or the caller's key not yet accepted | `jevstiller admin tasks` / `status <key>`; wait, or lower `admit_after` (`[manager]`) or `min_train_samples` (`[engine]`) |
 | A task stopped answering locally | Fallback: audit agreement confidently below target, or Jev's model changed | `status <key>` events; it retrains by itself on answers from the fallback on (`since_id`), usually within a few thousand requests. `mode <key> teacher_only` to hold it while you investigate. `mode <key> auto` ends a fallback by hand (serving the old student again). |
-| "classes below N … blocking" | A rare class | Wait, or set `rare_classes = "defer"` in `[engine]` |
+| "classes below N … blocking" | Rare classes with `rare_classes = "wait"`, or fewer than two classes with enough samples yet | Wait, or use the default, `rare_classes = "defer"` (`[engine]`) |
 | Callers get 401 from the proxy | `access_token` set and the caller doesn't send `x-jevstiller-token` | Add the header in the SDK: `TypeSafeClient(headers={"x-jevstiller-token": ...})` |
 | Callers get 403 | Client network not in `allow_networks` | Add the CIDR, or `trust_forwarded_for` for a reverse proxy |
 | Callers get 413 | Body larger than `max_body_mb` | Raise it (Jev's own limit is ~64k tokens) |

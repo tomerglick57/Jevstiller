@@ -2,7 +2,7 @@
 
 From library (0.1.0) to a self-hosted, drop-in Jev proxy that runs many tasks for many services at once.
 
-Status: draft, 2026-09-24. Tasks are checkboxes; tick them as they land.
+Status: written 2026-09-24; updated 2026-09-28, at 0.4.0. Every phase is done except P3.8. What came after the plan is under "After the plan", what is next under "Backlog" (the public roadmap: website/src/content/docs/project/roadmap.md). Tasks are checkboxes; tick them as they land.
 
 ---
 
@@ -54,6 +54,8 @@ Wire facts the proxy must honour (from the SDK source):
 task_key = hash(tenant, question.type, canonical_json(instructions), canonical_json(criteria), encoder_id)
 lineage  = task_key + resolved Jev model (from response.model)
 ```
+
+As built (DESIGN.md §7.14), the key is `sha256(tenant, question type, sha256(instructions, criteria) [, requested model])`. The encoder isn't part of it: each row records its encoder, and training reads only the current encoder's rows.
 
 The match is exact, never "similar". Jev reads its criteria literally, so one changed word is a different task. A task key hit loads that task's production student (in memory, LRU). A miss starts the normal flow: forward to Jev, record, train when there is enough data.
 
@@ -157,7 +159,7 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 - [x] **P4.6** Data retention. `store_text` per deployment/task (off keeps only hash + embedding). Retention TTL for raw text. `DELETE` of a task or tenant (store + versions). Document what is stored and where.
 - [x] **P4.7** TLS: document running behind a reverse proxy, and optionally built-in TLS (cert/key paths). Callers need a trusted cert if they use `https://`.
 - [x] **P4.8** Run the `security-audit` pass before the first release (request smuggling via pass-through, header injection, path traversal in task names/export, pickle-free model loading — `np.load` must stay `allow_pickle=False`).
-  *Result:* security audit run 1 (2026-09-24) against `65fe64b`. It ran reconnaissance, 4 hunters, adversarial validation, and per-finding independent verification. It found 12 confirmed findings (4 Medium, 6 Low, 2 Informational), all fixed in `1f29f42` with regression tests (`tests/test_audit_fixes.py`). Summary and open hardening items: docs/security.md. Run 2 (2026-09-25) against `a8b75d6` covered the admin API, metrics, settings, backup, CLI, deployment files and the proxy changes since run 1: 15 confirmed findings (4 Medium, 10 Low, 1 Informational), all fixed with regression tests (`tests/test_audit_run2.py`). A third run should weight toward availability and resource limits.
+  *Result:* security audit run 1 (2026-09-24) against `65fe64b`. It ran reconnaissance, 4 hunters, adversarial validation, and per-finding independent verification. It found 12 confirmed findings (4 Medium, 6 Low, 2 Informational), all fixed in `1f29f42` with regression tests (`tests/test_audit_fixes.py`). Summary and open hardening items: docs/security.md. Run 2 (2026-09-25) against `a8b75d6` covered the admin API, metrics, settings, backup, CLI, deployment files and the proxy changes since run 1: 15 confirmed findings (4 Medium, 10 Low, 1 Informational), all fixed with regression tests (`tests/test_audit_run2.py`). Run 3 (2026-09-25) against `42820ab`, weighted toward availability, keys and tenants: 8 findings (3 Medium, 4 Low, 1 Informational), all fixed (`tests/test_audit_run3.py`), two of them in the checks behind the guarantee. A fourth run should start with HTTP path handling and forwarding.
 
 ## Phase 5 — Operations
 
@@ -184,7 +186,7 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
   - `docker-compose.yml`, and a Kubernetes manifest (1 replica, Recreate, probes, security context).
   - Graceful shutdown closes the upstream client, the manager and the training pool, and a restart resumes shadows and pending state.
   - `jevstiller backup` / `restore` (online-consistent, tested while writing).
-  - Deferred: P5.7 (status page).
+  - P5.7 (the status page) followed in 0.3.0.
 
 ## Phase 6 — Testing
 
@@ -220,8 +222,8 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
   - **Confirmation run** (30 min, after the manager fixes): peak 222 MB, drift recovered.
   - **Found in the 24 h run:** the data directory grew to 53 GB. 23 GB of it was model versions that were never deleted (2,515), most of them from a retrain trigger that counted rows answered locally. The other 31.7 GB was stored requests, never deleted. Fixed: the trigger counts teacher answers, versions past `keep_versions` are deleted, and so are stored rows the loop no longer reads.
   - **Still to do:**
-    - the full 24 h run on an otherwise idle machine (the confirmation run's second half overlapped a disk backup: I/O stalls);
-    - a look at the rare keep-alive `ReadError` (2 in 180k, retried by the SDK).
+    - the full 24 h run on current code (the one above predates commit 3fd81da and the releases since), on an otherwise idle machine (the confirmation run's second half overlapped a disk backup: I/O stalls);
+    - ~~a look at the rare keep-alive `ReadError` (2 in 180k, retried by the SDK)~~: done in 0.2.0. The server keeps idle connections for 75 s, and a forwarded request whose pooled connection Jev had just closed is retried once.
 - [x] **P6.7** End-to-end with live Jev through the proxy (after P0): one real task from cold start to promoted student. Record the report.
   *Result (`experiments/live_proxy.py`, docs/benchmarks.md):* the unmodified SDK sent 4,000 Banking77 messages (8 threads, 6-class question) through `jevstiller serve` to the real Jev. There were no errors. The first local answer came at request 3,697, after admission, 2,601 labelled rows and 1,010 shadow rows. The last 500 requests were 50% local. Local answers took p50 15 ms against 292 ms forwarded. It cost $0.067.
 
@@ -252,7 +254,24 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 4. **P4.3–P4.8**, **P2.4–P2.6**, **P6.6–P6.7**, **P7**. 1.0.
 5. Everything else, then the backlog.
 
-## Backlog (after 1.0)
+## After the plan
+
+Done since the phases above, in releases 0.3.0–0.4.0 (details in CHANGELOG.md):
+- [x] **Bounded disk use** (0.3.4): the retrain trigger counts teacher answers, only `keep_versions` finished versions keep their files, and rows nothing reads any more are deleted. The 24 h soak's data: 53 GB → 4.3 GB.
+- [x] **A benchmark anyone can rerun** (0.3.4): five public tasks, Jev's recorded answers, threshold-rule baselines and a target curve (`experiments/bench.sh`, docs/benchmarks.md); `experiments/reproduce.sh` replays the Banking77 result without a key.
+- [x] **`rare_classes = "defer"` by default** (0.3.4).
+- [x] **The guarantee covers a caller's confidence check** (0.4.0): `Task.confidence_floor`, DESIGN.md §7.6.
+
+## Backlog
+
+Next (also on the public roadmap):
+- A fourth security audit, starting with HTTP path handling and forwarding (docs/security.md).
+- An OpenAI-compatible front: a `/v1/chat/completions` endpoint mapping a constrained-choice prompt onto the same task loop. Jev stays the only teacher until then.
+- Admin controls on tasks that are loading: a mode or target change during a load reaches the live engine (docs/security.md, run 3's open items).
+- P3.8, the in-process option.
+- Hooks the hosted repo needs (below).
+
+Later:
 
 - **Tighter, longer-lived guarantees** (from the 2026-09-25 prior-art review; the calibration flaws it found are fixed):
   - Calibrate on post-deployment traffic with inverse-probability weights. Every teacher-labelled row has a known labelling probability: 1 for deferred rows, the audit rate for audit rows. Bound it with betting confidence intervals (BARGAIN, Active Statistical Inference).

@@ -11,6 +11,7 @@ tenancy = "shared"            # "per_key": callers' tasks and data are kept apar
 
 [manager]
 target_agreement = 0.98
+# confidence_floor = 0.6      # if your code treats Jev answers below this confidence as unsure (e.g. review)
 admit_after = 50
 max_loaded = 64
 train_workers = 2

@@ -7,12 +7,15 @@ description: What Jevstiller buys you, in order, and the workloads it is not for
 
 In rough order of importance:
 
-1. **Throughput beyond the rate limit.** Jev allows 1,200 requests a minute per key, a ceiling of about 1.7M
-   classifications a day. A backlog of 100k messages takes 83 minutes through Jev; the student does it in under
-   a minute.
-2. **Latency.** ~300 ms per Jev answer becomes ~16 ms at the median (CPU) for the requests the student handles.
-3. **Availability.** The student keeps answering through Jev outages, rate-limit storms, and restricted network
-   egress.
+1. **Latency.** Jev takes ~300 ms per answer at every load we tried (16 to 64 concurrent callers, up to 190
+   requests/s); a local answer takes ~16 ms at the median on CPU. It matters most for decisions made one after
+   another (an agent loop, a game tick, classify-then-act): 200 of them took 65.7 s straight to Jev and 16.9 s
+   through the proxy ([benchmarks](/project/benchmarks/)).
+2. **Availability and independence.** The student keeps answering through Jev outages, rate limiting, and
+   restricted network egress, and not every classification depends on one external API.
+3. **Headroom.** Jev's published limit is 1,200 requests a minute per key, which TypeSafe enforces at its own
+   discretion (one key sustained 190 requests/s for a minute on 2026-09-26). Local answers don't count against
+   it.
 4. **Cost**, last. Jev is cheap (about $17 per million short support messages with a 5-class question), so
    savings only matter at very high volume.
 

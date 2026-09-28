@@ -2,11 +2,12 @@
 
 A task is identified by what the teacher is asked, never by a caller-chosen name:
 
-    key = hash(tenant, question type, Task.version)      # Task.version = hash(instructions, criteria)
+    key = sha256(tenant, question type, Task.fingerprint [, requested model])[:20]
+                                                          # fingerprint = sha256(instructions, criteria)
 
-so two services asking the same question (same tenant) share one trained student, and any change to the
-instructions or a class description is a different task. Matching is exact on purpose: the teacher reads its
-criteria literally, so a "similar" task is not the same task.
+so two services asking the same question of the same model (same tenant) share one trained student, and any
+change to the instructions or a class description is a different task. Matching is exact on purpose: the
+teacher reads its criteria literally, so a "similar" task is not the same task.
 
 Layout: `<data_dir>/tasks/<key>/` holds `task.json` (the spec, tenant, timestamps) plus the task's sample store
 and versions. One SQLite file per task: tasks never contend for a writer, and deleting a task is deleting a

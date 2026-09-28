@@ -4,8 +4,8 @@ description: Task, Jevstiller, TaskManager, results and status, teachers, encode
 ---
 
 Everything below is importable from `jevstiller` unless noted. It documents 0.4.0. The public API is what
-`jevstiller`, `jevstiller.server`, `jevstiller.encoders` and `jevstiller.teachers` export; modules starting with
-`_` are internal. Until 1.0, the Python API may
+`jevstiller`, `jevstiller.server`, `jevstiller.encoders`, `jevstiller.teachers` and `jevstiller.teachers.jev`
+export; modules starting with `_` are internal. Until 1.0, the Python API may
 change in a minor release ([compatibility](/proxy/compatibility/#versions-and-upgrades)); the proxy's HTTP
 behaviour and its settings are what stay stable.
 
@@ -75,7 +75,7 @@ the teacher's answers and returns the results. Always call `complete`, even when
 | method | does |
 |---|---|
 | `status()` | a `Status` with counts, shares, audit agreement and its bounds, cost, policy, readiness and recent events. `status().report()` gives the text report. |
-| `versions()` | every student version and its state: `candidate`, `shadow`, `production`, `superseded`, `rejected`, `rolled_back` |
+| `versions()` | every student version and its state: `candidate`, `shadow`, `production`, `superseded`, `rejected`, `rolled_back`. `deleted` marks versions whose files are gone (past `Config.keep_versions`) |
 | `set_mode(mode)` | `"auto"` (default), `"teacher_only"`, or `"cascade"` |
 | `set_confidence_floor(floor)` | change the task's confidence floor. A student calibrated for it trains at once and takes over after shadow; until then production serves as it was calibrated |
 | `train_now()` | train a candidate now and wait for it; returns a `TrainReport` |

@@ -1,4 +1,5 @@
-"""Append-only sample store on SQLite. One row per request, whoever served it."""
+"""Sample store on SQLite. One row per request, whoever served it; rows are appended, never changed, and deleted
+once nothing reads them any more (`prune`)."""
 from __future__ import annotations
 
 import hashlib
@@ -126,7 +127,7 @@ def _lineage(teacher_model: str | None, since_id: int = 0) -> tuple[str, tuple]:
 class Store(Protocol):
     """What the engine and the training job need from a sample store. `SampleStore` (one SQLite file per
     task) is the implementation; a shared database (e.g. Postgres, for several replicas) would implement the
-    same methods, plus a way for `training.run_fit_job` to open it read-only from a worker process (today it
+    same methods, plus a way for `_training.run_fit_job` to open it read-only from a worker process (today it
     reopens `SampleStore(path, read_only=True)`)."""
 
     path: Path

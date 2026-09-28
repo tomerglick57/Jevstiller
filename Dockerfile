@@ -2,7 +2,7 @@
 #   docker build -t jevstiller .                                   # CPU, ONNX Runtime, bge-small preloaded
 #   docker build -t jevstiller --build-arg PRELOAD_ENCODER= .      # no preload (downloads on first start)
 #   docker run -p 8080:8080 -v jevstiller-data:/data jevstiller
-# GPU: see docs/deploy.md (EXTRAS=server,gpu on a CUDA base image).
+# GPU: see docs/deploy.md (EXTRAS=gpu on a CUDA base image).
 ARG PYTHON=3.12
 
 FROM python:${PYTHON}-slim AS build

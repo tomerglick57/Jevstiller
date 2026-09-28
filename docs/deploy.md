@@ -20,13 +20,13 @@ About the image:
 - CPU, ONNX Runtime, bge-small baked in. It runs as uid 10001, with `/data` as the volume, and needs no network except to Jev: `HF_HUB_OFFLINE` is set when the encoder is baked in.
 - It works with a read-only root filesystem when `/tmp` is writable, and with all capabilities dropped. `deploy/smoke_test.py` checks this, and more, against any image: `python deploy/smoke_test.py ghcr.io/tomerglick57/jevstiller:0.4.0`. CI runs it on every image build.
 
-To build it yourself: `docker build -t jevstiller .`. Every package in the build is hash-checked: the dependencies from `uv.lock`, and the build tools (the build backend, `build`, `uv`) from `build-requirements.txt`. The project is built without build isolation, so nothing unpinned is fetched. Build arguments: `PRELOAD_ENCODER=base` (or empty, which downloads on first start), `EXTRAS=server,onnx`, `PYTHON=3.12`.
+To build it yourself: `docker build -t jevstiller .`. Every package in the build is hash-checked: the dependencies from `uv.lock`, and the build tools (the build backend, `build`, `uv`) from `build-requirements.txt`. The project is built without build isolation, so nothing unpinned is fetched. Build arguments: `PRELOAD_ENCODER` (default `small`; `base`, or empty, which downloads on first start), `EXTRAS` (default none; `gpu` adds PyTorch), `PYTHON=3.12`.
 
 **GPU:**
 1. Build on a CUDA base image with `--build-arg EXTRAS=gpu` (adds PyTorch), e.g. start from `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` and install Python 3.12.
 2. Run with `--gpus all`. With CUDA available, the encoder runs on PyTorch automatically.
 
-The encoder is the only GPU user. On CPU, bge-small encodes about 1.6–7 ms per text. Measured student-path throughput on CPU is about 130 messages/s, 6.5× Jev's rate limit.
+The encoder is the only GPU user. On CPU, bge-small encodes about 1.6–7 ms per text. Measured student-path throughput on CPU is about 130 messages/s per process, bounded by the encoder; a GPU raises it to ~2,000/s.
 
 ### docker compose
 
@@ -68,6 +68,7 @@ Start from `deploy/jevstiller.toml`. Every key is in [configuration.md](configur
 | Keep request text? | `store_text`, `text_retention_days` | kept |
 | Admin API and metrics | `admin_token_file` | off |
 | How close to Jev? | `target_agreement` (per task via the admin API) | 0.98 |
+| Does your code act on Jev's `confidence` (e.g. review below 0.6)? | `confidence_floor` (per task via the admin API) | none |
 | How much CPU for training? | `train_workers` (× 2 threads each) | 2 |
 
 Secrets (`admin_token`, `access_token`) belong in files or environment variables, not flags (flags show in the process list). `jevstiller config` prints the effective settings with secrets redacted.

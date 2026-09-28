@@ -77,8 +77,9 @@ def build(tag: str, encoder: str) -> str:
     got = [replay_row(d, tag, encoder) for d in DATASETS]
     L += [g for g in got if g] or ["| (no replays yet) | | | | | | | |"]
     if any(g and "†" in g for g in got):
-        L += ["", "† run with `rare_classes = \"defer\"`: Jev never used one of the task's labels, and the default "
-              "(`wait`) would have kept the first student from training for the whole stream."]
+        L += ["", "† run with `rare_classes = \"defer\"`, the default since 0.3.4: Jev never used one of the task's "
+              "labels, and `wait`, the default before, would have kept the first student from training for the "
+              "whole stream."]
     L += ["", "### Threshold rules on the same data", "",
           "`experiments/baselines.py`: 20 random train / calibration / test splits per task, one head per split, "
           "then the confidence threshold is picked on the calibration split by each rule and judged on the test "

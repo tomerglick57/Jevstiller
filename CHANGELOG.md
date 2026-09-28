@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **The status report no longer suggests a setting you already have.** While a first student waits because fewer than two classes have enough samples, the report says so. It used to suggest `rare_classes='defer'`, the default since 0.3.4.
+- **Docs brought up to date with 0.4.0:**
+  - DESIGN.md §5 and §7.5 still described the threshold and out-of-distribution rules from before 0.2.0's correction.
+  - DESIGN.md §3 and the website's "When to use it" led with Jev's rate limit, although one key sustained 190 requests/s against a published 20/s (docs/benchmarks.md).
+  - Also corrected: `/readyz`'s checks, the metrics list, the environment variable for `[encoder] spec`, the Docker `EXTRAS` argument, the development setup, and a heading lost from docs/benchmarks.md.
+  - DEPLOYMENT_PLAN.md now lists what came after the plan and what is next.
+
 ## 0.4.0 — 2026-09-27
 
 The agreement guarantee can now cover a caller's confidence check, not just the label.

@@ -84,7 +84,8 @@ def main() -> None:
     ap.add_argument("--shadow-min", type=int, default=300)
     ap.add_argument("--ood-max-ref", type=int, default=5000)
     ap.add_argument("--rare-classes", default=None, choices=["wait", "defer"],
-                    help="classes below --min-per-class: wait for them (default) or train and defer them to the teacher")
+                    help="classes below --min-per-class: train and defer them to the teacher (Config's default), "
+                         "or wait for them")
     ap.add_argument("--out", default="experiments/results")
     ap.add_argument("--tag", default="")
     a = ap.parse_args()

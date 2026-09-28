@@ -100,7 +100,7 @@ Served by the proxy itself, never forwarded:
 | Path | What |
 |---|---|
 | `GET /healthz` | liveness: `{"ok": true}`, no authentication |
-| `GET /readyz` | readiness: 200 `{"ready": true, "checks": {...}}` or 503 (manager open, data dir writable, encoder loaded); no authentication |
+| `GET /readyz` | readiness: 200 `{"ready": true, "checks": {...}}` or 503 (manager open, encoder loaded); no authentication. A full data dir doesn't fail it: `jevstiller_data_dir_writable` reports that |
 | `GET /metrics` | Prometheus metrics; needs the admin token unless `metrics_public` |
 | `/jevstiller/v1/*` | the admin API (see [operations.md](operations.md)); off (404) without an admin token |
 | `GET /jevstiller/status` | the status page for a browser (admin token as the password; see [operations.md](operations.md)); off (404) without an admin token |

@@ -17,7 +17,7 @@ One replay per task (`experiments/bench.sh`): the dataset's labels are hidden, 2
 | TweetEval sentiment (3) | 57,899 | **22.2%** | **98.70%** | 64.2% / 64.5% | 16% | 114/s | $0.80 |
 | TweetEval offensive (2) | 12,100 | **24.1%** | **98.80%** | 73.8% / 74.2% | 20% | 55/s | $0.18 |
 
-† run with `rare_classes = "defer"`: Jev never used one of the task's labels, and the default (`wait`) would have kept the first student from training for the whole stream.
+† run with `rare_classes = "defer"`, the default since 0.3.4: Jev never used one of the task's labels, and `wait`, the default before, would have kept the first student from training for the whole stream.
 
 ### Threshold rules on the same data
 
@@ -64,7 +64,7 @@ What the tables say, read together:
 - **The bound holds; the point estimate does not.** Over 100 splits across five tasks, Jevstiller's rule exceeded the 2% budget once (TweetEval sentiment, 2.10%); the point-estimate rule, which is what most local-model recipes use, exceeded it on 6 to 12 of 20 splits per task, by up to a full point. The price is four to eight points of coverage. The soft labels buy two to three points of coverage on the many-class tasks and nothing on the easy ones.
 - **Coverage tracks Jev's own consistency, not the task's difficulty.** On the two tweet tasks Jev agrees with the dataset's labels only 64% and 74% of the time, so its answers near the class boundaries are noisy, and a student cannot reproduce noise within a 2% budget: it answers the confident quarter and forwards the rest. The system's accuracy still matches Jev's. The budget is a promise about agreement with Jev, and these tasks show what that costs when Jev itself is unsure.
 - **The target is a dial, and accuracy does not move with it.** Going from 98% to 95% roughly doubles what the tweet tasks answer locally (18% → 32%, 24% → 44%) and lifts the intent tasks from ~70% to 82–84%; at 90% the easy tasks answer nearly everything. Across the whole range the system's accuracy against the datasets' labels stays within a point of Jev's, because where the student differs from Jev it is about as often right as Jev was. That is a property of these five tasks, not a law: on a task where Jev is much better than the student at the margin, accuracy would fall with the target.
-- **A label Jev never uses blocks the default configuration.** CLINC150 has 151 labels and Jev never answered `reminder_update` in 12,000 messages, so `rare_classes = "wait"` waited for it for the whole stream. With `defer` the loop trains on the classes it has and forwards the rest. Whether the default should change is open.
+- **A label Jev never uses blocked the old default configuration.** CLINC150 has 151 labels and Jev never answered `reminder_update` in 12,000 messages, so `rare_classes = "wait"` waited for it for the whole stream. With `defer` the loop trains on the classes it has and forwards the rest. `defer` is the default since 0.3.4.
 
 ### A caller's confidence check (`confidence_floor`, 2026-09-27)
 
@@ -173,7 +173,7 @@ Re-run on 2026-09-28 against the published 0.4.0 image, same script, same machin
 
 The task's audit at the end of the session, after 15,000 requests and four student versions: agreement with Jev 97.5% on 161 audited requests, 95% interval [94.4%, 99.1%], against a 98% target. Inconclusive, not broken: the interval straddles the target, so the proxy keeps forwarding what the student is unsure about and keeps auditing. The race above was served by the first two versions, whose audits stood at 100% on 100 and 22 samples.
 
-
+### Through the proxy, cold start (P6.7)
 
 `python experiments/live_proxy.py --requests 4000 --concurrency 8` → `experiments/results/live-proxy.json`
 

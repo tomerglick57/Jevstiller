@@ -6,6 +6,7 @@ Replays a labelled dataset through Jevstiller with the labels hidden (DESIGN.md 
 
 ```bash
 bash experiments/reproduce.sh                                                     # the README's Banking77 result from Jev's recorded answers (shipped, gzipped); no key
+bash experiments/bench.sh --no-record                                             # the five-task benchmark from recorded answers (release assets); no key, an hour or two
 python3 experiments/run.py --dataset banking77 --teacher jev --encoder base        # the real thing (needs TYPESAFE_API_KEY in .env)
 python3 experiments/run.py --dataset banking77 --teacher oracle --encoder base     # dry run: hidden labels as a perfect teacher
 python3 experiments/run.py --dataset synthetic --teacher synthetic --encoder hash  # no downloads, no GPU, ~1 min
@@ -14,11 +15,16 @@ python3 experiments/record_answers.py --dataset banking77                       
 python3 experiments/confidence_floor.py --dataset banking77                        # a caller's confidence check, with and without Task.confidence_floor (no key)
 ```
 
+`bench.sh` runs, per task, `run.py --teacher cached` (the replay), `baselines.py` (four threshold rules on identical
+splits: soft or hard labels × the bound or a point estimate), then `target_curve.py` (coverage at other targets) and
+`bench.py --write`, which rebuilds the tables in docs/benchmarks.md and the README.
+
 More options: `--backend onnx --device cpu` (CPU-only), `--ood-max-ref N` (size of the OOD reference, default 5,000),
 `--limit`, `--target`, `--audit`, `--min-*`. Replays train `inline` so results don't depend on thread timing.
 All results with their dates are collected in [docs/benchmarks.md](../docs/benchmarks.md).
 
-Arms: `--encoder small|base|large|hash`, `--label-target probs|hard`, `--target 0.98`, `--backend torch|onnx`, `--device cpu|cuda`.
+Arms: `--teacher jev|cached|oracle|synthetic`, `--encoder small|base|large|hash`, `--label-target probs|hard`,
+`--target 0.98`, `--rare-classes defer|wait`, `--backend torch|onnx`, `--device cpu|cuda`.
 
 ## Dry-run results (oracle teacher, Banking77, 77 classes, target agreement 98%)
 

@@ -119,7 +119,7 @@ class Config:
     audit_rate: float = 0.02            # share of all traffic always sent to the teacher
     audit_rate_shadow: float = 0.10     # audit rate while a candidate is in shadow (judge it on fresh traffic quickly)
     audit_rate_elevated: float = 0.10   # audit rate while the drift monitor is suspicious
-    calib_fraction: float = 0.20        # share of IID samples hashed into the calibration split
+    calib_fraction: float = 0.20        # share of IID rows drawn into the calibration split (per request)
     min_train_samples: int = 1000
     min_samples_per_class: int = 50
     min_calib_samples: int = 500

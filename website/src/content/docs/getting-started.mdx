@@ -129,6 +129,13 @@ r = client.system_one(
 r.choices["team"].choice    # "cancellation"
 ```
 
+<Aside title="Does your code act on confidence?">
+If it treats low-confidence answers differently (review below 0.6, say), give the proxy that number as the
+confidence floor, so the agreement budget covers that decision too: `-e JEVSTILLER_CONFIDENCE_FLOOR=0.6` (or
+`confidence_floor` under `[manager]`) for new tasks, `jevstiller admin floor <task key> 0.6` for an existing one.
+See [the guarantee](/concepts/guarantee/#if-your-code-acts-on-confidence).
+</Aside>
+
 ## 4. Watch it learn
 
 At first, every request goes to Jev with the caller's key, and Jev's answer comes back unchanged.

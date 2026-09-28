@@ -196,8 +196,12 @@ class Status:
             if r["rare"]:
                 rare = ", ".join(f"{_inert(c)} {n}" for c, n in sorted(r["rare"].items(), key=lambda kv: kv[1]))
                 line += f"\n  classes below {r['min_per_class']}: {rare}"
-                line += ("   (blocking: set Config.rare_classes='defer' to train without them)" if r["blocked_by_rare"]
-                         else "   (will be deferred to the teacher)")
+                if not r["blocked_by_rare"]:
+                    line += "   (will be deferred to the teacher)"
+                elif r.get("rare_classes") == "wait":
+                    line += "   (blocking: set Config.rare_classes='defer' to train without them)"
+                else:                                   # defer, but fewer than two classes have enough samples
+                    line += "   (blocking: a first student needs two classes with enough samples)"
             L.append(line)
         if self.policy:
             p = self.policy
@@ -226,7 +230,7 @@ class Jevstiller:
     in a background worker thread (default), inline after each batch, or only when `maintain()` is called.
 
     `train_executor`: optional Executor for the training job (reading samples, fitting, writing the bundle).
-    Recommended when several tasks share a process: one `training.train_pool()` (2 low-priority workers) for
+    Recommended when several tasks share a process: one `train_pool()` (2 low-priority workers) for
     all of them. With 5 tasks training at once it cost serving ~1.12x at p99 and finished the fits ~2.5x
     faster than threads (benchmarks/concurrency.py). What matters is capping training's CPU: pool size
     x `config.train_threads`. Default (None): run the job in the maintenance thread (~1.11x, slower fits).
@@ -1004,7 +1008,8 @@ class Jevstiller:
             confidence_floor=self.task.confidence_floor)
 
     def versions(self) -> list[dict]:
-        """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back)."""
+        """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back);
+        `deleted` is set on versions whose files are gone (past `Config.keep_versions`)."""
         return self.registry.versions()
 
     def export(self, path: str | Path, version: str | None = None) -> Path:

@@ -90,7 +90,7 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 | Field | Default | Meaning |
 |---|---|---|
 | `store_text` | `True` | `False` keeps only a hash and the embedding of each request, not its text. |
-| `seed` | `0` | Seeds the audit draw, training and OOD sampling. |
+| `seed` | `0` | Seeds the audit draw, training, OOD sampling and, with the task version, the per-request train/calibration split (so a replay splits the same way on any machine). |
 
 ---
 
@@ -120,7 +120,7 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 
 `TrainScheduler(workers=2, niceness=10, max_retries=2, retry_backoff_s=30.0, pool_factory=None)`: `workers` caps concurrent trainings, and workers run at lower OS priority. Budget about `workers × Config.train_threads` cores for training.
 
-`BatchingEncoder(inner, max_batch=256, max_wait_ms=0.0)`: merges concurrent `encode` calls into one batch without waiting when idle.
+`BatchingEncoder(inner, max_batch=256, max_wait_ms=0.0, max_chars=32768)`: merges concurrent `encode` calls into one batch without waiting when idle. The encoder sees at most `max_chars` characters of a text.
 
 ---
 
@@ -156,7 +156,7 @@ mode = "teacher_only"
 confidence_floor = 0.8   # 0: none
 ```
 
-Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `JEVSTILLER_ADMIN_TOKEN_FILE`, `JEVSTILLER_STORE_TEXT=false`, …
+Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `JEVSTILLER_ADMIN_TOKEN_FILE`, `JEVSTILLER_STORE_TEXT=false`, … (`[encoder] spec` is `JEVSTILLER_ENCODER`).
 - Booleans accept `1/0/true/false/yes/no/on/off`.
 - Lists are comma-separated.
 - `none` unsets an optional value, or clears a list set in the file (`JEVSTILLER_ALLOW_NETWORKS=none`). An empty value (`JEVSTILLER_X=`, or a list of only commas) is an error for every variable, and so is an empty `JEVSTILLER_CONFIG` or `--config ""`: a blank variable from an unset template placeholder must not silently reset a setting.
@@ -225,4 +225,4 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 
 ## Library: `ProxySettings` and `create_app`
 
-For embedding the proxy in your own ASGI stack: `jevstiller.server.create_app(manager, ProxySettings(...), KeyRegistry(salt, ttl), admin_token=..., metrics_public=..., ready=..., closers=[...])`, with `manager` a `jevstiller.TaskManager`. `jevstiller.server` exports these four names (`create_app`, `ProxySettings`, `KeyRegistry`, `load_salt`); the rest of the proxy is internal. `ProxySettings` has the `[proxy]` fields above, with `tenant_map` in place of `tenants` and `max_body_bytes` in place of `max_body_mb`.
+For embedding the proxy in your own ASGI stack: `jevstiller.server.create_app(manager, ProxySettings(...), KeyRegistry(salt, ttl), admin_token=..., metrics_public=..., ready=..., closers=[...])`, with `manager` a `jevstiller.TaskManager`. `jevstiller.server` exports these four names (`create_app`, `ProxySettings`, `KeyRegistry`, `load_salt`); the rest of the proxy is internal. `ProxySettings` has the `[proxy]` fields above, with `tenant_map` in place of `tenants` and `max_body_bytes` in place of `max_body_mb`, and without the `*_file` settings (pass the values) and `trust_forwarded_for` (a setting of the ASGI server in front).

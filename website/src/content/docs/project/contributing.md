@@ -22,6 +22,8 @@ The test suite never needs an API key or a real encoder; `SyntheticTeacher` driv
 1. Rows that went to Jev because the student was unsure never enter the calibration split.
 2. Thresholds are chosen against a confidence bound, never a point estimate.
 3. Anything shown as "agreement" is agreement with the teacher. Never call it accuracy.
+4. Training, calibration and audit statistics use one teacher lineage only.
+5. The proxy answers locally only for an API key Jev has accepted, and never stores or logs a key.
 
 A change that touches any of these needs a test.
 
@@ -29,13 +31,17 @@ A change that touches any of these needs a test.
 
 - One change per PR.
 - Add or update a test in `tests/`.
-- If behaviour changes, update `DESIGN.md` and `CHANGELOG.md` in the same PR.
+- If behaviour changes, update `DESIGN.md`, the relevant `docs/` page and `CHANGELOG.md` in the same PR.
+- Made with an AI tool? Say so in the PR (a trailer is enough). Jevstiller itself is written with Claude Code
+  ([how](https://github.com/tomerglick57/Jevstiller/blob/main/CONTRIBUTING.md#how-this-project-is-built)). If you
+  claim a number, include the command that produced it.
 
 ## This website
 
 The site lives in `website/` and is built with [Starlight](https://starlight.astro.build). Pages are Markdown
-files in `website/src/content/docs/`. The pages under *Run the proxy*, *Configuration*, *Benchmarks* and *How it
-compares* are generated at build time from `docs/*.md` and the README: edit those, not the generated copies.
+files in `website/src/content/docs/`. The pages under *Run the proxy*, *Configuration*, *Benchmarks*, *How it
+compares* and *Writing* are generated at build time from `docs/*.md`, `docs/posts/` and the README: edit those,
+not the generated copies.
 
 ```bash
 cd website
