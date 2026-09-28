@@ -20,6 +20,7 @@ const PAGES = {
 	'docs/compatibility.md': 'proxy/compatibility',
 	'docs/configuration.md': 'reference/configuration',
 	'docs/benchmarks.md': 'project/benchmarks',
+	'docs/posts/2026-09-the-guarantee.md': 'posts/the-guarantee',
 };
 // sections of the README published as pages of their own
 const SECTIONS = [{ file: 'README.md', heading: 'How it compares', slug: 'concepts/comparison' }];

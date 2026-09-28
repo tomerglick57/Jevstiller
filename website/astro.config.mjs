@@ -62,6 +62,10 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Writing',
+					items: [{ label: 'A bound, not a threshold', slug: 'posts/the-guarantee' }],
+				},
+				{
 					label: 'Project',
 					items: [
 						{ label: 'Benchmarks', slug: 'project/benchmarks' },

@@ -1,6 +1,6 @@
 # A local model that answers like Jev 98% of the time, and how we know
 
-*Draft for the launch. Numbers are from [docs/benchmarks.md](../benchmarks.md), reproducible with `bash experiments/bench.sh --no-record`.*
+*September 2026. Every number here is from [the benchmarks](../benchmarks.md), and `bash experiments/bench.sh --no-record` reruns them without an API key.*
 
 If you classify text with [Jev](https://docs.typesafe.ai), every answer is a network call to one vendor and comes back in about 300 ms, at any load. For a batch job that is fine. For an agent loop that decides, acts, and decides again, or a game tick, or anything that classifies then acts, 300 ms per step is the whole budget.
 
