@@ -10,6 +10,12 @@ Jevstiller sits in front of that call, learns a small local model from Jev's own
 
 This post is about what it takes to make that sentence true, why the obvious way of picking a confidence threshold does not make it true, and what it costs.
 
+## What it trains, concretely
+
+A frozen sentence encoder (bge-small, 384 dimensions, ONNX Runtime on CPU) embeds each request. On top of it Jevstiller trains a multinomial logistic regression head, one linear layer and a softmax, by cross-entropy against Jev's full probability distribution over the task's labels rather than its top label alone, with full-batch Adam and early stopping on a validation slice. That is the whole model: a few hundred kilobytes, trained in seconds on a few thousand rows, retrained every 2,000 new Jev answers, versioned, and shadow-tested on live traffic before it is promoted.
+
+Next to it sit two small things that decide when the head is allowed to answer: a k-nearest-neighbour out-of-distribution scorer over the training embeddings, and a routing policy, a confidence threshold plus an OOD cutoff, calibrated on a held-out IID split with the bound described below. A request above the threshold and inside the training distribution gets the head's answer in about 15 ms; everything else goes to Jev. The code paths are in DESIGN.md §7.3 to §7.6.
+
 ## The contract, in one line
 
 Per task, over a window of traffic, call `c` the share of requests the local model answers (coverage), and `e` the share of those where its label differs from Jev's. Requests it does not answer go to Jev and agree with Jev by definition. So the system's agreement with Jev is
