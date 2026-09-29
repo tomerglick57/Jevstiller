@@ -110,7 +110,7 @@ Services keep their own `TYPESAFE_API_KEY`; Jevstiller forwards it and never sto
 Performance of one process (16 vCPU, bge-small on CPU, [docs/benchmarks.md](docs/benchmarks.md)):
 - **Forwarded requests:** Jev's latency plus ~1–4 ms, and up to ~585 req/s at 256 concurrent callers.
 - **Local answers:** ~16 ms p50, ~50 ms p99, up to the encoder's capacity (here ~150–340 texts/s depending on text length; a GPU raises it). Beyond that, the excess is forwarded to Jev, so the proxy is never much slower than Jev.
-- **Memory:** ~300 MB with the encoder, plus a few MB per loaded task. Bounded over a 24-hour soak with ~9 task reloads a second: ~300 MB most of the time, one hump to 654 MB that receded on its own, 308 MB at the end.
+- **Memory:** ~300 MB with the encoder, plus a few MB per loaded task. Bounded over a 12-hour soak of 0.4.0 at 100 requests/s with ~16 task reloads a second: 300–445 MB throughout, 357 MB at the end, 4.3 million requests with no errors (and a 24-hour run of an earlier build: one hump to 654 MB that receded on its own).
 
 Operations: a TOML config, an admin API and CLI (`jevstiller admin ...`), Prometheus `/metrics`, `/readyz`, JSON logs, `jevstiller backup`, and a Docker image and Kubernetes manifest. Docs: [deploy](docs/deploy.md), [operations](docs/operations.md), [the proxy](docs/proxy.md), [configuration](docs/configuration.md), [security](docs/security.md), [compatibility](docs/compatibility.md). Website: [jevstiller.pages.dev](https://jevstiller.pages.dev).
 

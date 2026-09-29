@@ -9,6 +9,10 @@
   - Also corrected: `/readyz`'s checks, the metrics list, the environment variable for `[encoder] spec`, the Docker `EXTRAS` argument, the development setup, and a heading lost from docs/benchmarks.md.
   - DEPLOYMENT_PLAN.md now lists what came after the plan and what is next.
 
+## Unreleased
+
+- Docs: a 12-hour soak of 0.4.0 (4.3 M requests, 0 errors, RSS 300–445 MB, drift at hour 6 recovered by itself) in docs/benchmarks.md; the README's memory line quotes it.
+
 ## 0.4.0 — 2026-09-27
 
 The agreement guarantee can now cover a caller's confidence check, not just the label.

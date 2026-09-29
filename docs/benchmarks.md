@@ -335,7 +335,10 @@ The detection lag is the price of catching a *silent* change through a 2% audit:
     - the store deletes the rows nothing reads any more (docs/configuration.md, `keep_local_rows`).
 
     Run over the soak's data, the fixes take it from **53 GB to 4.3 GB**: 20 stores of 23k–73k rows each (294 MB for the busiest, down from 8.4 GB) and 0.9 GB of versions. Clearing the backlog deleted 6.8 million rows in 18 minutes of 20,000-row steps, then rebuilt each store once, in 3–16 s. The status totals were unchanged.
-- **Open:** repeat on current code, on an otherwise idle machine, to attribute the memory hump and the timeouts.
+
+**12 hours on 0.4.0** (`--minutes 720 --rate 100`, 2026-09-28 16:55 to 04:55, the released code at 96144e3; a light unrelated service shared the box). **4,320,438 requests, 0 errors** of any kind, 703,944 task loads. Server RSS 300–445 MB from hour 2 on, **357 MB at the end**, no hump. Training workers peaked at 1.5 GB in hour 11 while several tasks retrained at once. Drift at hour 6: local share 88–92% before; **25% at +92 s**, 50% at +3.4 min, 80% at +44 min, and 85–89% through hours 7–10 before 90% again at hour 10. Slower to the last few points than the 40-minute run: with a 2% audit, the tail tasks (the rarely-asked questions in the Zipf mix) see few audits an hour and re-earn their students slowly. The driver hung in its teardown again, so these numbers are from its log.
+
+- **Open:** attribute the earlier run's memory hump (not reproduced here), and the harness's teardown hang.
 
 ## Chaos (P6.5)
 
