@@ -46,9 +46,13 @@ and its own Jev key.
 ## Next
 
 - **A fourth security audit,** starting with HTTP path handling and forwarding.
+- **A second teacher: OpenAI's Decisions API.** Announced at DevDay on 2026-09-29, it has the same shape as Jev's
+  `Choice`: a question, a finite set of answers, a confidence. The loop doesn't care which teacher labels a task, only
+  the adapter does, so a Decisions API adapter is the natural next one, as soon as the API is generally available and
+  its responses carry per-answer probabilities (the soft labels are worth 2–3 points of coverage).
 - **An OpenAI-compatible endpoint.** The proxy speaks Jev's API only. A `/v1/chat/completions` front that maps a
   constrained-choice prompt onto the same task loop would let the same local model, guarantee and audit sit in front
-  of other providers' classification calls. Jev stays the only teacher until then.
+  of other providers' classification calls.
 - **Admin controls on tasks that are loading:** a mode or target change during a load reaches the live engine.
 - **An in-process option** for teams that can't run a service: a `TypeSafeClient`-compatible wrapper over the same
   engine.
