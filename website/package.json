@@ -14,12 +14,12 @@
     "media": "node scripts/media.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.42.3",
+    "@astrojs/starlight": "^0.42.4",
     "astro": "^7.2.10",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
-    "wrangler": "^4.137.0"
+    "wrangler": "^4.144.0"
   },
   "private": true
 }
