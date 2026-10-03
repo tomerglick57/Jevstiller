@@ -8,3 +8,11 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  # The website's npm packages, wrangler included (it deploys the site).
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: monthly
+    groups:
+      website:
+        patterns: ["*"]
