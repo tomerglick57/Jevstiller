@@ -1,0 +1,2 @@
+# Changes to CI, releases and deploys need the maintainer's review (with branch protection's "Require review from Code Owners").
+/.github/ @tomerglick57

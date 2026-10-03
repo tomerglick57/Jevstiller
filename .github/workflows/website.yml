@@ -3,6 +3,8 @@ name: website
 #   push to main          -> production, https://jevstiller.pages.dev
 #   PR from this repo     -> preview, https://<branch>.jevstiller.pages.dev
 #   PR from a fork        -> build only (forks get no secrets)
+#   PR from Dependabot    -> build only (Dependabot PRs get no secrets either)
+# Deploys with the wrangler CLI pinned in website/package-lock.json, the same one `npm run deploy` uses.
 # Needs repo secrets CLOUDFLARE_API_TOKEN (Account > Cloudflare Pages > Edit) and CLOUDFLARE_ACCOUNT_ID.
 on:
   push:
@@ -24,7 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      deployments: write   # lets wrangler-action attach the preview URL to the PR
     defaults:
       run:
         working-directory: website
@@ -40,7 +41,10 @@ jobs:
 
       - name: Pick the Pages branch
         id: branch
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          github.event_name != 'pull_request' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.user.login != 'dependabot[bot]')
         env:
           REF: ${{ github.head_ref || github.ref_name }}
         # Branch names go through env and are reduced to [a-zA-Z0-9-], so they can't inject into the command.
@@ -48,10 +52,8 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         if: steps.branch.outcome == 'success'
-        uses: cloudflare/wrangler-action@25853364521e0d392ece9b0c1e97a4b37b638087  # v4.1.2
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: website
-          command: pages deploy --branch ${{ steps.branch.outputs.name }}
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: npx wrangler pages deploy --branch "$BRANCH"
