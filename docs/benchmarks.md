@@ -146,7 +146,7 @@ With a live teacher, coverage came out higher than with the "oracle" labels and 
 
 ### Jev alone, under load (2026-09-26)
 
-`examples/race.py` lanes straight to `api.typesafe.ai`, one key, the 6-class routing question, real Banking77 messages. The published limit is 1,200 requests/minute; none of these runs saw a 429.
+`examples/race.py` lanes straight to `api.typesafe.ai`, one key, the 6-class routing question, real Banking77 messages. The published limit was 1,200 requests/minute at the time (TypeSafe's models page says 80 requests/s and 100,000 tokens/s since early October 2026); none of these runs saw a 429.
 
 | Callers | Duration | Answered | Rate | p50 | p99 |
 |---|---|---|---|---|---|
@@ -283,7 +283,7 @@ Latency is the server's own measurement (its access log). The clients share the 
 
 What it shows:
 
-- **Forwarding adds ~1–4 ms** up to 64 callers. At 256 callers one process forwards ~585 req/s, which is 30 keys' worth of Jev's published 1,200 requests/minute limit (and three times what one key actually sustained on 2026-09-26, below).
+- **Forwarding adds ~1–4 ms** up to 64 callers. At 256 callers one process forwards ~585 req/s, which is 30 keys' worth of the 1,200 requests/minute limit Jev published at the time (and three times what one key actually sustained on 2026-09-26, below).
 - **The local path is bounded by the encoder:** bge-small on this CPU embeds ~150 of these synthetic texts a second (~340/s for short English sentences). Below that, local answers take 11–25 ms p50. Above it, backpressure (`max_encoder_wait_ms`) sends the excess to Jev, so throughput keeps rising with load (424 req/s at 256 callers) instead of collapsing. At 256 callers the machine is CPU-bound, and local answers slow to ~350 ms, still no slower than Jev.
 - **The local shares here are not meaningful:** a language-model encoder can't make sense of the synthetic `w123` vocabulary, so fewer answers pass the confidence gate than with real text (compare the live Banking77 run).
 - **Found and fixed on the way:**

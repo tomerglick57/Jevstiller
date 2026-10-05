@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs: **[Coverage of Jev's API](docs/coverage.md)**, item by item: what is answered locally (repeated `choice` questions on short text), what is forwarded (`noul`, `score`, mixed requests, long states past 256 tokens) and what this design cannot answer (questions that change per request). The README and benchmarks quote TypeSafe's current rate limits (80 requests/s); the JavaScript SDK is listed as untested.
 - **The status report no longer suggests a setting you already have.** While a first student waits because fewer than two classes have enough samples, the report says so. It used to suggest `rare_classes='defer'`, the default since 0.3.4.
 - **Docs brought up to date with 0.4.0:**
   - DESIGN.md §5 and §7.5 still described the threshold and out-of-distribution rules from before 0.2.0's correction.

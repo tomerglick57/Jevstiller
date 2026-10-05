@@ -13,9 +13,8 @@ In rough order of importance:
    through the proxy ([benchmarks](/project/benchmarks/)).
 2. **Availability and independence.** The student keeps answering through Jev outages, rate limiting, and
    restricted network egress, and not every classification depends on one external API.
-3. **Headroom.** Jev's published limit is 1,200 requests a minute per key, which TypeSafe enforces at its own
-   discretion (one key sustained 190 requests/s for a minute on 2026-09-26). Local answers don't count against
-   it.
+3. **Headroom.** Jev's published limits are 80 requests and 100,000 tokens a second (October 2026; 1,200 requests
+   a minute at launch), adjusted at TypeSafe's discretion. Local answers don't count against them.
 4. **Cost**, last. Jev is cheap (about $17 per million short support messages with a 5-class question), so
    savings only matter at very high volume.
 
@@ -36,6 +35,11 @@ The ongoing Jev cost is the audit slice plus whatever the student passes on.
 - **Low volume.** If you'll never collect a few thousand examples, the student never gets trained.
 - **One-off calls.** It only pays off on repetition. Questions built fresh for every request (dynamic criteria) never
   become tasks: a question must be asked `admit_after` times (50 by default) first.
+
+- **Long inputs.** The student reads the first 256 tokens of the state. Classifying a long conversation or document
+  by something near its end stays with Jev.
+- **Yes/no (`noul`) and `score` questions,** for now: they are forwarded. See
+  [coverage of Jev's API](/concepts/coverage/) for the full list.
 
 ## Latency caveat
 

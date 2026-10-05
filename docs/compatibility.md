@@ -8,6 +8,7 @@ What Jevstiller works with, what callers see, and what a version number promises
 |---|---|
 | TypeSafe SDK | `typesafe-sdk` 0.7.1, the current release, with both sync and async clients. CI runs the unmodified SDK against the proxy over real HTTP. 0.7.1 is also the version `pip install jevstiller` requires at least (for the Jev adapter). |
 | Jev | `jev-1.13.0`, which `jev-latest` resolved to on 2026-09-24 and 2026-09-25: a live replay ([benchmarks](benchmarks.md)) and recorded wire responses (`tests/fixtures/jev/`) that every test run replays through the proxy |
+| TypeSafe JavaScript SDK | Not tested. It speaks the same HTTP API, so it should work; nothing in CI checks it. |
 | Other clients | Anything that speaks Jev's HTTP API. The proxy doesn't depend on the SDK; the SDK only needs `TYPESAFE_BASE_URL` (or `base_url=`) pointed at it. |
 
 **When Jev changes:**
