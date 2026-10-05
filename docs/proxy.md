@@ -114,7 +114,10 @@ Other methods on `/healthz` and `/readyz` get 405. Every other path and method (
 
 ## Not yet
 
+What is and isn't answered locally, item by item against Jev's API: [coverage](coverage.md).
+
 - Pre-emptive per-key rate limiting (today: back-off after a 429).
 - Answering part of a request locally and forwarding only the rest.
 - Distilling `noul` / `score` questions (they're always forwarded).
+- Reading a long state: the default encoders see its first 256 tokens.
 - Queueing audit/deferred calls while Jev is unreachable.

@@ -41,6 +41,7 @@ export default defineConfig({
 						{ label: 'How it works', slug: 'concepts/how-it-works' },
 						{ label: 'The guarantee', slug: 'concepts/guarantee' },
 						{ label: 'When to use it', slug: 'concepts/when-to-use' },
+						{ label: "Coverage of Jev's API", slug: 'concepts/coverage' },
 						{ label: 'How it compares', slug: 'concepts/comparison' },
 					],
 				},
