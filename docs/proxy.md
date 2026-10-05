@@ -14,7 +14,7 @@ This works because the SDK takes its server address from `TYPESAFE_BASE_URL` (or
 POST /v1/systemone  {state, model, questions}  +  Authorization: Bearer <caller's key>
         │
         ├─ access checks (network, token, one Authorization header, body limit) ── fail ─► 4xx, never forwarded
-        ├─ not understood (bad JSON, unknown top-level fields, no key, no choice question,
+        ├─ not understood (bad JSON, unknown top-level fields, no key, no choice or noul question,
         │  more than max_questions distinct questions) ────────────────────────────► forward as is, record nothing
         │
         ├─ key NOT accepted by Jev yet ─► forward the whole request first; if Jev answers it (2xx, a valid
@@ -22,7 +22,7 @@ POST /v1/systemone  {state, model, questions}  +  Authorization: Bearer <caller'
         │                                 are recorded as training rows
         │
         └─ key accepted (within key_ttl_s):
-              each distinct choice question ─► its task: key = hash(tenant, "choice",
+              each distinct choice or noul question ─► its task: key = hash(tenant, type,
                                                   sha256(instructions, criteria), requested model)
                                                └─ the task's engine decides: student or teacher
               ├─ every question answerable locally ─► local response, in Jev's exact shape
@@ -30,6 +30,7 @@ POST /v1/systemone  {state, model, questions}  +  Authorization: Bearer <caller'
                               is returned unchanged; each choice answer becomes a training row
 ```
 
+- **Yes/no (`noul`) questions are tasks too** (since 0.5): a two-class student trained on Jev's probability. What it must reproduce is the outcome your code makes of that number, so each such task has cut-offs (`noul_cutoffs`, default `[0.5]`; [configuration](configuration.md)). With `noul_cutoffs = []` they are forwarded as before.
 - **Matching is exact.** Jev reads criteria literally, so a changed word is a different task. The order of classes and of JSON keys doesn't matter. The question is identified by its full SHA-256.
 - **The requested `model` is part of the key.** Callers asking `jev-preview` and `jev-1.13.0` are asking different teachers.
 - **Sharing:** services asking the same question (same tenant) share one task and one student.
@@ -47,6 +48,12 @@ Same JSON as Jev:
  "answers": {"label": {"type": "choice", "choice": "billing", "confidence": 0.93,
                        "probabilities": {"billing": 0.95, "technical": 0.01, "...": 0.0}}},
  "usage": {"input_tokens": 0, "output_tokens": 0}}
+```
+
+A yes/no question is answered as Jev answers it, with the student's probability:
+
+```json
+{"answers": {"urgent": {"type": "noul", "noul": 0.93}}}
 ```
 
 - `model` is the concrete Jev version the task's student was trained against (what `jev-latest` resolved to).
@@ -118,6 +125,6 @@ What is and isn't answered locally, item by item against Jev's API: [coverage](c
 
 - Pre-emptive per-key rate limiting (today: back-off after a 429).
 - Answering part of a request locally and forwarding only the rest.
-- Distilling `noul` / `score` questions (they're always forwarded).
+- Distilling `score` questions (they're always forwarded), and a tolerance on a `noul` answer's value (today: its side of the cut-off).
 - Reading a long state: the default encoders see its first 256 tokens.
 - Queueing audit/deferred calls while Jev is unreachable.

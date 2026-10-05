@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+**Upgrading: yes/no questions are now answered locally, by default.** Until now the proxy forwarded every `noul` question to Jev. From this release a repeated `noul` question becomes a task like a `choice` question does, and once its student has trained and passed its checks, the proxy answers it. Read this before upgrading if your services ask `noul` questions:
+
+- **The default assumes your code compares the probability with 0.5.** "The same answer as Jev" for a number means the same side of a cut-off, and the proxy can't see which cut-off your code uses. If it is not 0.5, set it: `[manager] noul_cutoffs = [0.8]` (or `JEVSTILLER_NOUL_CUTOFFS=0.8`), or per task with `jevstiller admin cutoffs <key> 0.8`. With the wrong cut-off, local answers are only guaranteed to be on Jev's side of 0.5, not of yours.
+- **If your code has three outcomes** (no / send to review / yes), give the two edges: `noul_cutoffs = [0.4, 0.6]`. Requests Jev would put in the band go to Jev.
+- **If your code uses the probability as a number** (a score, a ranking, several cut-offs), turn it off: `noul_cutoffs = []` (or `JEVSTILLER_NOUL_CUTOFFS=none`). A local answer returns the student's own probability; only its side of the cut-off is covered. A tolerance on the value itself is planned.
+- **Nothing changes for `choice` questions,** and a request that mixes question types is still answered locally only when every question in it can be.
+- **Going back:** this release writes `kind` and `cutoffs` into each task's `task.json`, which 0.4.x can't read. Take a backup (`jevstiller backup`) before upgrading if you may need to return.
+
+- **Yes/no (`noul`) questions.** A `noul` question is a two-class task trained on Jev's probability; the student answers with its own probability in Jev's shape, `{"type": "noul", "noul": 0.93}`.
+  - **The contract:** you set the cut-off your code uses (`noul_cutoffs`, default `[0.5]`; at or above it is yes). `target_agreement` then bounds how often a local answer falls on the other side of it than Jev's, with the same calibration, shadow test and audit as for `choice`. Two numbers make an unsure band with three outcomes.
+  - **Measured** on Jev's recorded answers to four yes/no questions (docs/benchmarks.md): 99% of requests answered locally where Jev is decisive (a news topic, a rare intent), 31–42% on noisy tweet questions, and the 2% budget held in 316 of 320 runs.
+  - **Settings:** `[manager] noul_cutoffs`, `[tasks."<key>"] cutoffs`, `jevstiller admin cutoffs <key> 0.8` or `0.4,0.6`, `POST /jevstiller/v1/tasks/{key}/cutoffs`. Changing a task's cut-offs stops its local answers until a student calibrated for the new ones has passed shadow.
+  - **Python API:** `Task.noul(name, instructions, criteria=None, cutoffs=0.5)`; `TaskManager(noul_cutoffs=...)`, and `kind="noul"` on `classify` / `route` / `resolve`; `Jevstiller.set_cutoffs`; `Status.kind` and `.cutoffs`; a teacher answers a noul task with `probs={"false": 1 - p, "true": p}`. `JevTeacher` asks Jev a `Noul` question for such a task.
+  - A first student for a yes/no task can train while one side is still rare (`rare_classes = "defer"`): answers on that side go to Jev until it has enough examples.
+  - `experiments/record_noul.py`, `noul_curve.py` and `noul_replay.py` record and reproduce the measurements.
 - Docs: **[Coverage of Jev's API](docs/coverage.md)**, item by item: what is answered locally (repeated `choice` questions on short text), what is forwarded (`noul`, `score`, mixed requests, long states past 256 tokens) and what this design cannot answer (questions that change per request). The README and benchmarks quote TypeSafe's current rate limits (80 requests/s); the JavaScript SDK is listed as untested.
 - **The status report no longer suggests a setting you already have.** While a first student waits because fewer than two classes have enough samples, the report says so. It used to suggest `rare_classes='defer'`, the default since 0.3.4.
 - **Docs brought up to date with 0.4.0:**

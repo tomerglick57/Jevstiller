@@ -43,15 +43,17 @@ and its own Jev key.
 - **A local answer's `Result.confidence`** in the Python API uses Jev's definition, as the proxy already did.
 - **Apache 2.0** instead of MIT.
 
+**0.5:**
+- **Yes/no (`noul`) questions are answered locally,** on by default. You state the cut-off your code compares
+  Jev's probability with (0.5 unless set), or two for an unsure band, and the target covers landing on the same
+  outcome as Jev. 99% answered locally where Jev is decisive, 31–42% on noisy questions.
+
 ## Next
 
-- **Yes/no questions with a probability (`noul`), answered locally.** Today the proxy forwards them untouched. The
-  head already learns from probabilities, so a `noul` question is a two-class task; what needs deciding is what
-  "the same answer as Jev" means for a number. Two contracts, in this order:
-  - **Same side of your cut-off:** you declare the threshold your code acts on (0.5 by default), and the target
-    covers landing on the same side as Jev.
-  - **Within a tolerance:** the local probability is within ±ε of Jev's on at least the target share of requests,
-    for pipelines that use the number itself. To be measured on recorded Jev answers before it is promised.
+- **A tolerance for yes/no answers.** Since 0.5 a `noul` answer is covered for its side of your cut-off. For
+  pipelines that use the number itself: the local probability within ±ε of Jev's on at least the target share of
+  requests. Measured as realistic where Jev is decisive (±0.1 on 96% of requests for two of four benchmark
+  questions) and weak where it isn't (12–18%).
 - **A fourth security audit,** starting with HTTP path handling and forwarding.
 - **A second teacher: OpenAI's Decisions API.** Announced at DevDay on 2026-09-29, it has the same shape as Jev's
   `Choice`: a question, a finite set of answers, a confidence. The loop doesn't care which teacher labels a task, only
@@ -73,7 +75,7 @@ and its own Jev key.
   - a confidence budget spread across retrains;
   - one learned deferral score instead of two thresholds.
 - **Forward only the questions** the student couldn't answer, instead of the whole request.
-- **Distil Jev's `score` questions** (ordinal), after `noul`.
+- **Distil Jev's `score` questions** (ordinal).
 - **Postgres store and multiple replicas.**
 - **Per-class thresholds and class-weighted budgets.**
 

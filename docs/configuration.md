@@ -12,6 +12,8 @@ Every knob, where it lives, and its default. There are four layers:
 A task's target is `Task.target_agreement` (default 0.98). The disagreement budget is `β = 1 − target_agreement`.
 
 **`Task.confidence_floor`** (default none) is for callers who treat a Jev answer below some confidence as unsure: they send it to review, or to another model. Without a floor, only the label counts, and a local answer can be confident where Jev would have been unsure ([compatibility](compatibility.md)). With a floor:
+
+**`Task.kind = "noul"`** makes a yes/no task (Jev's `noul` question): `Task.noul(name, instructions, criteria=None, cutoffs=0.5)`. Its teacher answers with the probability of yes, and **`Task.cutoffs`** says what "the same answer" means for that number. One value is the cut-off your code compares the probability with (at or above it is yes; default 0.5). Two values are an unsure band: below the first is no, at or above the second is yes, in between is unsure. `target_agreement` then covers landing on the same outcome as the teacher. A local answer returns the student's own probability; the value itself is not covered, only its outcome. A yes/no task has no `confidence_floor`: the band is its unsure zone.
 - A local answer counts as disagreeing when its label differs, **or when Jev would have answered with less confidence than the floor**. So the target covers the caller's unsure decision too.
 - Local answers report a confidence of at least the floor, so the caller's check keeps them.
 - Requests Jev would be unsure about go to Jev, and Jev's own confidence comes back.
@@ -104,6 +106,7 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 | `config` | `Config()` | Copied per task. |
 | `target_agreement` | `0.98` | For new tasks. |
 | `confidence_floor` | `None` | `Task.confidence_floor` for new tasks. |
+| `noul_cutoffs` | `0.5` | `Task.cutoffs` for new yes/no tasks: a number, or two for an unsure band. `None`: yes/no questions are not tasks (`resolve` raises `ValueError`). |
 | `max_loaded` | `64` | Loaded engines. Idle ones are unloaded least-recently-used. |
 | `max_memory_mb` | `None` | Also unload while the loaded students exceed this (heads + OOD references). |
 | `admission` | `Admission()` | `Admission(min_requests=50, window_s=86400, max_tracked=100_000)`: a question becomes a task only after this many requests in the window. Earlier requests go to the teacher unrecorded (`not_admitted`). |
@@ -113,7 +116,7 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 | `idle_ttl_s` | `None` | Delete tasks unused this long (off by default). |
 | `text_retention_s` | `None` | Securely blank stored request text older than this, in every task, about hourly. |
 | `hash_key` | `None` | Key for the per-row text hash (HMAC); `jevstiller serve` passes the deployment salt. |
-| `task_overrides` | `None` | `{task key: {"target_agreement": x, "mode": m, "confidence_floor": f}}` applied at startup; `set_target()` / `set_mode()` / `set_confidence_floor()` change them at runtime (persisted in `task.json`). |
+| `task_overrides` | `None` | `{task key: {"target_agreement": x, "mode": m, "confidence_floor": f, "cutoffs": [c]}}` applied at startup; `set_target()` / `set_mode()` / `set_confidence_floor()` / `set_cutoffs()` change them at runtime (persisted in `task.json`). |
 | `train_executor` | `None` | Shared executor for training jobs. `TrainScheduler(workers=2)` is fair across tenants and prioritises by teacher-call rate. `None` trains in each task's maintenance thread. |
 | `janitor_interval_s` | `5.0` | How often the janitor unloads, persists last-seen times, and cleans up. |
 | `blas_threads` | `1` | Caps BLAS threads process-wide for serving (2.4× throughput at 50 tasks). `None` leaves it alone. |
@@ -142,6 +145,7 @@ allow_networks = ["10.0.0.0/8"]
 [manager]
 target_agreement = 0.98
 confidence_floor = 0.6   # callers treat Jev's answers below this confidence as unsure (default: none)
+noul_cutoffs = [0.5]     # yes/no questions: callers' cut-off (default); [0.4, 0.6]: an unsure band; []: forward them
 text_retention_days = 30
 
 [encoder]
@@ -154,6 +158,7 @@ audit_rate = 0.03
 target_agreement = 0.99
 mode = "teacher_only"
 confidence_floor = 0.8   # 0: none
+cutoffs = [0.8]          # a yes/no task's own cut-off, or two numbers for an unsure band
 ```
 
 Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `JEVSTILLER_ADMIN_TOKEN_FILE`, `JEVSTILLER_STORE_TEXT=false`, … (`[encoder] spec` is `JEVSTILLER_ENCODER`).
@@ -199,6 +204,7 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 |---|---|---|---|
 | `target_agreement` | `0.98` | `--target-agreement` | For new tasks. |
 | `confidence_floor` | none | `--confidence-floor` | For new tasks: the Jev confidence below which your code treats an answer as unsure (top of this page). `none` or `0`: none. Change an existing task's with `jevstiller admin floor` or `[tasks]`. |
+| `noul_cutoffs` | `[0.5]` | | For new yes/no (`noul`) tasks: the cut-off your code compares Jev's probability with, or two numbers for an unsure band (top of this page). `[]`, or `none` in the environment: forward yes/no questions as before 0.5. |
 | `max_loaded` | `64` | `--max-loaded` | Tasks kept in memory (LRU). |
 | `max_memory_mb` | none | | Also unload while loaded students exceed this. |
 | `admit_after` / `admit_window_s` | `50` / `86400` | `--admit-after` | Requests (one per distinct question per request) within the window before a question becomes a task. |
@@ -221,7 +227,7 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 
 ### [engine] and [tasks]
 
-`[engine]` takes any `Config` field (first section of this page) and applies to every task. `[tasks."<key>"]` sets `target_agreement`, `mode` and/or `confidence_floor` for one task at startup. Changes made through the admin API are saved in the task's `task.json`, and survive restarts.
+`[engine]` takes any `Config` field (first section of this page) and applies to every task. `[tasks."<key>"]` sets `target_agreement`, `mode`, `confidence_floor` and/or `cutoffs` (a yes/no task) for one task at startup. Changes made through the admin API are saved in the task's `task.json`, and survive restarts.
 
 ## Library: `ProxySettings` and `create_app`
 

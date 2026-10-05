@@ -104,6 +104,24 @@ Each cell is today → with the floor. (This run encoded on a GPU through PyTorc
 - **The price is coverage:** 4–12 points at 0.6 and 10–19 at 0.8, most on the tweet tasks, where Jev itself is unsure about a quarter to two fifths of messages.
 - **Some flags are still lost** (3–21%). The budget is shared between wrong labels and lost flags, and it counts all requests, so on a task where Jev flags 5%, a fifth of the flags fits in 1%.
 
+### Yes/no questions (`noul`), 2026-10-05
+
+Jev's `noul` answers were recorded for four yes/no questions over the datasets above (`experiments/record_noul.py`, 67,128 calls, $0.91): "Is this news article about sports?" (AG News, 25% yes), "Is the customer reporting a lost or stolen card?" (Banking77, 0.9% yes), "Is the overall sentiment of this tweet negative?" (19% yes) and "Is this tweet offensive?" (33% yes).
+
+**What a two-class head can promise** (`experiments/noul_curve.py`): ten random train / calibration / test splits per question, bge-small, target 98%. The head is trained on Jev's probability; the threshold is picked on the calibration split by the loop's rule, with "agrees" defined by the contract in the column, and judged on 2,000 test rows. Each cell is the share of test requests answered locally.
+
+| Question | Head vs Jev (mean abs. difference) | Same side of 0.5 | Same side of 0.8 | Unsure band 0.4–0.6 | Within ±0.1 | Within ±0.05 |
+|---|---:|---:|---:|---:|---:|---:|
+| Sports article? | 0.019 | 98.7% | 98.6% | 98.6% | 96.4% | 92.8% |
+| Lost or stolen card? | 0.019 | 99.1% | 99.1% | 99.1% | 95.6% | 85.7% |
+| Negative tweet? | 0.149 | 41.5% | 58.7% | 34.0% | 18.2% | 11.3% |
+| Offensive tweet? | 0.166 | 30.6% | 43.9% | 22.7% | 11.6% | 5.8% |
+
+- **The bound holds as it does for `choice`:** over the 320 runs behind this table (four questions, eight contracts, ten splits) the 2% budget was exceeded 4 times, by at most 0.2 points, inside the 5% the bound allows.
+- **Coverage follows Jev's decisiveness.** Where Jev's probability is almost always near 0 or 1, the head reproduces it to within 0.02 and nearly everything is answered locally under every contract, the tolerance ones included. On the tweet questions Jev itself is unsure (its yes/no matches the dataset's labels 73–82% of the time), the head is off by about 0.15, and only the confident third is answered.
+- **Accuracy against the datasets' labels is Jev's:** 98.6% / 98.4% (Jev / head, sports), 99.3% / 99.4% (card), 81.5% / 81.9% (negative), 72.9% / 71.8% (offensive), at a cut-off of 0.5 and before any routing.
+- **The cut-off and band columns are what 0.5 ships** (`noul_cutoffs`). The tolerance columns are measured for the planned extension, not a setting yet.
+
 ## Measurements behind the design decisions
 
 The sections below are the engineering log: one measurement per decision, with the command that produced it.

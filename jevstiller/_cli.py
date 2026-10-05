@@ -114,7 +114,7 @@ def _serve(a: argparse.Namespace) -> None:
         idle_ttl_s=s.idle_ttl_days * 86400 if s.idle_ttl_days else None,
         text_retention_s=s.text_retention_days * 86400 if s.text_retention_days else None,
         train_executor=scheduler, blas_threads=s.blas_threads, hash_key=salt, task_overrides=s.tasks,
-        confidence_floor=s.confidence_floor)
+        confidence_floor=s.confidence_floor, noul_cutoffs=s.noul_cutoffs)
     settings = ProxySettings(upstream=s.upstream, upstream_timeout_s=s.upstream_timeout_s,
                              max_upstream_inflight=s.max_upstream_inflight, tenancy=s.tenancy,
                              key_ttl_s=s.key_ttl_s, price_per_mtok=s.price_per_mtok, tenant_map=s.tenants,
@@ -216,6 +216,8 @@ def _admin(a: argparse.Namespace) -> None:
         raise SystemExit(f"`admin {a.action}` needs a {'tenant' if a.action == 'delete-tenant' else 'task key'}")
     if a.action == "floor" and a.value is None:                # none is a value here: it removes the floor
         raise SystemExit("`admin floor` needs a value: a confidence in [0, 1], or none")
+    if a.action == "cutoffs" and a.value is None:
+        raise SystemExit("`admin cutoffs` needs a value: a cut-off like 0.8, or an unsure band like 0.4,0.6")
     k = quote(a.key or "", safe="")                    # a name with # or ? must not address another tenant
     calls = {
         "tasks": ("GET", "/tasks", None),
@@ -225,6 +227,7 @@ def _admin(a: argparse.Namespace) -> None:
         "target": ("POST", f"/tasks/{k}/target", {"target_agreement": _num(a.value)}),
         "floor": ("POST", f"/tasks/{k}/floor",
                   {"confidence_floor": None if str(a.value).lower() in ("none", "off") else _num(a.value)}),
+        "cutoffs": ("POST", f"/tasks/{k}/cutoffs", {"cutoffs": [_num(x) for x in str(a.value).split(",")]}),
         "train": ("POST", f"/tasks/{k}/train", None),
         "promote": ("POST", f"/tasks/{k}/promote", {"version": a.value}),
         "rollback": ("POST", f"/tasks/{k}/rollback", None),
@@ -325,10 +328,11 @@ def main(argv: list[str] | None = None) -> None:
     ad.add_argument("--token")
     ad.add_argument("--token-file")
     ad.add_argument("--json", action="store_true", help="raw JSON for `status`")
-    ad.add_argument("action", choices=["tasks", "status", "versions", "mode", "target", "floor", "train", "promote",
-                                       "rollback", "delete", "delete-tenant", "stats"])
+    ad.add_argument("action", choices=["tasks", "status", "versions", "mode", "target", "floor", "cutoffs", "train",
+                                       "promote", "rollback", "delete", "delete-tenant", "stats"])
     ad.add_argument("key", nargs="?", help="task key (tenant for `tasks` / `delete-tenant`)")
-    ad.add_argument("value", nargs="?", help="mode, target agreement, confidence floor (or none) or version")
+    ad.add_argument("value", nargs="?", help="mode, target agreement, confidence floor (or none), cut-offs (0.8 or "
+                                              "0.4,0.6) or version")
     ad.set_defaults(func=_admin)
 
     a = ap.parse_args(argv)

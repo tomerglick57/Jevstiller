@@ -22,8 +22,8 @@ import numpy as np
 from ._calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper
 from ._registry import Bundle, Registry
 from ._store import Record, SampleStore, text_hash
-from ._task import MAX_TEXT_CHARS, MODES, Config, State, Task, check_floor, state_text
-from ._training import FitJob, run_fit_job
+from ._task import MAX_TEXT_CHARS, MODES, Config, State, Task, check_cutoffs, check_floor, noul_labels, state_text
+from ._training import FitJob, decide, run_fit_job
 from .encoders import Encoder, HashEncoder
 from .teachers import Teacher, TeacherOutput, peakedness
 
@@ -123,6 +123,11 @@ def _floor_text(floor: float | None) -> str:
     return "none" if floor is None else f"{floor:.2f}"
 
 
+def _cutoffs_text(cutoffs) -> str:
+    c = tuple(cutoffs or ())
+    return "no cut-off" if not c else f"cut-off {c[0]:.2f}" if len(c) == 1 else f"unsure from {c[0]:.2f} to {c[1]:.2f}"
+
+
 def _inert(x) -> str:
     """`x` as text with control characters escaped: class names come from callers, and the report is printed
     to operators' terminals (`jevstiller admin status`), where escape sequences would run."""
@@ -160,13 +165,16 @@ class Status:
     teacher_model: str | None = None        # the teacher lineage the loop trains and audits against
     readiness: dict | None = None           # before the first student: what training is waiting for
     confidence_floor: float | None = None   # the task's (Task.confidence_floor); production's own is in `policy`
+    kind: str = "choice"                    # "noul": a yes/no question answered with a probability
+    cutoffs: tuple | None = None            # a yes/no task's cut-offs (Task.cutoffs); production's own are in `policy`
 
     def report(self, events: bool = True) -> str:
         """The status as text. `events=False` leaves out the last five loop events."""
         L = []
         L.append(f"Task: {self.task}   version {self.task_version}   mode: {self.mode}   "
                  f"audit rate {self.audit_rate:.0%}"
-                 + (f"   confidence floor {self.confidence_floor:.2f}" if self.confidence_floor is not None else ""))
+                 + (f"   confidence floor {self.confidence_floor:.2f}" if self.confidence_floor is not None else "")
+                 + (f"   yes/no, {_cutoffs_text(self.cutoffs)}" if self.kind == "noul" else ""))
         L.append(f"Production: {self.production or '-'}   Shadow: {self.shadow or '-'}")
         L.append(f"Requests: {self.requests:,}   student {self.student_share:.1%}   teacher {self.teacher_share:.1%}")
         ch = "   ".join(f"{k} {v:,}" for k, v in sorted(self.channels.items()))
@@ -268,6 +276,7 @@ class Jevstiller:
         self._prune_more = False            # the last row prune stopped at its limit: continue on the next pass
         self.labels = task.labels
         self._lidx = {c: i for i, c in enumerate(self.labels)}
+        self._noul = task.kind == "noul"
         self._prod: Bundle | None = self._load(self.registry.production) if self.registry.production else None
         shadows = self.registry.in_state("shadow")
         self._shadow: Bundle | None = self._load(shadows[-1]) if shadows else None
@@ -370,9 +379,27 @@ class Jevstiller:
         self.store.event("confidence_floor", previous=previous, current=floor)
         self._kick()
 
+    def set_cutoffs(self, cutoffs: Sequence[float] | float) -> None:
+        """Change a yes/no task's cut-offs (Task.cutoffs): one number, or two for an unsure band. The student
+        answers nothing until a version calibrated for the new cut-offs has trained and passed shadow: its
+        answers were only checked against the old ones."""
+        if not self._noul:
+            raise ValueError("cutoffs are for noul tasks")
+        cutoffs = check_cutoffs(cutoffs)
+        with self._state:
+            previous = self.task.cutoffs
+            if cutoffs == previous:
+                return
+            self.task = replace(self.task, cutoffs=cutoffs)
+            self._retrain_requested = True
+        self.store.event("cutoffs", previous=list(previous), current=list(cutoffs))
+        self._kick()
+
     def _calibrated(self, bundle: Bundle | None) -> bool:
-        """The version's routing policy was calibrated for the task's confidence floor."""
-        return bundle is not None and bundle.policy.confidence_floor == self.task.confidence_floor
+        """The version's routing policy was calibrated for the task's confidence floor and, for a yes/no task,
+        its cut-offs."""
+        return (bundle is not None and bundle.policy.confidence_floor == self.task.confidence_floor
+                and tuple(bundle.policy.cutoffs or ()) == tuple(self.task.cutoffs or ()))
 
     @property
     def audit_rate(self) -> float:
@@ -391,10 +418,10 @@ class Jevstiller:
 
     # ---- inference --------------------------------------------------------------
     def _run(self, b: Bundle, X: np.ndarray):
+        """A version's probabilities, routing scores, OOD scores and answers for these embeddings."""
         P = b.student.predict_proba(X)
-        conf = P.max(axis=1)
-        ood = b.ood.score(X)
-        return P, conf, ood
+        pred, conf = decide(P, self.labels, b.policy.cutoffs if self._noul else None)
+        return P, conf, b.ood.score(X), pred
 
     def classify(self, text: State, teacher: Teacher | None = None) -> Result:
         """Classify one state: text, or a JSON object/array. Raises TeacherError if it needed the teacher and
@@ -442,12 +469,17 @@ class Jevstiller:
         with self._state:                                   # one consistent snapshot of the routing state
             mode, prod, shadow, audit_rate = self.mode, self._prod, self._shadow, self.audit_rate
             draws = self.rng.random(n)
-        P = conf = ood = None
+        if self._noul:                                      # a version checked against other cut-offs answers
+            if prod is not None and not self._calibrated(prod):     # nothing, and isn't audited as if it had
+                prod, mode = None, "teacher_only"
+            if shadow is not None and not self._calibrated(shadow):
+                shadow = None
+        P = conf = ood = pred = None
         if prod is not None:
-            P, conf, ood = self._run(prod, X)
-        sP = sconf = sood = None
+            P, conf, ood, pred = self._run(prod, X)
+        sconf = sood = spred = None
         if shadow is not None:
-            sP, sconf, sood = self._run(shadow, X)
+            _, sconf, sood, spred = self._run(shadow, X)
 
         recs: list[Record] = []
         results: list[Result | None] = [None] * n
@@ -462,13 +494,13 @@ class Jevstiller:
                        state_type="text" if isinstance(texts[i], str) else "json")
             if prod is not None:
                 r.student_version = prod.name
-                r.student_label = self.labels[int(P[i].argmax())]
+                r.student_label = str(pred[i])
                 r.student_probs = {c: float(P[i, j]) for j, c in enumerate(self.labels)}
                 r.student_confidence = float(conf[i])
                 r.ood_score = float(ood[i])
             if shadow is not None:
                 r.shadow_version = shadow.name
-                r.shadow_label = self.labels[int(sP[i].argmax())]
+                r.shadow_label = str(spred[i])
                 r.shadow_confidence = float(sconf[i])
                 r.shadow_ood = float(sood[i])
 
@@ -517,15 +549,23 @@ class Jevstiller:
             raise ValueError(f"{len(outs)} teacher answers for {len(to_teacher)} items")
         teacher_name = teacher_name or self.teacher.name
         failed: dict[int, Exception] = {}
+        cutoffs = self.task.cutoffs
         for i, o in zip(to_teacher, outs, strict=True):
             if isinstance(o, Exception):
                 failed[i] = o
                 continue
             r = recs[i]
-            r.teacher_label, r.teacher_probs, r.teacher_confidence = o.label, o.probs, o.confidence
+            label = o.label
+            if self._noul:                                  # the outcome the teacher's probability stands for
+                try:
+                    label = str(noul_labels([float(o.probs["true"])], cutoffs)[0])
+                except (KeyError, TypeError, ValueError):
+                    failed[i] = ValueError("a noul answer needs the teacher's yes probability in probs['true']")
+                    continue
+            r.teacher_label, r.teacher_probs, r.teacher_confidence = label, o.probs, o.confidence
             r.teacher_model, r.teacher_input_tokens = o.model or teacher_name, o.input_tokens
             r.teacher_cost_usd, r.teacher_request_id, r.teacher_latency_ms = o.cost_usd, o.request_id, o.latency_ms
-            results[i] = Result(o.label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
+            results[i] = Result(label, o.probs, o.confidence, "teacher", r.routing_reason, 0.0)
 
         n = len(recs)
         dt = (time.perf_counter() - routed.t0) * 1000 / max(n, 1)
@@ -665,7 +705,8 @@ class Jevstiller:
         per, need = c["per_class_train"], self.cfg.min_samples_per_class
         rare = {l: per.get(l, 0) for l in self.labels if per.get(l, 0) < need}
         enough = len(self.labels) - len(rare)
-        blocked = bool(rare) and (self.cfg.rare_classes == "wait" or enough < 2)
+        # a yes/no head can start with one rare side: its answers on that side are deferred to the teacher
+        blocked = bool(rare) and (self.cfg.rare_classes == "wait" or enough < (1 if self._noul else 2))
         ready = (c["labelled_train"] >= self.cfg.min_train_samples and c["labelled_calib"] >= self.cfg.min_calib_samples
                  and not blocked)
         return {"ready": ready, "train": (c["labelled_train"], self.cfg.min_train_samples),
@@ -756,6 +797,7 @@ class Jevstiller:
             self._last_train_id = self.store.max_id()
             self._retrain_requested = False
             lineage, since, floor = self._teacher_model, self._since_id, self.task.confidence_floor
+            cutoffs = self.task.cutoffs
         # production is compared on the same calibration rows, unless it was trained on other data or calibrated
         # for another confidence floor: then the comparison isn't fair
         prod = self._prod if self._current(self._prod) and self._calibrated(self._prod) else None
@@ -767,7 +809,7 @@ class Jevstiller:
                               epochs=self.cfg.student_epochs, l2=self.cfg.student_l2,
                               patience=self.cfg.student_patience, seed=self.cfg.seed,
                               threads=self.cfg.train_threads, ood_max_ref=self.cfg.ood_max_ref,
-                              confidence_floor=floor),
+                              confidence_floor=floor, cutoffs=list(cutoffs) if cutoffs else None),
                      hard_labels=self.cfg.label_target == "hard",
                      importance_weighting=self.cfg.importance_weighting,
                      prod_dir=str(self.registry.root / prod.name.replace(":", "-")) if prod else None,
@@ -817,12 +859,13 @@ class Jevstiller:
             return TrainReport(None, res.n_train, res.n_calib, res.policy, float("nan"), res.calib_agreement,
                                False, "teacher changed during training" if self._teacher_model != lineage
                                else "drift during training")
-        if res.policy.confidence_floor != self.task.confidence_floor:     # the floor changed while it trained
+        if (res.policy.confidence_floor != self.task.confidence_floor      # the floor or cut-offs changed meanwhile
+                or tuple(res.policy.cutoffs or ()) != tuple(self.task.cutoffs or ())):
             shutil.rmtree(staged, ignore_errors=True)
             with self._state:
                 self._retrain_requested = True
             return TrainReport(None, res.n_train, res.n_calib, res.policy, float("nan"), res.calib_agreement,
-                               False, "confidence floor changed during training")
+                               False, "confidence floor or cut-offs changed during training")
         policy, fit = res.policy, res.fit
         meta = {"n_train": res.n_train, "n_calib": res.n_calib, "train_loss": fit["loss"], "epochs": fit["epochs"],
                 "prod_calib_coverage": res.prod_calib_coverage,
@@ -1005,7 +1048,7 @@ class Jevstiller:
             labelled_calib=c["labelled_calib"], policy=prod.policy.__dict__ if prod else None,
             events=self.store.events(), teacher_errors=teacher_errors, teacher_model=lineage,
             readiness=None if self._current(prod) else self._readiness(c),
-            confidence_floor=self.task.confidence_floor)
+            confidence_floor=self.task.confidence_floor, kind=self.task.kind, cutoffs=self.task.cutoffs)
 
     def versions(self) -> list[dict]:
         """Every student version with its state (candidate, shadow, production, superseded, rejected, rolled_back);
@@ -1026,7 +1069,7 @@ class Jevstiller:
         (dst / "task.json").write_text(json.dumps({
             "name": self.task.name, "instructions": self.task.instructions, "classes": self.task.classes,
             "target_agreement": self.task.target_agreement, "confidence_floor": self.task.confidence_floor,
-            "task_version": self.task.version,
+            "kind": self.task.kind, "cutoffs": self.task.cutoffs, "task_version": self.task.version,
             "encoder_id": self.encoder.id, "version": name, "labels": self.labels,
             "teacher_model": self.registry.load(name).meta.get("teacher_model"), "config": self.cfg.to_dict()},
             indent=2, ensure_ascii=False))
@@ -1046,10 +1089,11 @@ class Jevstiller:
             return {"version": None}
         if X is None:
             X = self.encoder.encode([state_text(t) for t in texts])
-        P, conf, ood = self._run(b, X)
-        pred = np.array([self.labels[i] for i in P.argmax(axis=1)], dtype=object)
+        P, conf, ood, pred = self._run(b, X)
         acc = b.policy.accepts(conf, ood, pred)
         t = np.asarray(teacher_labels)
+        if self._noul and t.dtype.kind in "fiu":            # the teacher's yes probabilities, as their outcomes
+            t = noul_labels(t, b.policy.cutoffs)
         n = int(acc.sum())
         if teacher_confidences is None:
             k = int((acc & (pred != t)).sum())

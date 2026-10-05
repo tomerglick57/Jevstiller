@@ -59,8 +59,9 @@ class SyntheticTeacher:
     name = "synthetic"
 
     def __init__(self, world: SyntheticWorld, temperature: float = 0.7, noise: float = 0.5,
-                 price_per_mtok: float = 0.042):
+                 price_per_mtok: float = 0.042, noul_positive: Sequence[str] = ()):
         self.world = world
+        self.noul_positive = list(noul_positive)    # a yes/no task: "yes" is the world's classes named here
         self.temperature = temperature
         self.noise = noise
         self.price_per_mtok = price_per_mtok
@@ -78,7 +79,8 @@ class SyntheticTeacher:
         return counts
 
     def answer(self, text: str, task: Task) -> TeacherOutput:
-        labels = task.labels
+        noul = task.kind == "noul"
+        labels = self.world.labels if noul else task.labels
         s = self._scores(text, labels)
         m = max(s.values())
         exps = {c: math.exp((v - m) / self.temperature) for c, v in s.items()}
@@ -86,6 +88,11 @@ class SyntheticTeacher:
         probs = {c: e / z for c, e in exps.items()}
         label = max(probs, key=probs.get)
         toks = len(text.split()) + 40
+        if noul:                                    # the probability that the text is of a "yes" class
+            p = min(1.0, sum(probs[c] for c in self.noul_positive))
+            return TeacherOutput(label="true" if p >= 0.5 else "false", probs={"false": 1.0 - p, "true": p},
+                                 confidence=abs(2 * p - 1), input_tokens=toks,
+                                 cost_usd=toks * self.price_per_mtok / 1e6, latency_ms=0.0)
         return TeacherOutput(label=label, probs=probs, confidence=peakedness(probs),
                              input_tokens=toks, cost_usd=toks * self.price_per_mtok / 1e6,
                              latency_ms=0.0)

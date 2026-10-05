@@ -23,7 +23,8 @@ The proxy never fails a request that Jev would have answered.
 | Request | What Jevstiller does |
 |---|---|
 | `POST /v1/systemone` whose questions are all `choice` questions of trained tasks, from a key Jev has accepted | Answered locally when every question clears its task's routing policy. Otherwise the whole request goes to Jev, and its choice answers become training rows. |
-| `POST /v1/systemone` with other question types (`noul`, `score`, …) | Forwarded. Other types are never answered locally; the request's choice answers are still recorded. |
+| `POST /v1/systemone` whose questions are `choice` and yes/no (`noul`) questions of trained tasks | The same: answered locally when every question clears its task's policy. A `noul` answer is `{"type": "noul", "noul": p}` with the student's probability, on Jev's side of your cut-off (`noul_cutoffs`, default 0.5) on at least `target_agreement` of requests. |
+| `POST /v1/systemone` with other question types (`score`, …), a `noul` question with fields beyond `instructions` and `criteria`, or any `noul` question when `noul_cutoffs` is empty | Forwarded. The request's choice and noul answers are still recorded. |
 | `POST /v1/systemone` the proxy doesn't understand: invalid JSON, unknown top-level fields, no bearer key, more than `max_questions` distinct questions | Forwarded as is; nothing is recorded |
 | Any other path or method (`GET /v1/models`, …) | Forwarded unchanged |
 | `/healthz`, `/readyz`, `/metrics`, `/jevstiller/*` | Served by the proxy, never forwarded |

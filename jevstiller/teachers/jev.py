@@ -48,17 +48,28 @@ class JevTeacher:
         self.client = TypeSafeClient(api_key=api_key, model=model, retry=RetryPolicy(max_retries=max_retries),
                                      timeout=timeout)
         self._Choice = __import__("typesafe_sdk").Choice
+        self._Noul = getattr(__import__("typesafe_sdk"), "Noul", None)
 
     def _one(self, text: State, task: Task) -> TeacherOutput:
         self.bucket.wait()
-        q = {self.question_id: self._Choice(instructions=task.instructions, criteria=dict(task.classes))}
+        noul = task.kind == "noul"
+        if noul:                                         # criteria as the caller gave them: only the sides described
+            criteria = {k: v for k, v in task.classes.items() if v is not None} or None
+            q = {self.question_id: self._Noul(instructions=task.instructions, criteria=criteria)}
+        else:
+            q = {self.question_id: self._Choice(instructions=task.instructions, criteria=dict(task.classes))}
         t0 = time.perf_counter()
         res = self.client.system_one(state=text, questions=q)
         dt = (time.perf_counter() - t0) * 1000
-        ans = res.choices[self.question_id]
-        probs = {c: float(ans.probabilities.get(c, 0.0)) for c in task.labels}
-        z = sum(probs.values()) or 1.0
-        probs = {c: p / z for c, p in probs.items()}
+        if noul:                                         # Jev's yes probability as a two-class distribution
+            p = float(res.nouls[self.question_id].noul)
+            label, probs, confidence = "true" if p >= 0.5 else "false", {"false": 1.0 - p, "true": p}, abs(2 * p - 1)
+        else:
+            ans = res.choices[self.question_id]
+            probs = {c: float(ans.probabilities.get(c, 0.0)) for c in task.labels}
+            z = sum(probs.values()) or 1.0
+            probs = {c: p / z for c, p in probs.items()}
+            label, confidence = str(ans.choice), float(ans.confidence)
         toks = 0
         usage = getattr(res, "usage", None)
         if usage is not None and getattr(usage, "input_tokens", None) is not None:
@@ -74,7 +85,7 @@ class JevTeacher:
         except Exception:
             request_id = None
         resolved = getattr(res, "model", None)       # jev-latest -> the concrete version that answered
-        return TeacherOutput(label=str(ans.choice), probs=probs, confidence=float(ans.confidence),
+        return TeacherOutput(label=label, probs=probs, confidence=confidence,
                              input_tokens=toks, cost_usd=toks * self.price_per_mtok / 1e6,
                              latency_ms=dt, request_id=request_id, raw=raw,
                              model=f"jev:{resolved}" if isinstance(resolved, str) and resolved else self.name)

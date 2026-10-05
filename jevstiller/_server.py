@@ -52,7 +52,7 @@ from starlette.routing import Route
 from ._admin import Admin
 from ._manager import Routing, TaskManager
 from ._metrics import Registry as MetricsRegistry
-from ._task import canonical_json, state_text
+from ._task import canonical_json, noul_labels, state_text
 from .teachers import TeacherOutput
 
 log = logging.getLogger("jevstiller.server")
@@ -67,6 +67,7 @@ RESPONSE_DROP = HOP_BY_HOP | {"content-encoding",         # httpx hands us the d
 PROXY_TOKEN_HEADER = "x-jevstiller-token"
 FORWARD_DROP = HOP_BY_HOP | {PROXY_TOKEN_HEADER}          # the proxy's own credential never reaches Jev
 KNOWN_FIELDS = {"state", "model", "questions"}
+NOUL_FIELDS = {"type", "instructions", "criteria"}      # a noul question with anything else is forwarded as is
 LOCAL_PATHS = ("/healthz", "/readyz", "/metrics")          # served by the proxy itself, never forwarded
 PROBE_PATHS = ("/healthz", "/readyz")                     # GET/HEAD need no access token (load balancers)
 ALL_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
@@ -185,15 +186,33 @@ def _under(path: str, base: str) -> bool:
     return not base or path == base or path.startswith(base + "/")
 
 
-def _usable(a: Any) -> bool:
-    """Jev's answer to one question is a usable choice answer."""
-    return isinstance(a, dict) and a.get("type") == "choice" and isinstance(a.get("probabilities"), dict)
+def _usable(a: Any, kind: str = "choice") -> bool:
+    """Jev's answer to one question is a usable answer of the question's kind: a choice with its distribution,
+    or a noul with its probability."""
+    if not isinstance(a, dict) or a.get("type") != kind:
+        return False
+    if kind == "noul":
+        p = a.get("noul")
+        return isinstance(p, (int, float)) and not isinstance(p, bool) and 0.0 <= p <= 1.0
+    return isinstance(a.get("probabilities"), dict)
 
 
-def _answered(answer: Mapping, groups: Mapping[str, list[str]]) -> set[str]:
+def _kind(q: Mapping) -> str:
+    return "noul" if q.get("type") == "noul" else "choice"
+
+
+def _answered(answer: Mapping, groups: Mapping[str, list[str]], specs: Mapping[str, dict]) -> set[str]:
     """The specs whose question Jev answered usably."""
     answers = answer.get("answers") or {}
-    return {spec for spec, names in groups.items() if _usable(answers.get(names[0]))}
+    return {spec for spec, names in groups.items() if _usable(answers.get(names[0]), _kind(specs[spec]))}
+
+
+def _noul_value(res: Any, cutoffs: Sequence[float]) -> float:
+    """The yes probability a local noul answer returns: the student's, to four decimals unless rounding would
+    move it across a cut-off (the answer was checked for the side it is on, not for a rounded neighbour)."""
+    p = float(res.probs["true"])
+    v = round(p, 4)
+    return v if str(noul_labels([v], cutoffs)[0]) == res.label else p
 
 
 def _no_cookies() -> CookieJar:
@@ -355,16 +374,21 @@ class Proxy:
                 and req["questions"] and isinstance(req.get("model"), str) and "state" in req and key):
             return await self._plain_forward(request, body, kh, "not_understood", t0, log_rec)
 
-        # one routing per distinct choice question; duplicates under other names share it
+        # one routing per distinct choice or noul question; duplicates under other names share it
         groups: dict[str, list[str]] = {}
         specs: dict[str, dict] = {}
         others: list[str] = []
+        noul = self.manager.noul_cutoffs is not None
         for name, q in req["questions"].items():
-            if not (isinstance(q, dict) and q.get("type") == "choice" and isinstance(q.get("criteria"), dict)):
-                others.append(name)
-                continue
             try:
-                spec = canonical_json([q.get("instructions"), q["criteria"]])
+                if isinstance(q, dict) and q.get("type") == "choice" and isinstance(q.get("criteria"), dict):
+                    spec = canonical_json([q.get("instructions"), q["criteria"]])
+                elif (noul and isinstance(q, dict) and q.get("type") == "noul" and set(q) <= NOUL_FIELDS
+                      and (q.get("criteria") is None or isinstance(q["criteria"], dict))):
+                    spec = canonical_json(["noul", q.get("instructions"), q.get("criteria")])
+                else:
+                    others.append(name)
+                    continue
             except Exception:
                 others.append(name)
                 continue
@@ -388,7 +412,8 @@ class Proxy:
             if answer is not None:
                 self.keys.accept(kh)
             if answer is not None and not self._overloaded():       # record it, unless the encoder is saturated
-                routings, _ = await self._route(groups, specs, tenant, req, answered=_answered(answer, groups), kh=kh)
+                routings, _ = await self._route(groups, specs, tenant, req,
+                                                answered=_answered(answer, groups, specs), kh=kh)
                 if routings is not None:                # None: routing failed and released everything
                     try:
                         self._defer_all(routings, "key_unverified")
@@ -532,8 +557,8 @@ class Proxy:
                     admit = answered is not None and spec in answered
                     routings[spec] = await anyio.to_thread.run_sync(
                         lambda q=q, admit=admit: self.manager.route(
-                            tenant, q.get("instructions"), q["criteria"], [req["state"]], req["model"],
-                            stexts=stexts, X=X, admit=admit, caller=kh))
+                            tenant, q.get("instructions"), q.get("criteria"), [req["state"]], req["model"],
+                            stexts=stexts, X=X, admit=admit, caller=kh, kind=_kind(q)))
                 except ValueError:
                     unsupported.append(spec)            # not a valid task (e.g. one class): Jev decides
         except Exception:
@@ -555,14 +580,20 @@ class Proxy:
                     r.engine.defer(r.routed, i, reason)
 
     def _teacher_output(self, a: Any, labels: Sequence[str], tokens: int, latency_ms: float, rid: str | None,
-                        model: Any) -> TeacherOutput | Exception:
+                        model: Any, kind: str = "choice") -> TeacherOutput | Exception:
         try:
-            if not (isinstance(a, dict) and a.get("type") == "choice" and isinstance(a.get("probabilities"), dict)):
-                raise ValueError("no choice answer")
-            probs = {c: float(a["probabilities"].get(c, 0.0)) for c in labels}
-            z = sum(probs.values()) or 1.0
-            return TeacherOutput(label=str(a.get("choice")), probs={c: p / z for c, p in probs.items()},
-                                 confidence=float(a.get("confidence", 0.0)), input_tokens=tokens,
+            if not _usable(a, kind):
+                raise ValueError(f"no {kind} answer")
+            if kind == "noul":          # Jev's yes probability as two classes; the engine names the outcome
+                p = float(a["noul"])
+                label, probs, z = "true" if p >= 0.5 else "false", {"false": 1.0 - p, "true": p}, 1.0
+                confidence = abs(2 * p - 1)
+            else:
+                probs = {c: float(a["probabilities"].get(c, 0.0)) for c in labels}
+                z = sum(probs.values()) or 1.0
+                label, confidence = str(a.get("choice")), float(a.get("confidence", 0.0))
+            return TeacherOutput(label=label, probs={c: p / z for c, p in probs.items()},
+                                 confidence=confidence, input_tokens=tokens,
                                  cost_usd=tokens * self.settings.price_per_mtok / 1e6, latency_ms=latency_ms,
                                  request_id=rid, model=f"jev:{model}" if isinstance(model, str) and model else None)
         except Exception as e:
@@ -591,14 +622,15 @@ class Proxy:
         for spec, r in routings.items():
             first = groups[spec][0]
             if r.engine is None:
-                if r.uncounted and _usable(answers.get(first)):
+                if r.uncounted and _usable(answers.get(first), r.task.kind):
                     try:
                         if await anyio.to_thread.run_sync(self.manager.observe, r):
                             admitted.append(spec)
                     except Exception:
                         log.exception("admission count for task %s failed", r.key)
                 continue
-            out = self._teacher_output(answers.get(first), r.task.labels, tokens, latency_ms, rid, model)
+            out = self._teacher_output(answers.get(first), r.task.labels, tokens, latency_ms, rid, model,
+                                       r.task.kind)
             try:
                 await anyio.to_thread.run_sync(self.manager.complete, r, [out] * len(r.routed.to_teacher), "jev")
             except Exception:
@@ -617,8 +649,11 @@ class Proxy:
                 released.add(spec)                       # complete() releases the engine even if it raises
                 [res] = await anyio.to_thread.run_sync(self.manager.complete, r, [], "jev")
                 for name in names:     # confidence: Jev's definition, at least the floor the student was calibrated for
-                    answers[name] = {"type": "choice", "choice": res.label,
-                                     "confidence": res.confidence, "probabilities": res.probs}
+                    if r.task.kind == "noul":
+                        answers[name] = {"type": "noul", "noul": _noul_value(res, r.task.cutoffs)}
+                    else:
+                        answers[name] = {"type": "choice", "choice": res.label,
+                                         "confidence": res.confidence, "probabilities": res.probs}
                     detail[name] = res.source
                 lineage = r.engine._teacher_model or ""
                 model = model or (lineage[4:] if lineage.startswith("jev:") else None)
