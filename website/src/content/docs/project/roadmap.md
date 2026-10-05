@@ -46,7 +46,7 @@ and its own Jev key.
 **0.5:**
 - **Yes/no (`noul`) questions are answered locally,** on by default. You state the cut-off your code compares
   Jev's probability with (0.5 unless set), or two for an unsure band, and the target covers landing on the same
-  outcome as Jev. 99% answered locally where Jev is decisive, 31–42% on noisy questions.
+  outcome as Jev. 98% answered locally where Jev is decisive, 22–36% on noisy questions.
 
 ## Next
 

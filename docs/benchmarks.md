@@ -108,6 +108,20 @@ Each cell is today → with the floor. (This run encoded on a GPU through PyTorc
 
 Jev's `noul` answers were recorded for four yes/no questions over the datasets above (`experiments/record_noul.py`, 67,128 calls, $0.91): "Is this news article about sports?" (AG News, 25% yes), "Is the customer reporting a lost or stolen card?" (Banking77, 0.9% yes), "Is the overall sentiment of this tweet negative?" (19% yes) and "Is this tweet offensive?" (33% yes).
 
+**Through the loop** (`experiments/noul_replay.py`): each question's stream replayed through `Jevstiller` as a proxy task would see it (bootstrap, training, shadow, promotion, a 2% audit), default settings, bge-small on CPU, target 98%, with the recorded answers as the teacher. 2,000 rows are held out and scored at the end against Jev's side of the cut-off.
+
+| Question | Cut-offs | Stream | Held-out coverage | Agreement with Jev's outcome | First local answer | Local share of the stream | Audit agreement | Accuracy: Jev / system |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Sports article? | 0.5 | 18,000 | **98.2%** | **99.70%** | request 3,450 | 77.9% | 99.6% (n = 273) | 98.7% / 98.6% |
+| Lost or stolen card? | 0.5 | 11,083 | **98.0%** | **99.40%** | request 3,550 | 65.3% | 100% (n = 129) | 99.1% / 99.6% |
+| Negative tweet? | 0.5 | 17,998 | **35.9%** | **98.75%** | request 3,450 | 26.1% | 100% (n = 144) | 81.2% / 81.7% |
+| Offensive tweet? | 0.5 | 12,047 | **22.0%** | **99.45%** | request 3,550 | 14.5% | 99.3% (n = 277) | 73.2% / 73.3% |
+| Negative tweet? | 0.4, 0.6 (unsure band) | 17,998 | **25.5%** | **99.00%** | request 3,450 | 16.6% | 100% (n = 77) | – |
+
+Every run met the 98% target on the held-out rows. The card question is yes 0.9% of the time: the first student trained with the yes side still rare and deferred to Jev, as `rare_classes = "defer"` allows for a yes/no task. "Local share of the stream" includes the cold start, about 3,500 requests with the default thresholds.
+
+**Against live Jev** (2026-10-05, this code as `jevstiller serve`, the unmodified SDK, 8 threads): 6,000 Banking77 messages with one `noul` question ("Is the customer asking about a card?"). The task was admitted after 50 requests, its first student was promoted near request 3,900, and 1,540 of the last 3,000 requests were answered locally (71% of the last 500) as `{"type": "noul", "noul": 0.9463}`. Audit: 48 of 48 on Jev's side of 0.5. No errors; $0.056 of Jev calls.
+
 **What a two-class head can promise** (`experiments/noul_curve.py`): ten random train / calibration / test splits per question, bge-small, target 98%. The head is trained on Jev's probability; the threshold is picked on the calibration split by the loop's rule, with "agrees" defined by the contract in the column, and judged on 2,000 test rows. Each cell is the share of test requests answered locally.
 
 | Question | Head vs Jev (mean abs. difference) | Same side of 0.5 | Same side of 0.8 | Unsure band 0.4–0.6 | Within ±0.1 | Within ±0.05 |
