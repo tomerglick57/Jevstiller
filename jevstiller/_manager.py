@@ -38,7 +38,7 @@ from ._core import Jevstiller, Result, Routed, TeacherError
 from ._registry import atomic_write_text
 from ._scheduler import TaskExecutor, TrainScheduler
 from ._store import SampleStore
-from ._task import Config, State, Task, canonical_json, check_floor
+from ._task import Config, State, Task, canonical_json, check_cutoffs, check_floor
 from .encoders import Encoder
 from .teachers import Teacher, TeacherOutput
 
@@ -136,9 +136,12 @@ class TaskInfo:
     model: str | None = None            # the teacher model requested by callers, part of the key
     mode: str | None = None             # operator override of Config.mode (admin API / config file)
     confidence_floor: float | None = None   # Task.confidence_floor
+    kind: str = "choice"                # "noul": a yes/no question; part of the key
+    cutoffs: list | None = None         # Task.cutoffs of a yes/no task
 
     def task(self) -> Task:
-        return Task(self.key, self.instructions, self.classes, self.target_agreement, self.confidence_floor)
+        return Task(self.key, self.instructions, self.classes, self.target_agreement, self.confidence_floor,
+                    self.kind, tuple(self.cutoffs) if self.cutoffs else None)
 
 
 class Admission:
@@ -209,7 +212,8 @@ class TaskManager:
                  janitor_interval_s: float = 5.0, blas_threads: int | None = 1,
                  text_retention_s: float | None = None, max_tasks: int | None = 10_000,
                  hash_key: bytes | None = None, task_overrides: Mapping[str, Mapping[str, Any]] | None = None,
-                 max_new_tasks_per_caller: int | None = 100, confidence_floor: float | None = None):
+                 max_new_tasks_per_caller: int | None = 100, confidence_floor: float | None = None,
+                 noul_cutoffs: Sequence[float] | float | None = 0.5):
         if blas_threads:
             # Serving runs many small matrix products from many threads; BLAS's default of one thread per
             # core for each of them oversubscribes the CPU (1 thread: 2.4x throughput, 4x lower p99 in
@@ -224,6 +228,7 @@ class TaskManager:
         self.cfg = config or Config()
         self.target_agreement = target_agreement
         self.confidence_floor = check_floor(confidence_floor)
+        self.noul_cutoffs = None if noul_cutoffs is None else check_cutoffs(noul_cutoffs)
         self.max_loaded, self.max_memory_mb = max_loaded, max_memory_mb
         self.admission = admission if admission is not None else Admission()
         self.max_tasks_per_tenant, self.idle_ttl_s = max_tasks_per_tenant, idle_ttl_s
@@ -260,6 +265,8 @@ class TaskManager:
                     self.set_mode(key, o["mode"])
                 if "confidence_floor" in o:
                     self.set_confidence_floor(key, o["confidence_floor"])
+                if "cutoffs" in o:
+                    self.set_cutoffs(key, o["cutoffs"])
             else:
                 log.warning("config overrides for unknown task %s ignored", key)
         self._stop = threading.Event()
@@ -270,7 +277,7 @@ class TaskManager:
 
     def _migrate_key(self, info: TaskInfo, directory: Path) -> TaskInfo:
         """Tasks stored under an older key scheme are re-keyed (directory renamed) to the current one."""
-        expected = task_key(info.tenant, info.task(), model=info.model)
+        expected = task_key(info.tenant, info.task(), info.kind, model=info.model)
         if info.key == expected and directory.name == expected:
             return info
         target = self.root / expected
@@ -320,17 +327,38 @@ class TaskManager:
         if e is not None:
             e.set_confidence_floor(floor)
 
+    def set_cutoffs(self, key: str, cutoffs: Sequence[float] | float) -> None:
+        """Change a yes/no task's cut-offs (Task.cutoffs): one number, or two for an unsure band. Persisted; the
+        loaded engine answers nothing locally until a student calibrated for them passes shadow
+        (Jevstiller.set_cutoffs)."""
+        cutoffs = check_cutoffs(cutoffs)
+        with self._lock:
+            info = self._index[key]
+            if info.kind != "noul":
+                raise ValueError("cutoffs are for noul tasks")
+            info.cutoffs = list(cutoffs)
+            e = self._engines.get(key)
+        self._write_info(info)
+        if e is not None:
+            e.set_cutoffs(cutoffs)
+
     # ---- lookup -----------------------------------------------------------------
-    def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
-                model: str | None = None) -> tuple[str, Task]:
+    def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str] | None,
+                model: str | None = None, kind: str = "choice") -> tuple[str, Task]:
         """The key and Task for a question, without creating anything. Raises ValueError for a question
-        that cannot be a task (fewer than 2 or more than 255 classes, non-JSON values)."""
-        spec = Task("_", instructions, classes, self.target_agreement, self.confidence_floor)
-        key = task_key(tenant, spec, model=model)
+        that cannot be a task (fewer than 2 or more than 255 classes, non-JSON values; a yes/no question when
+        `noul_cutoffs` is None). For `kind="noul"`, `classes` are the question's criteria or None."""
+        if kind == "noul":
+            if self.noul_cutoffs is None:
+                raise ValueError("yes/no questions are not answered locally (noul_cutoffs is None)")
+            spec = Task("_", instructions, classes, self.target_agreement, None, "noul", self.noul_cutoffs)
+        else:
+            spec = Task("_", instructions, classes, self.target_agreement, self.confidence_floor, kind)
+        key = task_key(tenant, spec, kind, model=model)
         info = self._index.get(key)
         if info is not None:
             return key, info.task()
-        return key, Task(key, spec.instructions, spec.classes, self.target_agreement, self.confidence_floor)
+        return key, dataclasses.replace(spec, name=key)
 
     def tasks(self, tenant: str | None = None) -> list[TaskInfo]:
         with self._lock:
@@ -341,11 +369,12 @@ class TaskManager:
             return list(self._engines)
 
     # ---- serving ----------------------------------------------------------------
-    def classify(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
+    def classify(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str] | None,
                  states: Sequence[State], *, teacher: Teacher | None = None, errors: str = "raise",
-                 model: str | None = None) -> list[Result]:
-        """Classify `states` for the question (`instructions`, `classes`) asked by `tenant`."""
-        key, task = self.resolve(tenant, instructions, classes, model)
+                 model: str | None = None, kind: str = "choice") -> list[Result]:
+        """Classify `states` for the question (`instructions`, `classes`) asked by `tenant`. `kind="noul"`: a
+        yes/no question, with its criteria (or None) as `classes`."""
+        key, task = self.resolve(tenant, instructions, classes, model, kind)
         teacher = teacher or self.teacher
         if key not in self._index:
             reason = self._admit(key, tenant, task, len(states), model)
@@ -357,9 +386,9 @@ class TaskManager:
         finally:
             self._release(key)
 
-    def route(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str],
+    def route(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str] | None,
               states: Sequence[State], model: str | None = None, stexts: Sequence[str] | None = None,
-              X: Any = None, admit: bool = True, caller: str | None = None) -> Routing:
+              X: Any = None, admit: bool = True, caller: str | None = None, kind: str = "choice") -> Routing:
         """First half of a request whose teacher call the caller makes itself (the proxy): find or admit the
         task and let its engine decide. Always follow with `complete` (it releases the engine). A task that
         is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher.
@@ -372,7 +401,7 @@ class TaskManager:
         `caller` identifies who asked (the proxy passes the caller's key hash): each caller may create at most
         `max_new_tasks_per_caller` tasks per admission window, so one caller can't fill a shared tenant's task
         cap (security audit run 3)."""
-        key, task = self.resolve(tenant, instructions, classes, model)
+        key, task = self.resolve(tenant, instructions, classes, model, kind)
         if key not in self._index:
             reason = self._admit(key, tenant, task, len(states), model, count=admit, caller=caller)
             if reason:
@@ -489,13 +518,15 @@ class TaskManager:
             now = time.time()
             self._note_caller(caller, now)
             info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now,
-                            model, confidence_floor=task.confidence_floor)
+                            model, confidence_floor=task.confidence_floor, kind=task.kind,
+                            cutoffs=list(task.cutoffs) if task.cutoffs else None)
             (self.root / key).mkdir(parents=True, exist_ok=True, mode=0o700)
             self._write_info(info)
             self._index[key] = info
             self._per_tenant[tenant] = self._per_tenant.get(tenant, 0) + 1
         self.admission.forget(key)
-        log.info("task %s admitted for tenant %r (%d classes)", key, tenant, len(task.classes))
+        log.info("task %s admitted for tenant %r (%s)", key, tenant,
+                 "yes/no" if task.kind == "noul" else f"{len(task.classes)} classes")
         return None
 
     def _pass_through(self, task: Task, states: Sequence[State], teacher: Teacher, reason: str,

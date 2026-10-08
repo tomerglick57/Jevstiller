@@ -41,6 +41,14 @@ def _badge(text: str, kind: str) -> str:
     return f'<span class="b {kind}">{_e(text)}</span>'
 
 
+def _question(info) -> str:
+    """What kind of question a task is: its number of classes, or yes/no with the cut-offs agreement is defined by."""
+    if getattr(info, "kind", "choice") != "noul":
+        return f"{len(info.classes)} classes"
+    c = info.cutoffs or []
+    return "yes/no · " + (f"cut-off {c[0]:.2f}" if len(c) == 1 else f"unsure {c[0]:.2f}–{c[1]:.2f}" if c else "")
+
+
 def _state(info, st) -> str:
     """What the task is doing, as a badge."""
     if st is None:
@@ -97,7 +105,7 @@ def render(manager, proxy_stats: dict | None, version: str, now: float | None = 
             "<tr>"
             f'<td><code title="{_e(info.key)}">{_e(info.key[:12])}</code>'
             f"<br><span class=dim>{_e(info.tenant)}</span></td>"
-            f"<td>{_e(_short(info.instructions))}<br><span class=dim>{len(info.classes)} classes"
+            f"<td>{_e(_short(info.instructions))}<br><span class=dim>{_question(info)}"
             f"{' · ' + _e(info.model) if info.model else ''}</span></td>"
             f"<td>{_state(info, st)}{_progress(st)}</td>"
             f"<td class=n>{f'{st.student_share:.1%}' if st is not None and st.requests else '–'}</td>"

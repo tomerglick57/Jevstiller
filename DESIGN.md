@@ -615,6 +615,22 @@ Matching is exact on purpose: Jev reads its criteria literally, so a "similar" q
 
 ---
 
+### 7.16 Yes/no questions (`noul`)
+
+Jev answers a `noul` question with one number, the probability of yes, and no confidence. Two things follow.
+
+**It is a two-class task.** The teacher's answer is stored as the distribution `{"false": 1 − p, "true": p}`, and the student is the same linear head with two outputs, trained on that soft target. Nothing in the store, the registry, the lineage or the audit channel is specific to the question type. A task's identity includes its type, so a `noul` and a `choice` question with the same words are different tasks.
+
+**"The same answer" needs a definition, because the answer is a number.** A caller does not use 0.83; it compares it with something. So a yes/no task carries `cutoffs`: one value is the caller's cut-off (at or above it is yes), two values are an unsure band (no / unsure / yes). The student agrees with the teacher when its probability stands for the same outcome as the teacher's. That is again one indicator per request, "answered and on another outcome", so the calibration of §7.6 applies unchanged: an exact Clopper–Pearson bound, fixed-sequence testing on the fixed grid, the OOD cutoff from the training data.
+
+- **The routing score** is the distance of the student's probability from the nearest cut-off, mapped to the scale the threshold grid uses (0.5 on a cut-off, 1 when at least 0.5 away). It plays the part max-probability plays for a choice: near a cut-off is where the two fall on different sides.
+- **Stored labels are outcomes.** `student_label`, `shadow_label` and `teacher_label` hold `"false"`, `"true"` or `"unsure"`, computed from the probabilities with the cut-offs in force. Shadow judging and the audit compare them as they compare class names. Calibration recomputes outcomes from the stored distributions, so it always uses the task's current cut-offs.
+- **The cut-offs are a setting, not part of the question.** A policy records the cut-offs it was calibrated for. When a task's cut-offs change, its production version stops answering at once (its answers were only checked against the old ones), and a version calibrated for the new ones takes over after shadow. The head itself does not depend on the cut-offs; only the threshold does.
+- **A local answer returns the student's own probability,** rounded to four decimals unless rounding would move it across a cut-off. Only its outcome is covered. A caller that uses the value itself (a ranking, several cut-offs) should turn local yes/no answers off; a tolerance contract, "within ±ε of the teacher's probability", is the planned extension and uses the same calibration with a different indicator.
+- **One rare side is enough to start.** With `rare_classes = "defer"`, a yes/no head trains when only one outcome has `min_samples_per_class` rows, and the other is deferred to the teacher until it has. A question that is yes 1% of the time would otherwise wait for thousands of requests.
+
+On by default at a cut-off of 0.5 (`noul_cutoffs`), because that is the comparison the type invites; the release notes say what to set when it is not yours. Measured in docs/benchmarks.md.
+
 ## 8. Lifecycle of a task, end to end
 
 ```text
@@ -871,7 +887,7 @@ Answered since, on Jev's recorded answers for five tasks (docs/benchmarks.md, "T
 - **Name.** The product is teacher-agnostic; the name is teacher-specific. It is the published name: PyPI, the container image and the website use it.
 - **An OpenAI-compatible front.** The proxy speaks Jev's API only. A `/v1/chat/completions` endpoint that maps a constrained-choice prompt onto the same task loop would put the same student, guarantee and audit in front of other providers' classification calls. Jev stays the only teacher until then (on the public roadmap).
 - **Partial forwarding.** Send Jev only the questions the students can't answer. It's cheaper, but needs evidence that Jev answers each question independently (Appendix A: "no structural invariants").
-- **`noul` and `score` questions.** Yes/no is a two-class task; score is ordinal. Only the student and the agreement metric change.
+- **`score` questions** (ordinal), and a tolerance on a `noul` answer's value. Yes/no questions are done (§7.16).
 - **Offline queueing and degraded mode** (§12).
 - **Re-encoding on encoder change** (§7.3).
 - **Warm-starting a new task from a close one**, for training speed only (§7.14).

@@ -15,6 +15,7 @@ allow_networks = ["10.0.0.0/8"]
 [manager]
 target_agreement = 0.98
 confidence_floor = 0.6   # callers treat Jev's answers below this confidence as unsure (default: none)
+noul_cutoffs = [0.5]     # yes/no questions: callers' cut-off (default); [0.4, 0.6]: an unsure band; []: forward them
 text_retention_days = 30
 
 [encoder]
@@ -27,6 +28,7 @@ audit_rate = 0.03
 target_agreement = 0.99
 mode = "teacher_only"
 confidence_floor = 0.8   # 0: none
+cutoffs = [0.8]          # a yes/no task's own cut-off, or two numbers for an unsure band
 ```
 
 Unknown keys are errors (a typo must not silently do nothing), and so are values of the wrong type (a quoted
@@ -77,7 +79,10 @@ def _type_problem(name: str, value: Any, t: str) -> str | None:
                 or o == "int" and isinstance(value, int) and not isinstance(value, bool)
                 or o == "float" and isinstance(value, (int, float)) and not isinstance(value, bool)
                 or o == "str" and isinstance(value, str)
-                or o.startswith("list") and isinstance(value, list) and all(isinstance(x, str) for x in value)
+                or o.startswith("list[float]") and isinstance(value, list)
+                and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in value)
+                or o.startswith("list") and not o.startswith("list[float]") and isinstance(value, list)
+                and all(isinstance(x, str) for x in value)
                 or o.startswith("dict") and isinstance(value, dict)):
             return None
     want = " or ".join(o for o in opts if o != "None")
@@ -117,6 +122,8 @@ class ServeSettings:
     # [manager]
     target_agreement: float = 0.98
     confidence_floor: float | None = None       # Task.confidence_floor for new tasks
+    noul_cutoffs: list[float] | None = field(default_factory=lambda: [0.5])    # yes/no questions: the cut-off
+    # callers compare Jev's probability with, or two numbers for an unsure band; none (or []): forward them all
     max_loaded: int = 64
     max_memory_mb: float | None = None
     admit_after: int = 50
@@ -140,7 +147,7 @@ class ServeSettings:
     def validate(self) -> ServeSettings:
         import math
 
-        from ._task import Config, check_floor
+        from ._task import Config, check_cutoffs, check_floor
         for f in fields(self):
             if (problem := _type_problem(f.name, getattr(self, f.name), f.type)) is not None:
                 raise ValueError(problem)
@@ -170,6 +177,10 @@ class ServeSettings:
         if not 0.5 <= self.target_agreement < 1:
             raise ValueError("target_agreement must be in [0.5, 1)")
         self.confidence_floor = check_floor(self.confidence_floor)
+        try:
+            self.noul_cutoffs = list(check_cutoffs(self.noul_cutoffs)) if self.noul_cutoffs else None
+        except ValueError as e:
+            raise ValueError(f"noul_cutoffs: {e}") from None
         if bool(self.ssl_certfile) != bool(self.ssl_keyfile):
             raise ValueError("ssl_certfile and ssl_keyfile go together")
         try:
@@ -177,12 +188,17 @@ class ServeSettings:
         except TypeError as e:
             raise ValueError(f"[engine]: {e}") from None
         for key, o in self.tasks.items():
-            unknown = set(o) - {"target_agreement", "mode", "confidence_floor"}
+            unknown = set(o) - {"target_agreement", "mode", "confidence_floor", "cutoffs"}
             if unknown:
                 raise ValueError(f"[tasks.{key!r}]: unknown keys {sorted(unknown)}")
             if "confidence_floor" in o:
                 try:
                     check_floor(o["confidence_floor"])
+                except ValueError as e:
+                    raise ValueError(f"[tasks.{key!r}]: {e}") from None
+            if "cutoffs" in o:
+                try:
+                    check_cutoffs(o["cutoffs"])
                 except ValueError as e:
                     raise ValueError(f"[tasks.{key!r}]: {e}") from None
         for name in ("max_tasks", "max_tasks_per_tenant", "max_new_tasks_per_key"):
@@ -254,7 +270,8 @@ SECTIONS = {
     "proxy": ("upstream", "upstream_timeout_s", "max_upstream_inflight", "tenancy", "key_ttl_s", "access_token",
               "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_questions",
               "max_encoder_wait_ms", "tenants", "tenants_file", "price_per_mtok"),
-    "manager": ("target_agreement", "confidence_floor", "max_loaded", "max_memory_mb", "admit_after", "admit_window_s",
+    "manager": ("target_agreement", "confidence_floor", "noul_cutoffs", "max_loaded", "max_memory_mb", "admit_after",
+                "admit_window_s",
                 "max_tasks",
                 "max_tasks_per_tenant", "max_new_tasks_per_key", "idle_ttl_days", "text_retention_days", "store_text",
                 "train_workers",
@@ -290,7 +307,7 @@ def _coerce(name: str, raw: str) -> Any:
         if not items:                                   # "," or " , ": as blank as ""
             raise ValueError(f"JEVSTILLER_{name.upper()} has no values; unset it (or set 'none' to clear the "
                              f"config file's value)")
-        return items
+        return [float(x) for x in items] if t.startswith("list[float]") else items
     return raw
 
 

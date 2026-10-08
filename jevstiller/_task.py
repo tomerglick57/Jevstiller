@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
+import numpy as np
+
 State = str | dict | list
 """What is classified: text, or a JSON object/array (Jev's `state`). Non-text states are encoded as
 canonical JSON (see `state_text`); the teacher always receives the original value."""
@@ -41,6 +43,48 @@ def check_floor(floor: Any) -> float | None:
     return float(floor) or None
 
 
+KINDS = ("choice", "noul")
+NOUL_LABELS = ("false", "true")          # a yes/no task's two classes: the teacher's "yes" probability is probs["true"]
+
+
+def check_cutoffs(cutoffs: Any) -> tuple[float, ...]:
+    """A valid `Task.cutoffs` for a yes/no task: one number (the cut-off the caller compares the probability
+    with) or two increasing numbers (an unsure band), strictly between 0 and 1."""
+    if isinstance(cutoffs, (int, float)) and not isinstance(cutoffs, bool):
+        cutoffs = (cutoffs,)
+    try:
+        if isinstance(cutoffs, (str, bytes)) or any(isinstance(x, bool) for x in cutoffs):
+            raise TypeError
+        c = tuple(float(x) for x in cutoffs)
+    except (TypeError, ValueError):
+        c = ()
+    if len(c) not in (1, 2) or not all(0.0 < x < 1.0 for x in c) or (len(c) == 2 and not c[0] < c[1]):
+        raise ValueError("cutoffs must be one number (a cut-off) or two increasing numbers (an unsure band), "
+                         f"strictly between 0 and 1, got {cutoffs!r}")
+    return c
+
+
+def noul_buckets(cutoffs: Sequence[float]) -> tuple[str, ...]:
+    """The outcomes a caller's cut-offs make of a yes probability."""
+    return ("false", "true") if len(cutoffs) == 1 else ("false", "unsure", "true")
+
+
+def noul_labels(p: Any, cutoffs: Sequence[float]) -> np.ndarray:
+    """The outcome each yes probability stands for: "true" at or above the cut-off and "false" below it; with a
+    band, "unsure" from its lower edge up to, not including, its upper edge."""
+    names = np.array(noul_buckets(cutoffs), dtype=object)
+    return names[np.searchsorted(np.asarray(cutoffs, dtype=float), np.asarray(p, dtype=float), side="right")]
+
+
+def noul_scores(p: Any, cutoffs: Sequence[float]) -> np.ndarray:
+    """How far each yes probability is from the nearest cut-off, on the scale routing thresholds use: 0.5 on a
+    cut-off, 1 when at least 0.5 away. A probability near a cut-off is where a student and the teacher most
+    easily fall on different sides, so this plays the part max-probability plays for a choice."""
+    p = np.asarray(p, dtype=float).reshape(-1)
+    d = np.min(np.abs(p[:, None] - np.asarray(cutoffs, dtype=float)[None, :]), axis=1)
+    return 0.5 + np.minimum(d, 0.5)
+
+
 @dataclass(frozen=True)
 class Task:
     """What is being classified. Everything here defines the *teacher's* behaviour.
@@ -55,16 +99,45 @@ class Task:
     would have answered with less confidence than the floor, so `target_agreement` covers the caller's
     unsure decision as well as the label; local answers report at least this confidence. None (or 0): only
     the label counts. Neither field changes what the teacher is asked, so neither is part of the version.
+
+    `kind="noul"`: a yes/no question (Jev's `noul`), answered with the probability of yes. `classes` are then
+    its optional criteria, `{"true": ..., "false": ...}` or None, and the student is a two-class head trained on
+    the teacher's probability. `cutoffs` says what "the same answer" means for a number: one value is the
+    cut-off the caller compares the probability with (default 0.5; at or above it is yes), two values are an
+    unsure band (below it no, at or above its upper edge yes, in between unsure). `target_agreement` then
+    covers landing on the same outcome as the teacher. Like the floor, cutoffs are not part of the version.
     """
 
     name: str
     instructions: Any
-    classes: Mapping[str, Any] | Sequence[str]
+    classes: Mapping[str, Any] | Sequence[str] | None = None
     target_agreement: float = 0.98
     confidence_floor: float | None = None
+    kind: str = "choice"
+    cutoffs: tuple[float, ...] | float | None = None
+
+    @classmethod
+    def noul(cls, name: str, instructions: Any, criteria: Mapping[str, Any] | None = None, *,
+             cutoffs: Sequence[float] | float = 0.5, target_agreement: float = 0.98) -> Task:
+        """A yes/no task. `criteria`: optional descriptions of what counts as true and as false."""
+        return cls(name, instructions, criteria, target_agreement, None, "noul", cutoffs)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.classes, Mapping):
+        if self.kind not in KINDS:
+            raise ValueError(f"kind must be one of {KINDS}, got {self.kind!r}")
+        if self.kind == "noul":
+            c = {} if self.classes is None else self.classes
+            if not isinstance(c, Mapping) or set(c) - set(NOUL_LABELS):
+                raise ValueError("a noul task's classes are its criteria: {'true': ..., 'false': ...} or None")
+            object.__setattr__(self, "classes", {k: c.get(k) for k in NOUL_LABELS})
+            object.__setattr__(self, "cutoffs", check_cutoffs(0.5 if self.cutoffs is None else self.cutoffs))
+            if check_floor(self.confidence_floor) is not None:
+                raise ValueError("a noul task has no confidence_floor: give two cutoffs for an unsure band")
+        elif self.cutoffs is not None:
+            raise ValueError("cutoffs are for noul tasks")
+        elif self.classes is None:
+            raise ValueError(f"a task needs between 2 and {MAX_CLASSES} classes, got none")
+        elif not isinstance(self.classes, Mapping):
             if isinstance(self.classes, str):
                 raise ValueError("classes must be a mapping or a list of names, not a string")
             object.__setattr__(self, "classes", {c: "" for c in self.classes})
@@ -101,8 +174,10 @@ class Task:
     def fingerprint(self) -> str:
         """Full SHA-256 of what the teacher is asked (the identity the task manager keys tasks on: 48 bits
         of `version` are within reach of a second-preimage search)."""
-        blob = json.dumps({"i": self.instructions, "c": self.classes}, sort_keys=True).encode()
-        return hashlib.sha256(blob).hexdigest()
+        ident = {"i": self.instructions, "c": self.classes}
+        if self.kind != "choice":                        # choice fingerprints are unchanged from earlier releases
+            ident["k"] = self.kind
+        return hashlib.sha256(json.dumps(ident, sort_keys=True).encode()).hexdigest()
 
 
 MODES = ("auto", "teacher_only", "cascade")

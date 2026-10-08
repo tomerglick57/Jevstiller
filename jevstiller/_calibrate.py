@@ -60,6 +60,7 @@ class RoutingPolicy:
     deferred_labels: list[str] = field(default_factory=list)   # the student never answers these (rare classes)
     confidence_floor: float | None = None   # a disagreement also counted rows the teacher answered with less
                                             # confidence (Task.confidence_floor); answers report at least this
+    cutoffs: list[float] | None = None      # a yes/no task: the cut-offs agreement was defined by (Task.cutoffs)
 
     @property
     def usable(self) -> bool:
@@ -95,7 +96,7 @@ def threshold_grid(n_labels: int, size: int = 400) -> np.ndarray:
 def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: float, delta: float = 0.05,
                ood_threshold: float = math.inf, candidates: np.ndarray | None = None,
                eligible: np.ndarray | None = None, deferred_labels: Sequence[str] = (),
-               confidence_floor: float | None = None) -> RoutingPolicy:
+               confidence_floor: float | None = None, cutoffs: Sequence[float] | None = None) -> RoutingPolicy:
     """The loosest confidence threshold whose rate of *answered and disagreeing* requests is at most `budget`,
     with probability at least 1 - `delta`.
 
@@ -121,6 +122,7 @@ def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: flo
         in_dist &= np.asarray(eligible, dtype=bool)
     grid = threshold_grid(2) if candidates is None else np.asarray(candidates, dtype=float)
     deferred = list(deferred_labels)
+    cuts = None if cutoffs is None else [float(c) for c in cutoffs]
     best = None
     if N:
         for t in sorted(grid, reverse=True):
@@ -133,6 +135,6 @@ def fit_policy(conf: np.ndarray, agree: np.ndarray, ood: np.ndarray, budget: flo
                 best = (float(t), int(sel.sum()) / N, ub, k / N)
     ood_thr = float(ood_threshold) if math.isfinite(ood_threshold) else float(np.max(ood, initial=0.0))
     if best is None:
-        return RoutingPolicy(None, ood_thr, 0.0, 1.0, 0.0, budget, delta, N, deferred, confidence_floor)
+        return RoutingPolicy(None, ood_thr, 0.0, 1.0, 0.0, budget, delta, N, deferred, confidence_floor, cuts)
     t, cov, ub, rate = best
-    return RoutingPolicy(t, ood_thr, cov, ub, rate, budget, delta, N, deferred, confidence_floor)
+    return RoutingPolicy(t, ood_thr, cov, ub, rate, budget, delta, N, deferred, confidence_floor, cuts)

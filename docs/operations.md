@@ -35,6 +35,7 @@ jevstiller admin status <key>                # the status report (below); --json
 jevstiller admin versions <key>              # student versions and their states
 jevstiller admin target <key> 0.99           # change the target agreement (persisted)
 jevstiller admin floor <key> 0.6             # set the confidence floor (persisted; "none" removes it): retrains for it
+jevstiller admin cutoffs <key> 0.8           # a yes/no task's cut-off (persisted), or 0.4,0.6 for an unsure band
 jevstiller admin mode <key> teacher_only     # pin a mode: auto | teacher_only | cascade (persisted); "mode <key>" with no value unpins
 jevstiller admin train <key>                 # train a candidate now (waits)
 jevstiller admin promote <key> student:v3    # force a version into production

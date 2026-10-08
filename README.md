@@ -102,10 +102,10 @@ export TYPESAFE_BASE_URL=http://jevstiller:8080     # in each calling service; n
 ```
 
 Services keep their own `TYPESAFE_API_KEY`; Jevstiller forwards it and never stores it.
-- **Tasks:** every `Choice` question becomes a task, keyed by its exact instructions, criteria and model, so services asking the same question share one local model.
+- **Tasks:** every `Choice` question, and every yes/no (`Noul`) question, becomes a task, keyed by its exact instructions, criteria and model, so services asking the same question share one local model. For a yes/no question you state the cut-off your code uses (0.5 unless set): [docs/coverage.md](docs/coverage.md).
 - **Until a student is ready:** requests are forwarded to Jev unchanged, and Jev's responses returned unchanged, until a task's student is trained and has passed its checks.
 - **After that:** the proxy answers what it is sure about in Jev's exact response format (`x-jevstiller-source: local` tells you which), but only for keys Jev has accepted.
-- **Always forwarded:** non-`Choice` questions, other endpoints, and anything it does not understand.
+- **Always forwarded:** `Score` questions, other endpoints, and anything it does not understand.
 
 Performance of one process (16 vCPU, bge-small on CPU, [docs/benchmarks.md](docs/benchmarks.md)):
 - **Forwarded requests:** Jev's latency plus ~1–4 ms, and up to ~585 req/s at 256 concurrent callers.

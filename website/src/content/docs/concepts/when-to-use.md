@@ -38,8 +38,8 @@ The ongoing Jev cost is the audit slice plus whatever the student passes on.
 
 - **Long inputs.** The student reads the first 256 tokens of the state. Classifying a long conversation or document
   by something near its end stays with Jev.
-- **Yes/no (`noul`) and `score` questions,** for now: they are forwarded. See
-  [coverage of Jev's API](/concepts/coverage/) for the full list.
+- **`score` questions,** for now: they are forwarded. Yes/no (`noul`) questions are answered locally since 0.5,
+  for the outcome your code makes of the probability. See [coverage of Jev's API](/concepts/coverage/).
 
 ## Latency caveat
 
