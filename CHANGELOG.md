@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-10-08
+
+Yes/no (`noul`) questions are now answered locally too, not just `choice` questions.
 
 **Upgrading: yes/no questions are now answered locally, by default.** Until now the proxy forwarded every `noul` question to Jev. From this release a repeated `noul` question becomes a task like a `choice` question does, and once its student has trained and passed its checks, the proxy answers it. Read this before upgrading if your services ask `noul` questions:
 
@@ -19,15 +21,12 @@
   - `experiments/record_noul.py`, `noul_curve.py` and `noul_replay.py` record and reproduce the measurements.
 - Docs: **[Coverage of Jev's API](docs/coverage.md)**, item by item: what is answered locally (repeated `choice` questions on short text), what is forwarded (`noul`, `score`, mixed requests, long states past 256 tokens) and what this design cannot answer (questions that change per request). The README and benchmarks quote TypeSafe's current rate limits (80 requests/s); the JavaScript SDK is listed as untested.
 - **The status report no longer suggests a setting you already have.** While a first student waits because fewer than two classes have enough samples, the report says so. It used to suggest `rare_classes='defer'`, the default since 0.3.4.
+- Docs: a 12-hour soak of 0.4.0 (4.3 M requests, 0 errors, RSS 300–445 MB, drift at hour 6 recovered by itself) in docs/benchmarks.md; the README's memory line quotes it.
 - **Docs brought up to date with 0.4.0:**
   - DESIGN.md §5 and §7.5 still described the threshold and out-of-distribution rules from before 0.2.0's correction.
   - DESIGN.md §3 and the website's "When to use it" led with Jev's rate limit, although one key sustained 190 requests/s against a published 20/s (docs/benchmarks.md).
   - Also corrected: `/readyz`'s checks, the metrics list, the environment variable for `[encoder] spec`, the Docker `EXTRAS` argument, the development setup, and a heading lost from docs/benchmarks.md.
   - DEPLOYMENT_PLAN.md now lists what came after the plan and what is next.
-
-## Unreleased
-
-- Docs: a 12-hour soak of 0.4.0 (4.3 M requests, 0 errors, RSS 300–445 MB, drift at hour 6 recovered by itself) in docs/benchmarks.md; the README's memory line quotes it.
 
 ## 0.4.0 — 2026-09-27
 

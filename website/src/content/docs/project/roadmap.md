@@ -43,7 +43,7 @@ and its own Jev key.
 - **A local answer's `Result.confidence`** in the Python API uses Jev's definition, as the proxy already did.
 - **Apache 2.0** instead of MIT.
 
-**0.5:**
+**0.5.0:**
 - **Yes/no (`noul`) questions are answered locally,** on by default. You state the cut-off your code compares
   Jev's probability with (0.5 unless set), or two for an unsure band, and the target covers landing on the same
   outcome as Jev. 98% answered locally where Jev is decisive, 22–36% on noisy questions.
