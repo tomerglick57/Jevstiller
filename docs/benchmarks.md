@@ -372,6 +372,25 @@ The detection lag is the price of catching a *silent* change through a 2% audit:
 
 - **Open:** attribute the earlier run's memory hump (not reproduced here), and the harness's teardown hang.
 
+## Drift fallback: keep the training data? (2026-10-09, not adopted)
+
+A confirmed drift (DESIGN.md §7.9) restarts training, calibration, shadow and audit from rows after the fallback. The question: since the bound only needs the *calibration* rows to be current, could training keep every answer of the teacher lineage, so a task recovers faster when only the inputs shifted? The change was 20 lines (a `Config.drift_training = "recent" | "all"` switch, training reading from the lineage's first row with `"all"`); it was measured on a branch and not merged.
+
+**When the teacher really changes** (synthetic tasks, the hash encoder, inline training, 5 seeds; the teacher's answers rotated among the labels, as in the soak): with the old answers kept, the share answered locally over the 12,000 requests after the drift fell from **76.0% to 28.7%**. The students keep learning the outdated labels, and the calibration on new rows correctly refuses most of what they would answer. The guarantee held in both; only coverage differed.
+
+**When the inputs shift** (honest_sub_name's 239,347 recorded titles, 19 subreddits in production order, confidence floor 0.8, target 98%; 1 fallback on bge-small, 2 on bge-base):
+
+| | bge-small, current | bge-small, keep | bge-base, current | bge-base, keep |
+|---|---:|---:|---:|---:|
+| Answered locally | 42.2% | 44.6% | 47.5% | 46.6% |
+| Titles per Jev credit | 1.73× | 1.80× | 1.90× | 1.87× |
+| Caller outcome at the 0.8 gate, agreement with Jev | 98.91% | 98.78% | 98.74% | 98.82% |
+| Published labels changed | 172 | 214 | 236 | 209 |
+
+Keeping the data helped the small encoder by 2.4 points and cost the base encoder 0.9: after a fallback the larger, older training set gave stronger students on some subreddits and weaker ones on others. An upper bound computed first, from the local share before each fallback, suggested 13–18% of Jev calls were at stake; the replay shows most of that gap was the subreddits that are hard to answer locally anyway (7–33% local), not the discarded data.
+
+**Decision:** keep the current rule. It costs little where the inputs shift and is much better where the teacher changes, and the proxy cannot tell the two apart without its own key to re-ask Jev about old inputs. A variant that trains both candidates after a drift and keeps the one that agrees better with the teacher on post-drift training rows (which leaves the calibration rows, and so the bound, untouched) is the way to get both; at a gain of a couple of points on the one real workload, it isn't worth the extra training yet.
+
 ## Chaos (P6.5)
 
 `pytest tests/test_chaos.py`. The expected behaviour is written in docs/operations.md, "Common situations".
