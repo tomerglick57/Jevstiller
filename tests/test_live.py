@@ -127,7 +127,7 @@ def test_recorded_errors_raise_the_same_through_the_proxy(tmp_path, name, error)
         for base in (upstream, proxy):
             c = ts.TypeSafeClient(base_url=base, api_key="tsk_test", retry=ts.RetryPolicy(max_retries=0))
             with pytest.raises(getattr(ts, error)) as ei:
-                c.system_one(state=req["state"], questions=req["questions"] or {"x": ts.Noul()}, model=req["model"])
+                c.system_one(state=req["state"], questions=req["questions"] or {"x": ts.Noul(instructions="Is this a test?")}, model=req["model"])
             assert ei.value.status == fx["status"]
     m.close()
 
