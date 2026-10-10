@@ -150,6 +150,8 @@ class Admin:
             await anyio.to_thread.run_sync(self.manager.set_mode, key, mode)
         except ValueError as e:
             return _err(422, str(e))
+        except KeyError:                                # deleted meanwhile
+            return _err(404, "unknown task")
         return _ok({"key": key, "mode": mode})
 
     async def target(self, request: Request) -> Response:
@@ -164,6 +166,8 @@ class Admin:
             await anyio.to_thread.run_sync(self.manager.set_target, key, float(value))
         except ValueError as e:
             return _err(422, str(e))
+        except KeyError:                                # deleted meanwhile
+            return _err(404, "unknown task")
         return _ok({"key": key, "target_agreement": float(value)})
 
     async def floor(self, request: Request) -> Response:
@@ -179,6 +183,8 @@ class Admin:
             await anyio.to_thread.run_sync(self.manager.set_confidence_floor, key, floor)
         except ValueError as e:
             return _err(422, str(e))
+        except KeyError:                                # deleted meanwhile
+            return _err(404, "unknown task")
         return _ok({"key": key, "confidence_floor": floor})
 
     async def cutoffs(self, request: Request) -> Response:
@@ -192,6 +198,8 @@ class Admin:
             await anyio.to_thread.run_sync(self.manager.set_cutoffs, key, cutoffs)
         except ValueError as e:
             return _err(422, str(e))
+        except KeyError:                                # deleted meanwhile
+            return _err(404, "unknown task")
         return _ok({"key": key, "cutoffs": list(cutoffs)})
 
     async def train(self, request: Request) -> Response:

@@ -170,6 +170,17 @@ class ServeSettings:
                 raise ValueError(f"{name} must be a number of days > 0 (or unset: keep forever)")
         if not 0 <= self.key_ttl_s < math.inf:
             raise ValueError("key_ttl_s must be a finite number of seconds >= 0")
+        from urllib.parse import urlsplit
+        try:
+            up = urlsplit(self.upstream)
+        except ValueError:
+            raise ValueError("upstream is not a valid URL") from None
+        if up.scheme not in ("http", "https") or not up.hostname:
+            raise ValueError("upstream must be an http(s) URL with a host")
+        if up.username is not None or up.password is not None:
+            # httpx turns them into Basic auth that replaces every caller's bearer, so any made-up key "worked"
+            # against an upstream that accepted them (security audit run 4)
+            raise ValueError("upstream must not contain credentials (user:password@): callers bring their own keys")
         if self.tenancy not in ("shared", "per_key"):
             raise ValueError(f"tenancy must be 'shared' or 'per_key', got {self.tenancy!r}")
         if self.log_format not in ("text", "json"):

@@ -26,7 +26,7 @@ import threading
 import time
 import weakref
 from collections import OrderedDict, deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,33 +148,60 @@ class Admission:
     """Collect training data for a new task only once it has been seen `min_requests` times within
     `window_s`. Callers that build questions dynamically (per-request criteria) would otherwise create an
     unbounded number of one-off tasks. Counts are in memory, capped at `max_tracked` candidate keys
-    (least recently seen dropped first); tasks already on disk are always admitted."""
+    (least recently seen dropped first); tasks already on disk are always admitted.
 
-    def __init__(self, min_requests: int = 50, window_s: float = 86_400, max_tracked: int = 100_000):
+    One caller (the last to ask a question) holds at most `max_per_caller` of those keys, its least recently seen
+    dropped first: with one shared table, a caller sending new questions could flush every tenant's counts, so
+    nobody's new questions became tasks (security audit run 4). Default: a tenth of `max_tracked`."""
+
+    def __init__(self, min_requests: int = 50, window_s: float = 86_400, max_tracked: int = 100_000,
+                 max_per_caller: int | None = None):
         self.min_requests, self.window_s, self.max_tracked = min_requests, window_s, max_tracked
+        self.max_per_caller = max(1, max_tracked // 10) if max_per_caller is None else max_per_caller
         self._seen: OrderedDict[str, tuple[float, int]] = OrderedDict()   # key -> (window start, count)
+        self._owner: dict[str, str] = {}                                   # key -> the caller that last asked it
+        self._by_caller: dict[str, OrderedDict[str, None]] = {}            # caller -> its keys, oldest first
         self._lock = threading.Lock()
 
-    def observe(self, key: str, n: int = 1, now: float | None = None) -> bool:
+    def observe(self, key: str, n: int = 1, now: float | None = None, caller: str | None = None) -> bool:
         """Count `n` requests for `key`; True once the key qualifies."""
         if self.min_requests <= 1:
             return True
         now = time.time() if now is None else now
         with self._lock:
             start, count = self._seen.pop(key, (now, 0))
+            self._disown(key)
             if now - start > self.window_s:
                 start, count = now, 0
             count += n
             if count >= self.min_requests:
                 return True
             self._seen[key] = (start, count)
+            if caller is not None:
+                own = self._by_caller.setdefault(caller, OrderedDict())
+                own[key] = None
+                self._owner[key] = caller
+                while len(own) > self.max_per_caller:
+                    old, _ = own.popitem(last=False)
+                    self._seen.pop(old, None)
+                    self._owner.pop(old, None)
             while len(self._seen) > self.max_tracked:
-                self._seen.popitem(last=False)
+                old, _ = self._seen.popitem(last=False)
+                self._disown(old)
             return False
+
+    def _disown(self, key: str) -> None:
+        caller = self._owner.pop(key, None)
+        if caller is not None:
+            own = self._by_caller[caller]
+            own.pop(key, None)
+            if not own:
+                del self._by_caller[caller]
 
     def forget(self, key: str) -> None:
         with self._lock:
             self._seen.pop(key, None)
+            self._disown(key)
 
 
 class TaskManager:
@@ -248,25 +275,32 @@ class TaskManager:
         self._dirty: set[str] = set()                   # last_seen changed since task.json was written
         self._written: dict[str, float] = {}
         self._limit_logged: set[str] = set()
+        # tasks whose task.json can't be loaded: not served, but text retention and tenant deletion still cover
+        # their stores (they used to drop out of both: security audit run 4)
+        self._unreadable: list[Path] = []
         for f in self.root.glob("*/task.json"):
             try:
                 info = TaskInfo(**json.loads(f.read_text()))
                 info = self._migrate_key(info, f.parent)
             except (OSError, ValueError, TypeError):
-                log.exception("skipping unreadable task file %s", f)
+                log.exception("skipping unreadable task file %s (its data is kept, retention still applies)", f)
+                self._unreadable.append(f.parent)
                 continue
             self._index[info.key] = info
             self._per_tenant[info.tenant] = self._per_tenant.get(info.tenant, 0) + 1
         for key, o in (task_overrides or {}).items():
             if key in self._index:
-                if "target_agreement" in o:
-                    self.set_target(key, float(o["target_agreement"]))
-                if "mode" in o:
-                    self.set_mode(key, o["mode"])
-                if "confidence_floor" in o:
-                    self.set_confidence_floor(key, o["confidence_floor"])
-                if "cutoffs" in o:
-                    self.set_cutoffs(key, o["cutoffs"])
+                try:
+                    if "target_agreement" in o:
+                        self.set_target(key, float(o["target_agreement"]))
+                    if "mode" in o:
+                        self.set_mode(key, o["mode"])
+                    if "confidence_floor" in o:
+                        self.set_confidence_floor(key, o["confidence_floor"])
+                    if "cutoffs" in o:
+                        self.set_cutoffs(key, o["cutoffs"])
+                except ValueError as e:                 # e.g. a floor for a yes/no task: the settings can't tell
+                    raise ValueError(f"[tasks.{key!r}]: {e}") from None
             else:
                 log.warning("config overrides for unknown task %s ignored", key)
         self._stop = threading.Event()
@@ -290,57 +324,77 @@ class TaskManager:
         return info
 
     # ---- operator controls -------------------------------------------------------
+    def _update_info(self, key: str, change: Callable[[TaskInfo], None],
+                     apply: Callable[[Jevstiller], None] | None = None) -> None:
+        """Change a task's TaskInfo: `change` edits it, the result must still make a valid Task, then it is
+        persisted and `apply` passes it to the loaded engine, if any. Runs under the task's key lock, as loads and
+        deletes do: a change racing a load was persisted but never reached the engine, one racing a delete left
+        task.json behind (the task came back after a restart), and an invalid one was persisted before it was
+        rejected, so the task could no longer load (security audit run 4). Raises KeyError for an unknown task and
+        ValueError, changing nothing, for an invalid change."""
+        with self._lock:
+            if key not in self._index:
+                raise KeyError(f"unknown task {key}")
+            klock = self._key_locks.setdefault(key, threading.Lock())
+        with klock:
+            with self._lock:
+                info = self._index.get(key)
+                if info is None:                        # deleted while we waited
+                    raise KeyError(f"unknown task {key}")
+                new = dataclasses.replace(info, classes=dict(info.classes),
+                                          cutoffs=list(info.cutoffs) if info.cutoffs else info.cutoffs)
+            change(new)
+            new.task()                                  # e.g. a floor on a yes/no task: rejected before it is saved
+            self._write_info(new)
+            with self._lock:
+                change(info)
+                e = self._engines.get(key)
+            if e is not None and apply is not None:
+                apply(e)
+
     def set_target(self, key: str, target_agreement: float) -> None:
         """Change a task's target agreement (persisted; applied to the loaded engine at once)."""
         if not 0.5 <= target_agreement < 1.0:
             raise ValueError("target_agreement must be in [0.5, 1)")
-        with self._lock:
-            info = self._index[key]
+
+        def change(info: TaskInfo) -> None:
             info.target_agreement = target_agreement
-            e = self._engines.get(key)
-        self._write_info(info)
-        if e is not None:
+
+        def apply(e: Jevstiller) -> None:
             e.task = dataclasses.replace(e.task, target_agreement=target_agreement)
+        self._update_info(key, change, apply)
 
     def set_mode(self, key: str, mode: str | None) -> None:
         """Pin a task's mode ("auto", "teacher_only", "cascade"; None = config default). Persisted."""
         from ._task import MODES
         if mode is not None and mode not in MODES:
             raise ValueError(f"mode must be one of {MODES} or null")
-        with self._lock:
-            info = self._index[key]
+
+        def change(info: TaskInfo) -> None:
             info.mode = mode
-            e = self._engines.get(key)
-        self._write_info(info)
-        if e is not None:
-            e.set_mode(mode or self.cfg.mode)
+        self._update_info(key, change, lambda e: e.set_mode(mode or self.cfg.mode))
 
     def set_confidence_floor(self, key: str, floor: float | None) -> None:
         """Change a task's confidence floor (Task.confidence_floor; None or 0: none). Persisted; the loaded engine
-        starts training a student calibrated for it at once (Jevstiller.set_confidence_floor)."""
+        starts training a student calibrated for it at once (Jevstiller.set_confidence_floor). A yes/no task has
+        no floor (ValueError)."""
         floor = check_floor(floor)
-        with self._lock:
-            info = self._index[key]
+
+        def change(info: TaskInfo) -> None:
             info.confidence_floor = floor
-            e = self._engines.get(key)
-        self._write_info(info)
-        if e is not None:
-            e.set_confidence_floor(floor)
+        self._update_info(key, change, lambda e: e.set_confidence_floor(floor))
 
     def set_cutoffs(self, key: str, cutoffs: Sequence[float] | float) -> None:
         """Change a yes/no task's cut-offs (Task.cutoffs): one number, or two for an unsure band. Persisted; the
         loaded engine answers nothing locally until a student calibrated for them passes shadow
         (Jevstiller.set_cutoffs)."""
         cutoffs = check_cutoffs(cutoffs)
-        with self._lock:
-            info = self._index[key]
+
+        def change(info: TaskInfo) -> None:
             if info.kind != "noul":
                 raise ValueError("cutoffs are for noul tasks")
             info.cutoffs = list(cutoffs)
-            e = self._engines.get(key)
-        self._write_info(info)
-        if e is not None:
-            e.set_cutoffs(cutoffs)
+        self._update_info(key, change, lambda e: e.set_cutoffs(cutoffs))
 
     # ---- lookup -----------------------------------------------------------------
     def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str] | None,
@@ -508,7 +562,7 @@ class TaskManager:
                 if key in self._index:
                     return None
                 return self._cap_reason(tenant, caller) or "not_admitted"
-        if not self.admission.observe(key, n):
+        if not self.admission.observe(key, n, caller=caller):
             return "not_admitted"
         with self._lock:
             if key in self._index:
@@ -563,9 +617,10 @@ class TaskManager:
             if info is None:
                 raise KeyError(f"unknown task {key}")
             klock = self._key_locks.setdefault(key, threading.Lock())
-        with klock:                                     # one loader per key; unloading holds it too
-            with self._lock:
-                if key not in self._index:              # deleted while we waited
+        with klock:                                     # one loader per key; unloading, deleting and changing
+            with self._lock:                            # a task (_update_info) hold it too
+                info = self._index.get(key)
+                if info is None:                        # deleted while we waited
                     raise KeyError(f"unknown task {key}")
                 e = self._engines.get(key)
                 if e is not None:
@@ -615,6 +670,24 @@ class TaskManager:
         self._index[key].last_seen = time.time()
         self._dirty.add(key)
 
+    def _persist(self, key: str) -> None:
+        """Write a task's task.json from the index, under its key lock (a write racing a delete left the file
+        behind: security audit run 4). A key busy loading or unloading is retried on the next sweep."""
+        with self._lock:
+            klock = self._key_locks.setdefault(key, threading.Lock())
+        if not klock.acquire(blocking=False):
+            with self._lock:
+                self._dirty.add(key)
+            return
+        try:
+            with self._lock:
+                info = self._index.get(key)
+                info = dataclasses.replace(info) if info is not None else None
+            if info is not None:
+                self._write_info(info)
+        finally:
+            klock.release()
+
     def _write_info(self, info: TaskInfo) -> None:
         atomic_write_text(self.root / info.key / "task.json", json.dumps(dataclasses.asdict(info), ensure_ascii=False))
         self._written[info.key] = time.time()
@@ -651,9 +724,8 @@ class TaskManager:
         with self._lock:                                # persist last_seen at most once a minute per task
             due = [k for k in self._dirty if now - self._written.get(k, 0) >= 60 and k in self._index]
             self._dirty.difference_update(due)
-            infos = [dataclasses.replace(self._index[k]) for k in due]
-        for info in infos:
-            self._write_info(info)
+        for key in due:
+            self._persist(key)
         if self.idle_ttl_s is not None:
             cutoff = time.time() - self.idle_ttl_s
             for info in self.tasks():
@@ -682,6 +754,16 @@ class TaskManager:
                             store.close()
             except Exception:
                 log.exception("text retention failed for task %s", info.key)
+        for directory in list(self._unreadable):
+            if (directory / "samples.sqlite").exists():
+                try:
+                    store = SampleStore(directory / "samples.sqlite")
+                    try:
+                        total += store.redact_text(cutoff)
+                    finally:
+                        store.close()
+                except Exception:
+                    log.exception("text retention failed for unreadable task %s", directory.name)
         if total:
             log.info("text retention: blanked %d samples older than %.0f s", total, self.text_retention_s)
         return total
@@ -689,7 +771,18 @@ class TaskManager:
     def delete_tenant(self, tenant: str) -> list[str]:
         """Delete every task of `tenant` and all their data. Returns the deleted keys; tasks with a request in
         flight are skipped (call again)."""
-        return [i.key for i in self.tasks(tenant) if self.delete(i.key, reason=f"tenant {tenant!r} deleted")]
+        deleted = [i.key for i in self.tasks(tenant) if self.delete(i.key, reason=f"tenant {tenant!r} deleted")]
+        for directory in list(self._unreadable):        # tasks that didn't load still belong to their tenant
+            try:
+                owner = json.loads((directory / "task.json").read_text()).get("tenant")
+            except (OSError, ValueError, AttributeError):
+                owner = None
+            if owner == tenant:
+                shutil.rmtree(directory, ignore_errors=True)
+                self._unreadable.remove(directory)
+                deleted.append(directory.name)
+                log.info("unreadable task %s of tenant %r deleted", directory.name, tenant)
+        return deleted
 
     def _unload_one(self) -> bool:
         """Unload the least recently used idle engine. False if none can be unloaded right now."""

@@ -8,11 +8,24 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-  # The website's npm packages, wrangler included (it deploys the site).
+  # The website's npm packages. A week's cooldown: a compromised release is usually caught and pulled within days,
+  # before it reaches a PR here (security audit run 4).
   - package-ecosystem: npm
     directory: /website
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       website:
+        patterns: ["*"]
+  # wrangler alone, as the deploy job installs it (the job that holds the Cloudflare token).
+  - package-ecosystem: npm
+    directory: /website/deploy
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      deploy:
         patterns: ["*"]

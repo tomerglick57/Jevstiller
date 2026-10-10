@@ -26,7 +26,7 @@ Details:
 
 ## The admin API and CLI
 
-Enable it with `admin_token_file` (or `JEVSTILLER_ADMIN_TOKEN`). The CLI reads the token from `--token-file`, `--token` or `JEVSTILLER_ADMIN_TOKEN`, and the URL from `--url` or `JEVSTILLER_ADMIN_URL`. Without them it uses the server's own settings (the same config file and `JEVSTILLER_*` variables), so next to the server no flags are needed: `docker exec jevstiller jevstiller admin tasks`.
+Enable it with `admin_token_file` (or `JEVSTILLER_ADMIN_TOKEN`). The CLI reads the token from `--token-file`, `--token` or `JEVSTILLER_ADMIN_TOKEN`, and the URL from `--url` or `JEVSTILLER_ADMIN_URL`. Without them it uses the server's own settings (the same config file and `JEVSTILLER_*` variables), so next to the server no flags are needed: `docker exec jevstiller jevstiller admin tasks`. The server's own token is used only when no URL is given: with `--url` or `JEVSTILLER_ADMIN_URL`, pass that server's token too.
 
 ```bash
 jevstiller admin tasks                       # every task: key, tenant, model, classes, target, floor, mode, last seen
@@ -92,6 +92,7 @@ Useful alerts:
 - **Upstream errors:** `upstream_responses_total{status=~"5xx|timeout|unreachable"}` rising means Jev is struggling. Callers see Jev's errors for forwarded requests; local answers continue.
 - **Queued training:** `training_jobs{state="queued"}` growing for hours means training can't keep up. Raise `train_workers` or cores.
 - **Refusals:** `rejected_total` rising means misconfigured callers (token, network) or abuse.
+- **Disk nearly full:** below `min_free_disk_mb` (1 GiB) free, new rows are stored without their text, so they take a few KB each and old ones are still pruned.
 - **Disk full:** the proxy keeps answering, and requests are not recorded (`jevstiller_store_dropped_records_total` rises, `jevstiller_data_dir_writable` is 0). Readiness doesn't fail on it, so a full disk never takes the proxy out of service.
 - **Dropped records:** any increase in `store_dropped_records_total` means the disk is full or failing. Requests are still answered, but nothing new is learned, and a task's audit statistics go stale.
 - **Loads:** `jevstiller admin stats` shows `loads`. If it climbs by more than a few per minute, there are more active tasks than `max_loaded`: raise it.

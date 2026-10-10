@@ -1,7 +1,7 @@
 module jevstiller
-  class jevstiller.Admission(min_requests: 'int' = 50, window_s: 'float' = 86400, max_tracked: 'int' = 100000)
+  class jevstiller.Admission(min_requests: 'int' = 50, window_s: 'float' = 86400, max_tracked: 'int' = 100000, max_per_caller: 'int | None' = None)
       def forget(self, key: 'str') -> 'None'
-      def observe(self, key: 'str', n: 'int' = 1, now: 'float | None' = None) -> 'bool'
+      def observe(self, key: 'str', n: 'int' = 1, now: 'float | None' = None, caller: 'str | None' = None) -> 'bool'
   class jevstiller.BatchingEncoder(inner, max_batch: 'int' = 256, max_wait_ms: 'float' = 0.0, max_chars: 'int' = 32768)
       def close(self) -> 'None'
       def encode(self, texts: 'Sequence[str]') -> 'np.ndarray'
@@ -10,7 +10,7 @@ module jevstiller
       def time_per_text_s(self) -> 'float'
   class jevstiller.CachedTeacher(inner, path)
       def classify(self, texts: 'Sequence[State]', task: 'Task') -> 'list[TeacherOutput | Exception]'
-  class jevstiller.Config(confidence: 'float' = 0.95, audit_rate: 'float' = 0.02, audit_rate_shadow: 'float' = 0.1, audit_rate_elevated: 'float' = 0.1, calib_fraction: 'float' = 0.2, min_train_samples: 'int' = 1000, min_samples_per_class: 'int' = 50, min_calib_samples: 'int' = 500, min_new_samples: 'int' = 2000, keep_versions: 'int' = 3, shadow_min_samples: 'int' = 1000, ood_quantile: 'float' = 0.99, ood_k: 'int' = 10, ood_max_ref: 'int' = 5000, max_train_samples: 'int' = 50000, max_calib_samples: 'int' = 20000, keep_local_rows: 'int' = 10000, drift_window: 'int' = 500, drift_min_samples: 'int' = 200, drift_margin: 'float' = 0.0, drift_check_every: 'int' = 20, mode: 'str' = 'auto', training: 'str' = 'background', maintenance_interval_s: 'float' = 1.0, train_threads: 'int' = 2, teacher_change: 'str' = 'fallback', teacher_change_confirm: 'int' = 20, rare_classes: 'str' = 'defer', store_text: 'bool' = True, seed: 'int' = 0, student_epochs: 'int' = 2000, label_target: 'str' = 'probs', importance_weighting: 'bool' = True, weight_power: 'float' = 0.5, max_weight: 'float' = 20.0, fit_headroom: 'float' = 0.15, student_l2: 'float' = 1e-06, student_patience: 'int' = 4) -> None
+  class jevstiller.Config(confidence: 'float' = 0.95, audit_rate: 'float' = 0.02, audit_rate_shadow: 'float' = 0.1, audit_rate_elevated: 'float' = 0.1, calib_fraction: 'float' = 0.2, min_train_samples: 'int' = 1000, min_samples_per_class: 'int' = 50, min_calib_samples: 'int' = 500, min_new_samples: 'int' = 2000, keep_versions: 'int' = 3, shadow_min_samples: 'int' = 1000, ood_quantile: 'float' = 0.99, ood_k: 'int' = 10, ood_max_ref: 'int' = 5000, max_train_samples: 'int' = 50000, max_calib_samples: 'int' = 20000, keep_local_rows: 'int' = 10000, drift_window: 'int' = 500, drift_min_samples: 'int' = 200, drift_margin: 'float' = 0.0, drift_check_every: 'int' = 20, mode: 'str' = 'auto', training: 'str' = 'background', maintenance_interval_s: 'float' = 1.0, train_threads: 'int' = 2, teacher_change: 'str' = 'fallback', teacher_change_confirm: 'int' = 20, rare_classes: 'str' = 'defer', store_text: 'bool' = True, seed: 'int' = 0, student_epochs: 'int' = 2000, label_target: 'str' = 'probs', importance_weighting: 'bool' = True, weight_power: 'float' = 0.5, max_weight: 'float' = 20.0, fit_headroom: 'float' = 0.15, student_l2: 'float' = 1e-06, student_patience: 'int' = 4, min_free_disk_mb: 'float' = 1024) -> None
       field confidence: float
       field audit_rate: float
       field audit_rate_shadow: float
@@ -49,6 +49,7 @@ module jevstiller
       field fit_headroom: float
       field student_l2: float
       field student_patience: int
+      field min_free_disk_mb: float
       def to_dict(self) -> 'dict'
   class jevstiller.Encoder(*args, **kwargs)
       attribute dim: int

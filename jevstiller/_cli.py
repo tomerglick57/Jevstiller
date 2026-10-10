@@ -197,20 +197,24 @@ def _admin(a: argparse.Namespace) -> None:
     token = a.token or os.environ.get("JEVSTILLER_ADMIN_TOKEN")
     if not token and a.token_file:
         token = Path(a.token_file).read_text().strip()
+    url = a.url or os.environ.get("JEVSTILLER_ADMIN_URL")
     server = None
-    if not token or not a.url:
+    if not token or not url:
         # next to the server (e.g. `docker exec ... jevstiller admin`): use its own settings for the token and port
         try:
             from ._settings import load
             server = load()
         except Exception:                               # no usable server settings here: flags only
             server = None
-    if not token and server is not None:
+    if not token and server is not None and not url:
+        # the server's own token, only for the server itself: with --url it went to whatever host that named
+        # (security audit run 4)
         token = server.admin_token
     if not token:
-        raise SystemExit("an admin token is required (--token, --token-file or JEVSTILLER_ADMIN_TOKEN)")
-    if not a.url:
-        a.url = os.environ.get("JEVSTILLER_ADMIN_URL") or f"http://127.0.0.1:{server.port if server else 8080}"
+        raise SystemExit("an admin token is required (--token, --token-file or JEVSTILLER_ADMIN_TOKEN)"
+                         + ("; the local server's token is used only without --url / JEVSTILLER_ADMIN_URL"
+                            if url and server is not None and server.admin_token else ""))
+    a.url = url or f"http://127.0.0.1:{server.port if server else 8080}"
     base = a.url.rstrip("/") + "/jevstiller/v1"
     if a.action not in ("tasks", "stats") and not a.key:
         raise SystemExit(f"`admin {a.action}` needs a {'tenant' if a.action == 'delete-tenant' else 'task key'}")

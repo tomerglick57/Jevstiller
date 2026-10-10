@@ -21,8 +21,8 @@ import numpy as np
 
 from ._calibrate import RoutingPolicy, clopper_pearson_lower, clopper_pearson_upper
 from ._registry import Bundle, Registry
-from ._store import Record, SampleStore, text_hash
-from ._task import MAX_TEXT_CHARS, MODES, Config, State, Task, check_cutoffs, check_floor, noul_labels, state_text
+from ._store import Record, SampleStore, free_bytes, text_hash
+from ._task import MODES, Config, State, Task, check_cutoffs, check_floor, noul_labels, state_text, stored_text
 from ._training import FitJob, decide, run_fit_job
 from .encoders import Encoder, HashEncoder
 from .teachers import Teacher, TeacherOutput, peakedness
@@ -115,7 +115,8 @@ def _disagrees(s_lab: np.ndarray, t_lab: np.ndarray, t_conf: np.ndarray, policy:
     a different label or, with a confidence floor, a teacher less confident than the floor."""
     wrong = np.asarray(s_lab != t_lab, dtype=bool)
     if policy.confidence_floor is not None:
-        wrong |= np.asarray(t_conf, float) < policy.confidence_floor
+        wrong |= ~(np.asarray(t_conf, float) >= policy.confidence_floor)    # an unknown (NaN) confidence too,
+                                                                          # as in calibration
     return wrong
 
 
@@ -484,10 +485,13 @@ class Jevstiller:
         recs: list[Record] = []
         results: list[Result | None] = [None] * n
         to_teacher: list[int] = []
+        # the stored text is cut, in bytes, to what any encoder reads: a 4 MB state was stored whole, once per task in
+        # the request, locally answered ones included (security audit run 3), then ~128 KiB per row in 4-byte
+        # characters (run 4). With the volume nearly full, rows keep no text at all. The hash covers the whole text.
+        keep_text = self.cfg.store_text and not (
+            self.cfg.min_free_disk_mb and free_bytes(self.store.path) < self.cfg.min_free_disk_mb * 2**20)
         for i in range(n):
-            # the stored text is cut like the encoder's input: a 4 MB state was stored whole, once per task in the
-            # request, locally answered ones included (security audit run 3). The hash covers the whole text.
-            r = Record(text=stexts[i][:MAX_TEXT_CHARS] if self.cfg.store_text else "",
+            r = Record(text=stored_text(stexts[i]) if keep_text else "",
                        text_hash=text_hash(stexts[i], self.hash_key),
                        task_version=self.task.version, encoder_id=self.encoder.id,
                        embedding=X[i], served_by="teacher", routing_reason="", channel="",

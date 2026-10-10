@@ -24,7 +24,8 @@ Plus `<data_dir>/key-salt` (32 random bytes, 0600). It is used to hash API keys 
 
 Controls:
 - `store_text = false`: keep no request text at all.
-- `text_retention_days`: blank text older than N days. The old text is securely deleted: `secure_delete` plus a WAL truncate.
+- Stored text is cut at 8 KiB (UTF-8), past what any encoder reads. With less than `min_free_disk_mb` (1 GiB) free on the store's volume, new rows keep no text.
+- `text_retention_days`: blank text older than N days. The old text is securely deleted: `secure_delete` plus a WAL truncate. A task whose `task.json` can't be loaded is not served, but retention and `delete-tenant` still cover its store.
 - Rows the loop no longer reads are deleted: beyond the newest `max_train_samples` (50,000) training and `max_calib_samples` (20,000) calibration rows with a Jev answer, per lineage, and beyond the newest `keep_local_rows` (10,000) rows the student answered alone. They are securely deleted too, and only their counts are kept.
 - `jevstiller admin delete <key>` / `delete-tenant <tenant>`: remove a task or a tenant's tasks completely.
 - Back up the data directory as you would a database of your traffic (`jevstiller backup`). Backups and restored data directories get the same modes (files 0600, directories 0700). Text retention doesn't reach backups: rotate them within the retention period.
@@ -154,3 +155,30 @@ Also fixed: `docker build --build-arg PRELOAD_ENCODER=` produced an image that c
 
 One area was only partly covered: HTTP path handling and forwarding had no dedicated reviewer in this run (the path checks above came from other reviewers), so a fourth run should start there.
 
+## Security audit, 2026-10-09 (run 4)
+
+Run 4 audited `3476197` (0.5.0) and was weighted toward what changed since run 3: the yes/no (`noul`) path, the confidence floor, the cutoffs endpoint and CLI, the bounded store, the website and release pipelines, and HTTP path handling (run 3's gap). Everything was reproduced locally against mock upstreams. Regression tests are in `tests/test_audit_run4.py`.
+
+No finding exposes keys, other tenants' data or the admin API. Yes/no requests that are malformed, mixed with choice questions, or carry unexpected cut-offs or fields are rejected or forwarded unchanged; an uncalibrated yes/no student never answers. Admin and status-page authentication, key acceptance and `per_key` isolation held.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 1 | Medium | Stored text was cut at 32,768 characters (~128 KiB per row in 4-byte characters) with no total bound: a caller with an accepted key could fill the volume with requests the student answered, free at Jev | Cut at 8 KiB of UTF-8; below `min_free_disk_mb` (1 GiB) free, rows keep no text |
+| 2 | Low | A confidence floor on a yes/no task was saved before it was rejected: the task stopped answering, and after a restart it dropped out of text retention and tenant deletion | Changes are checked before they're saved; an override the task can't take stops startup; unloadable tasks stay covered by retention and `delete-tenant` |
+| 3 | Low | The website workflow ran npm install scripts and the build in the job holding the Cloudflare token | Build and deploy jobs; the deploy job installs only wrangler, scripts off; a 7-day Dependabot cooldown |
+| 4 | Low | One caller's new questions could flush every tenant's admission counts (one shared table) | A caller holds at most a tenth of the table |
+| 5 | Low | An admin cut-off, floor, target or mode change racing an engine load was saved but never applied (run 3's open item, now for all four settings) | Changes, loads and deletes take the same per-task lock |
+| 6 | Low | A change (or the janitor's `last_seen` write) racing a delete could bring the deleted task's question back after a restart | The same lock; a change to a deleted task is a 404 |
+| 7 | Info | `jevstiller admin --url X` sent the local server's admin token to X | The server's token is used only without a URL |
+
+Also fixed: a caller's `Accept-Encoding: br`/`zstd` could corrupt a relayed body; `Connection`-named headers were forwarded; repeated response headers were merged; credentials in `upstream` replaced every caller's key (now a startup error); differently spelled yes/no criteria were counted once each; a NaN teacher confidence counted as above a floor in the audit.
+
+**Still open, needs deployment testing against the real Jev:** run 3's three items (duplicate JSON keys, non-bearer credentials, `jev-latest` resolving per key). On the second, run 4 also found that each made-up bearer gets its own `max_new_tasks_per_caller` quota.
+
+**Open hardening items (new):**
+- The calibration split and audit draws are seeded from public values (the config seed and the task version) and restart with each engine load, so they can be predicted. Whether an attacker in a shared task can use that to choose which of their inputs land in calibration was not measured: the reviewer was cut short.
+- `nan`/`inf` are accepted in a few numeric settings (`max_encoder_wait_ms`, `admit_window_s`, `max_body_mb`, `upstream_timeout_s`).
+- Release: the GitHub-release job doesn't re-check the artifacts' hashes; the Docker build's `cache-from` and the base image and encoder model aren't pinned by digest; no Dependabot entry for pip.
+- `uvicorn`/`h11` accept a request with both `Content-Length` and `Transfer-Encoding` and keep the connection: not reproduced as smuggling, but a reverse proxy in front normalises it.
+
+One area was only partly covered: the reviewer of the guarantee under adversarial input stopped before measuring the item above, so a fifth run should start there.

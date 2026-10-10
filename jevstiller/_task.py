@@ -21,7 +21,17 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-MAX_TEXT_CHARS = 32_768  # of a state's text: what the encoder reads and what the store keeps (far beyond 256 tokens)
+MAX_TEXT_CHARS = 32_768  # of a state's text the encoder reads (far beyond 256 tokens)
+MAX_STORED_TEXT_BYTES = 8_192  # of a state's text the store keeps, in UTF-8 bytes: still past 256 tokens of any script.
+                               # A cut in characters stored ~128 KiB per row in 4-byte characters (security audit run 4)
+
+
+def stored_text(text: str, limit: int = MAX_STORED_TEXT_BYTES) -> str:
+    """`text` cut to at most `limit` UTF-8 bytes, at a character boundary."""
+    if len(text) <= limit // 4:                     # can't be over the limit: skip the encode
+        return text
+    b = text.encode("utf-8", "surrogatepass")
+    return text if len(b) <= limit else b[:limit].decode("utf-8", "ignore")
 
 
 def state_text(state: State) -> str:
@@ -241,12 +251,17 @@ class Config:
     fit_headroom: float = 0.15          # fit policies at (1 - headroom) * budget; shadow judges at the full budget
     student_l2: float = 1e-6
     student_patience: int = 4
+    min_free_disk_mb: float = 1024      # below this much free space on the store's volume, new rows are stored
+                                        # without their text (0 = never): rows are bounded per task, text is what
+                                        # can fill a volume
 
     def __post_init__(self) -> None:
         for name, allowed in (("mode", MODES), ("training", TRAINING), ("label_target", ("probs", "hard")),
                               ("teacher_change", TEACHER_CHANGE), ("rare_classes", RARE_CLASSES)):
             if getattr(self, name) not in allowed:
                 raise ValueError(f"{name} must be one of {allowed}, got {getattr(self, name)!r}")
+        if not 0 <= self.min_free_disk_mb < float("inf"):
+            raise ValueError(f"min_free_disk_mb must be a number >= 0, got {self.min_free_disk_mb}")
         for name in ("keep_versions", "keep_local_rows"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0, got {getattr(self, name)}")
