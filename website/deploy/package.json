@@ -3,6 +3,6 @@
   "private": true,
   "description": "Only the CLI that deploys the built site, so the deploy job (which holds the Cloudflare token) installs no build dependencies. See .github/workflows/website.yml.",
   "devDependencies": {
-    "wrangler": "4.144.0"
+    "wrangler": "4.147.0"
   }
 }
