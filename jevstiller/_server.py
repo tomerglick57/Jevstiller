@@ -52,7 +52,7 @@ from starlette.routing import Route
 from ._admin import Admin
 from ._manager import Routing, TaskManager
 from ._metrics import Registry as MetricsRegistry
-from ._task import canonical_json, noul_labels, state_text
+from ._task import NOUL_LABELS, canonical_json, noul_labels, state_text
 from .teachers import TeacherOutput
 
 log = logging.getLogger("jevstiller.server")
@@ -65,7 +65,17 @@ HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriza
 RESPONSE_DROP = HOP_BY_HOP | {"content-encoding",         # httpx hands us the decoded body
                               "server", "date"}           # uvicorn sets its own: no duplicate headers
 PROXY_TOKEN_HEADER = "x-jevstiller-token"
-FORWARD_DROP = HOP_BY_HOP | {PROXY_TOKEN_HEADER}          # the proxy's own credential never reaches Jev
+FORWARD_DROP = HOP_BY_HOP | {PROXY_TOKEN_HEADER,          # the proxy's own credential never reaches Jev
+                             "accept-encoding"}           # ours instead (UPSTREAM_ENCODINGS)
+# what the proxy asks Jev for: encodings httpx always decodes. A caller's `br` or `zstd` reached Jev, and without
+# the optional decoder installed the relayed body was still compressed but no longer labelled (security audit run 4)
+UPSTREAM_ENCODINGS = (b"accept-encoding", b"gzip, deflate")
+
+
+def _nominated(raw: Sequence[tuple[bytes, bytes]]) -> set[str]:
+    """Header names a message's Connection header marks as hop-by-hop (RFC 9110 §7.6.1): not forwarded either."""
+    return {t.strip().lower() for k, v in raw if k.lower() == b"connection"
+            for t in v.decode("latin-1").split(",") if t.strip()}
 KNOWN_FIELDS = {"state", "model", "questions"}
 NOUL_FIELDS = {"type", "instructions", "criteria"}      # a noul question with anything else is forwarded as is
 LOCAL_PATHS = ("/healthz", "/readyz", "/metrics")          # served by the proxy itself, never forwarded
@@ -292,7 +302,9 @@ class Proxy:
             try:
                 # raw bytes: header values may hold any byte h11 accepts (obs-text); httpx would encode str
                 # values as ASCII and fail on them
-                headers = [(k, v) for k, v in request.headers.raw if k.decode("latin-1").lower() not in FORWARD_DROP]
+                drop = FORWARD_DROP | _nominated(request.headers.raw)
+                headers = [(k, v) for k, v in request.headers.raw if k.decode("latin-1").lower() not in drop]
+                headers.append(UPSTREAM_ENCODINGS)
                 for attempt in (0, 1):
                     req = self.clients[i].build_request(request.method, request.url.path,
                                                         params=request.query_params, headers=headers, content=body)
@@ -342,9 +354,11 @@ class Proxy:
             if extra:
                 resp.headers.update(extra)
             return resp
-        headers = {k: v for k, v in resp.headers.items() if k.lower() not in RESPONSE_DROP}
-        headers.update(extra or {})
-        return Response(resp.content, status_code=resp.status_code, headers=headers)
+        out = Response(resp.content, status_code=resp.status_code, headers=extra)
+        # every upstream header, repeated ones (Set-Cookie) included, except those `extra` replaces
+        drop = RESPONSE_DROP | _nominated(resp.headers.raw) | {k.lower() for k in (extra or {})}
+        out.raw_headers.extend((k.lower(), v) for k, v in resp.headers.raw if k.decode("latin-1").lower() not in drop)
+        return out
 
     # ---- handlers -----------------------------------------------------------------
     async def _body(self, request: Request) -> bytes:
@@ -385,7 +399,12 @@ class Proxy:
                     spec = canonical_json([q.get("instructions"), q["criteria"]])
                 elif (noul and isinstance(q, dict) and q.get("type") == "noul" and set(q) <= NOUL_FIELDS
                       and (q.get("criteria") is None or isinstance(q["criteria"], dict))):
-                    spec = canonical_json(["noul", q.get("instructions"), q.get("criteria")])
+                    # normalised as Task does: spellings of the same criteria ({}, {"true": null}, none) were one task
+                    # but separate groups, each counted, stored and drawn once per request (security audit run 4)
+                    c = q.get("criteria") or {}
+                    if set(c) <= set(NOUL_LABELS):              # (anything else isn't a task: Jev decides)
+                        c = {k: c.get(k) for k in NOUL_LABELS}
+                    spec = canonical_json(["noul", q.get("instructions"), c])
                 else:
                     others.append(name)
                     continue

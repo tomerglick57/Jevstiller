@@ -301,10 +301,14 @@ def test_upstream_credentials_are_redacted(tmp_path, monkeypatch, capsys):
     assert redact_url("https://api.typesafe.ai") == "https://api.typesafe.ai"
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
     up = "https://gateway-user:s3cret-pw@127.0.0.1:9"
-    cli.main(["config", "--upstream", up])
-    cli.main(["serve", "--data-dir", str(tmp_path), "--encoder", "hash", "--upstream", up])
+    # since run 4 such an upstream stops startup (its credentials replaced every caller's key); still unprinted
+    for argv in (["config", "--upstream", up], ["serve", "--data-dir", str(tmp_path), "--encoder", "hash",
+                                               "--upstream", up]):
+        with pytest.raises((SystemExit, ValueError)) as e:
+            cli.main(argv)
+        assert "s3cret-pw" not in str(e.value)
     out = capsys.readouterr()
-    assert "s3cret-pw" not in out.out + out.err and "***@127.0.0.1:9" in out.out
+    assert "s3cret-pw" not in out.out + out.err
 
 
 # 12. backup and restore ignored the 0600/0700 policy

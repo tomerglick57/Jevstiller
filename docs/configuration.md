@@ -91,7 +91,8 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 
 | Field | Default | Meaning |
 |---|---|---|
-| `store_text` | `True` | `False` keeps only a hash and the embedding of each request, not its text. |
+| `store_text` | `True` | `False` keeps only a hash and the embedding of each request, not its text. Stored text is cut at 8 KiB (UTF-8). |
+| `min_free_disk_mb` | `1024` | With less free space than this on the store's volume, new rows keep no text (`0`: never). Rows are bounded per task; text is what can fill a volume. |
 | `seed` | `0` | Seeds the audit draw, training, OOD sampling and, with the task version, the per-request train/calibration split (so a replay splits the same way on any machine). |
 
 ---
@@ -184,7 +185,7 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 
 | Key | Default | Flag | Meaning |
 |---|---|---|---|
-| `upstream` | `https://api.typesafe.ai` | `--upstream` | Where forwarded requests go. |
+| `upstream` | `https://api.typesafe.ai` | `--upstream` | Where forwarded requests go. An http(s) URL without credentials: `user:pass@` would replace every caller's key. |
 | `upstream_timeout_s` | `9.0` | `--upstream-timeout` | Under the SDK's 10 s client timeout. Timeout → 504. |
 | `max_upstream_inflight` | `256` | | Concurrent forwarded requests; beyond → 503 `retry-after: 1`. |
 | `tenancy` | `shared` | `--tenancy` | `shared`: one tenant, every key shares tasks. `per_key`: tasks separate per API key. |

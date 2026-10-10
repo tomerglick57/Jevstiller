@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+Fixes for the fourth security audit (docs/security.md, "run 4"). No finding exposed keys, other tenants' data or the admin API.
+
+**Upgrading:**
+- **An `upstream` URL with credentials (`https://user:pass@host`) now stops startup.** httpx sent them as Basic auth in place of every caller's key. Callers bring their own keys; put a gateway's credentials in a header it adds itself.
+- **A `[tasks."<key>"]` override that the task can't take now stops startup** (a `confidence_floor` for a yes/no task), instead of being saved and leaving the task unable to load.
+- The admin CLI uses the local server's admin token only when no `--url` / `JEVSTILLER_ADMIN_URL` is given. Pass `--token` (or `--token-file`) with `--url`.
+
+**Fixes:**
+- **Disk (Medium).** Stored text was cut at 32,768 characters, about 128 KiB per row in 4-byte characters, and a caller with an accepted key could fill the volume with requests the student answered locally, at no cost at Jev. Stored text is now cut at 8 KiB of UTF-8, still past what any encoder reads. With less than `min_free_disk_mb` (1 GiB) free on the store's volume, new rows keep no text, so a volume can't fill with it.
+- **A confidence floor on a yes/no task** was saved before it was rejected: the task stopped answering locally, and after a restart it dropped out of the index, so text retention and tenant deletion skipped its stored text. Changes are now checked before they are saved, and a task file that can't be loaded is still covered by text retention and `delete-tenant`.
+- **Admin changes and loads, deletes:** a cut-off, floor, target or mode change made while the task's engine was loading was saved but never applied (a yes/no task's student kept answering at the old cut-off); one racing a delete, or the janitor's own write, could bring the deleted task back after a restart. Task changes, loads and deletes now take the same per-task lock. A change to a task deleted meanwhile is a 404.
+- **Admission:** one caller sending new questions could flush every tenant's admission counts, so nobody's new questions became tasks. A caller now holds at most a tenth of the table.
+- **Forwarding:** a caller's `Accept-Encoding: br` or `zstd` could come back as a still-compressed body without its `Content-Encoding`. The proxy now asks Jev for gzip or deflate, which it always decodes. Headers named in `Connection` are no longer forwarded either way, and repeated response headers (`Set-Cookie`) are no longer merged.
+- **Yes/no criteria spelled differently** (`{}`, `{"true": null}`, none) are one group per request, not one each: they were counted, stored and drawn once per spelling.
+- A teacher confidence that isn't a number counts as below a confidence floor in the audit, as it already did in calibration.
+- **Python API:** `Config.min_free_disk_mb` (1024); `Admission(max_per_caller=...)` (default a tenth of `max_tracked`) and `Admission.observe(..., caller=...)`.
+- **Website deploy:** the job holding the Cloudflare token no longer runs the site's npm dependencies. The site is built in a job without secrets, and the deploy job installs only wrangler, from its own lockfile, with install scripts off. Dependabot waits 7 days before proposing a new npm release.
+
 ## 0.5.0 — 2026-10-08
 
 Yes/no (`noul`) questions are now answered locally too, not just `choice` questions.

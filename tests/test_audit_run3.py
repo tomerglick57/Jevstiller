@@ -55,14 +55,14 @@ def test_the_audit_scores_what_was_served(tmp_path, teacher, world):
 
 # 3. the stored text was the whole state, however large, once per task
 def test_stored_text_is_cut_like_the_encoder_input(tmp_path, teacher):
-    from jevstiller._task import MAX_TEXT_CHARS
+    from jevstiller._task import MAX_STORED_TEXT_BYTES
     task = Task("t", "Which team handles this?", LABELS)
     js = Jevstiller(task, teacher, tmp_path, encoder=HashEncoder(dim=32), config=Config(training="manual"))
     big = "word " * 50_000                                 # 250 KB
     js.classify(big)
     js.store.flush()
     text, h = js.store.db.execute("SELECT text, text_hash FROM samples").fetchone()
-    assert len(text) == MAX_TEXT_CHARS and text == big[:MAX_TEXT_CHARS]
+    assert len(text) == MAX_STORED_TEXT_BYTES and text == big[:MAX_STORED_TEXT_BYTES]    # ASCII: bytes = chars
     assert h == text_hash(big)                             # the identity still covers the whole state
     js.close()
 

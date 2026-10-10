@@ -6,7 +6,9 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import random
+import shutil
 import sqlite3
 import threading
 import time
@@ -121,6 +123,29 @@ def _lineage(teacher_model: str | None, since_id: int = 0) -> tuple[str, tuple]:
     """SQL filter for one teacher lineage (None = every teacher), from row `since_id` on (0 = all rows)."""
     sql, args = (" AND teacher_model=?", (teacher_model,)) if teacher_model is not None else ("", ())
     return (sql + " AND id>?", (*args, since_id)) if since_id else (sql, args)
+
+
+_free: dict[str, tuple[float, int]] = {}
+_free_lock = threading.Lock()
+
+
+def free_bytes(path: Path | str, max_age_s: float = 1.0) -> int:
+    """Free space on the volume holding `path`, re-read at most every `max_age_s` (a request path calls it)."""
+    d = os.path.dirname(os.path.abspath(path))
+    now = time.monotonic()
+    with _free_lock:
+        hit = _free.get(d)
+        if hit is not None and now - hit[0] < max_age_s:
+            return hit[1]
+    try:
+        free = shutil.disk_usage(d).free
+    except OSError:
+        free = 2**62                                    # unknown: don't hold text back on a failed probe
+    with _free_lock:
+        if len(_free) > 1024:
+            _free.clear()
+        _free[d] = (now, free)
+    return free
 
 
 @runtime_checkable
