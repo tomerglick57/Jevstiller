@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-10-10
 
 Fixes for the fourth security audit (docs/security.md, "run 4"). No finding exposed keys, other tenants' data or the admin API.
 

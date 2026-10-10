@@ -48,13 +48,17 @@ and its own Jev key.
   Jev's probability with (0.5 unless set), or two for an unsure band, and the target covers landing on the same
   outcome as Jev. 98% answered locally where Jev is decisive, 22–36% on noisy questions.
 
+**0.5.1:**
+- **Fixes from the fourth security audit** (docs/security.md, run 4): stored text is cut in bytes and dropped when the
+  disk is nearly full, admin changes no longer race loads and deletes, one caller can't flush others' admission
+  counts, and the website's deploy token no longer shares a job with the build.
+
 ## Next
 
 - **A tolerance for yes/no answers.** Since 0.5 a `noul` answer is covered for its side of your cut-off. For
   pipelines that use the number itself: the local probability within ±ε of Jev's on at least the target share of
   requests. Measured as realistic where Jev is decisive (±0.1 on 96% of requests for two of four benchmark
   questions) and weak where it isn't (12–18%).
-- **A fourth security audit,** starting with HTTP path handling and forwarding.
 - **A second teacher: OpenAI's Decisions API.** Announced at DevDay on 2026-09-29, it has the same shape as Jev's
   `Choice`: a question, a finite set of answers, a confidence. The loop doesn't care which teacher labels a task, only
   the adapter does, so a Decisions API adapter is the natural next one, as soon as the API is generally available and
