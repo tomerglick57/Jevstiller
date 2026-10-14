@@ -16,7 +16,7 @@
   <a href="https://jevstiller.pages.dev"><img alt="Docs" src="https://img.shields.io/badge/docs-jevstiller.pages.dev-137572"></a>
 </p>
 
-Put Jevstiller in front of a repeated [Jev](https://docs.typesafe.ai) classification call. At first every request still goes to Jev. From Jev's own answers — with their full probability distributions — it trains a small local model on your traffic, checks that the model agrees with Jev within a budget you set, and then answers most requests itself. Uncertain or novel input, and a permanent random audit slice, keep going to Jev.
+Put Jevstiller in front of a repeated [Jev](https://docs.typesafe.ai) classification call. At first every request still goes to Jev. From Jev's own answers — with their full probability distributions — it trains a small local model on your traffic, checks that the model agrees with Jev within a budget you set, and then answers most requests itself. Uncertain or novel input, and a permanent random audit slice, keep going to Jev. Every request answered locally is a Jev call you don't pay for, one that can't hit a rate limit, and an answer in ~15 ms instead of ~300 ms.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/flow-dark.svg">
@@ -80,6 +80,8 @@ If your code also acts on Jev's `confidence`, for example sending answers below 
 **Agreement with Jev is not accuracy.** If Jev is wrong, the student is wrong the same way. The status report says so next to every number. See [DESIGN.md §2](DESIGN.md).
 
 ## Install
+
+Before you put it in front of your Jev key, read [TypeSafe's terms](#typesafes-terms).
 
 ```bash
 pip install jevstiller                 # everything: the proxy (`jevstiller serve`), the encoder, the Jev adapter
@@ -227,6 +229,17 @@ python experiments/run.py --dataset banking77 --teacher oracle --encoder base   
 ```
 
 See [experiments/README.md](experiments/README.md).
+
+## TypeSafe's terms
+
+Jevstiller runs on your own Jev key and your own traffic, so TypeSafe's [Master Customer Agreement](https://typesafe.ai/legal/mca) applies to how you use it. Read it first. §2.3(b) says a customer may not use Jev's output to "perform model distillation, train a model to imitate the output of the Services, or develop (or to facilitate the development of) a similar or competing product or service", and §6(a) lets TypeSafe suspend access over a breach.
+
+We don't believe Jevstiller does what that clause is about. Nothing it builds resembles Jev:
+- Each local model is a small classifier (one linear layer over a frozen open-source sentence encoder) for **one** of your questions, trained only on your own requests and Jev's answers to them.
+- It can't answer a question it hasn't seen many times, can't take new instructions, and is of no use outside your deployment.
+- It isn't offered to anyone else, and it keeps sending Jev every request it isn't sure of, plus a permanent audit share.
+
+This is our reading, not legal advice, and TypeSafe hasn't reviewed it. If your Jev access matters to your business, check with TypeSafe or a lawyer before you deploy. Jevstiller is an independent project, not affiliated with or endorsed by TypeSafe.
 
 ## Questions and contributing
 

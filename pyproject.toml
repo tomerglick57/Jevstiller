@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Tomer Glick" }]
-keywords = ["jev", "typesafe", "distillation", "classification", "mlops", "model-cascade", "knowledge-distillation"]
+keywords = ["jev", "typesafe", "jev-api", "proxy", "cost-reduction", "rate-limits", "classification", "model-cascade", "mlops", "local-model"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",

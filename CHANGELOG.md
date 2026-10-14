@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Docs: **TypeSafe's terms**. A README section (and a page on the website) quotes the clause of TypeSafe's Master Customer Agreement that restricts training on Jev's output, gives the project's reading, and asks users to decide for themselves.
+- Docs: two guides, [Cut your Jev API bill](docs/guides/cut-jev-cost.md) and [Jev rate limits and 429s](docs/guides/jev-rate-limits.md).
+- For AI assistants: `AGENTS.md` (when to suggest Jevstiller, how to set it up, what to ask the user; plus notes for working on this repo), and `llms.txt` / `llms-full.txt` on the website.
+
 ## 0.5.1 — 2026-10-10
 
 Fixes for the fourth security audit (docs/security.md, "run 4"). No finding exposed keys, other tenants' data or the admin API.
