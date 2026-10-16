@@ -15,7 +15,7 @@ POST /v1/systemone  {state, model, questions}  +  Authorization: Bearer <caller'
         │
         ├─ access checks (network, token, one Authorization header, body limit) ── fail ─► 4xx, never forwarded
         ├─ not understood (bad JSON, unknown top-level fields, no key, no choice or noul question,
-        │  more than max_questions distinct questions) ────────────────────────────► forward as is, record nothing
+        │  more than max_questions distinct questions, images) ────────────────────► forward as is, record nothing
         │
         ├─ key NOT accepted by Jev yet ─► forward the whole request first; if Jev answers it (2xx, a valid
         │                                 systemone answer), the key becomes accepted and the choice answers
@@ -96,7 +96,8 @@ Extra headers on every `/v1/systemone` response:
 | Network not in `allow_networks` | 403 |
 | Missing or wrong `x-jevstiller-token` (when `access_token` is set) | 401 |
 | More than one `Authorization` header; `.`/`..` path segments; control characters or an encoded `?`/`#` in the path | 400 |
-| Body over `max_body_mb` (declared or streamed) | 413 |
+| Body over `max_body_mb` (declared or streamed); for `POST /v1/systemone` with the `TypeSafe-Danger-Zone-Images: true` header, over `max_image_body_mb` | 413 |
+| More than `max_large_bodies` (16) image requests above `max_body_mb` at once | 503, `retry-after: 1` |
 
 Errors the proxy generates use Jev's shape (`{"detail": "..."}` with a `jvs_` request id), so the SDK raises the usual `TypeSafeAPIError` subclasses and retries 429/5xx as it would against Jev.
 

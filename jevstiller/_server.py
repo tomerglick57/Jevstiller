@@ -77,6 +77,7 @@ def _nominated(raw: Sequence[tuple[bytes, bytes]]) -> set[str]:
     return {t.strip().lower() for k, v in raw if k.lower() == b"connection"
             for t in v.decode("latin-1").split(",") if t.strip()}
 KNOWN_FIELDS = {"state", "model", "questions"}
+IMAGES_HEADER = b"typesafe-danger-zone-images"            # Jev 1.14: required on every request that sends an image
 NOUL_FIELDS = {"type", "instructions", "criteria"}      # a noul question with anything else is forwarded as is
 LOCAL_PATHS = ("/healthz", "/readyz", "/metrics")          # served by the proxy itself, never forwarded
 PROBE_PATHS = ("/healthz", "/readyz")                     # GET/HEAD need no access token (load balancers)
@@ -98,7 +99,12 @@ class ProxySettings:
     access_token: str | None = None                        # if set, callers must send x-jevstiller-token
     allow_networks: list[str] = field(default_factory=list)    # if set, only these client CIDRs (the peer as
                                                            # uvicorn reports it; see trust_forwarded_for in cli)
-    max_body_bytes: int = 4 * 2**20                        # larger requests get 413 (Jev's own limit is ~64k tokens)
+    max_body_bytes: int = 4 * 2**20                        # larger requests get 413 (Jev's context is 64k tokens,
+                                                           # 262k with long context: about 1 MiB of English)
+    max_image_body_bytes: int = 32 * 2**20                 # except POST /v1/systemone with Jev's images header: up
+                                                           # to this (Jev's own limit), forwarded and never parsed
+    max_large_bodies: int = 16                             # such bodies above max_body_bytes held at once; more get
+                                                           # 503 + retry-after (the SDK retries)
     max_questions: int = 32                                # distinct choice questions routed per request
     max_encoder_wait_ms: float = 200.0                     # encoder busier than this: forward (0 = never)
 
@@ -223,6 +229,19 @@ def _noul_value(res: Any, cutoffs: Sequence[float]) -> float:
     p = float(res.probs["true"])
     v = round(p, 4)
     return v if str(noul_labels([v], cutoffs)[0]) == res.label else p
+
+
+def _images_requested(raw: Sequence[tuple[bytes, bytes]]) -> bool:
+    """The request carries Jev's opt-in header for images, `TypeSafe-Danger-Zone-Images: true`."""
+    return any(k.lower() == IMAGES_HEADER and v.strip().lower() == b"true" for k, v in raw)
+
+
+def _body_limit(settings: ProxySettings, method: str, path: str, raw: Sequence[tuple[bytes, bytes]]) -> int:
+    """The largest body the proxy takes: Jev's own limit for a request with images, `max_body_bytes` otherwise.
+    With the usual 4 MiB, a single large PNG got a 413 that Jev would have answered."""
+    if method == "POST" and path == SYSTEM_ONE and _images_requested(raw):
+        return max(settings.max_body_bytes, settings.max_image_body_bytes)
+    return settings.max_body_bytes
 
 
 def _no_cookies() -> CookieJar:
@@ -363,7 +382,7 @@ class Proxy:
     # ---- handlers -----------------------------------------------------------------
     async def _body(self, request: Request) -> bytes:
         body = await request.body()                     # bounded while streaming by AccessMiddleware
-        if len(body) > self.settings.max_body_bytes:
+        if len(body) > _body_limit(self.settings, request.method, request.scope.get("path", ""), request.headers.raw):
             raise _TooLarge()
         return body
 
@@ -380,13 +399,18 @@ class Proxy:
         key = _bearer(request)
         kh = self.keys.hash(key)
         log_rec: dict[str, Any] = {"path": SYSTEM_ONE}
+        if (len(body) > self.settings.max_body_bytes
+                or request.headers.get("content-type", "").lower().startswith("multipart/")):
+            # images (Jev 1.14): a multipart body, or one only a request with images may send. Never parsed
+            return await self._plain_forward(request, body, kh, "images", t0, log_rec)
         try:
             req = json.loads(body)
         except Exception:                               # includes RecursionError on absurd nesting
             req = None
         if not (isinstance(req, dict) and set(req) <= KNOWN_FIELDS and isinstance(req.get("questions"), dict)
                 and req["questions"] and isinstance(req.get("model"), str) and "state" in req and key):
-            return await self._plain_forward(request, body, kh, "not_understood", t0, log_rec)
+            reason = "images" if isinstance(req, dict) and "assets" in req else "not_understood"
+            return await self._plain_forward(request, body, kh, reason, t0, log_rec)
 
         # one routing per distinct choice or noul question; duplicates under other names share it
         groups: dict[str, list[str]] = {}
@@ -698,6 +722,10 @@ class _TooLarge(Exception):
     pass
 
 
+class _Busy(Exception):
+    """`max_large_bodies` requests with a body above `max_body_bytes` are already held."""
+
+
 _BAD_PATH_CHARS = re.compile(r"[\x00-\x1f\x7f?#\\]|%(?:2e|2f|5c)|^//", re.IGNORECASE)
 # control characters, ? and # (decoded from %xx), backslashes, dot, slash or backslash still percent-encoded after
 # one decoding (%252e arrives as %2e), and a leading // (a scheme-relative URL to httpx): none appear in Jev's API,
@@ -711,12 +739,17 @@ class AccessMiddleware:
     client network (`allow_networks`, against the peer uvicorn reports), the shared token, a single
     Authorization header, no `.`/`..` path segments, and the body limit, enforced on the declared
     Content-Length and again while the body streams in (chunked bodies included).
+
+    A request with images may be larger (`_body_limit`). While its body is above `max_body_bytes` it holds one of
+    `max_large_bodies` slots, until its response is sent: the larger limit is 8 times the usual one by default,
+    and without a cap 100 slow uploads could hold 3 GiB.
     """
 
     def __init__(self, app, settings: ProxySettings, metrics: ProxyMetrics | None = None):
         import ipaddress
         self.app, self.settings, self.metrics = app, settings, metrics
         self.networks = [ipaddress.ip_network(n, strict=False) for n in settings.allow_networks]
+        self._large = 0                                 # large bodies held (event loop only: no lock needed)
 
     def _client_allowed(self, scope) -> bool:
         if not self.networks:
@@ -729,10 +762,17 @@ class AccessMiddleware:
             return False
         return any(ip in n for n in self.networks)
 
-    async def _refuse(self, reason: str, status: int, detail: str, scope, receive, send) -> None:
+    async def _refuse(self, reason: str, status: int, detail: str, scope, receive, send,
+                      retry_after: float | None = None) -> None:
         if self.metrics is not None:
             self.metrics.rejected.inc(reason)
-        await _error(status, f"{detail} (jevstiller)")(scope, receive, send)
+        await _error(status, f"{detail} (jevstiller)", retry_after)(scope, receive, send)
+
+    def _take_large(self) -> bool:
+        if self._large >= self.settings.max_large_bodies:
+            return False
+        self._large += 1
+        return True
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -756,27 +796,41 @@ class AccessMiddleware:
             # each of these can be rebuilt into a different path upstream than the one checked here (security
             # audits runs 2 and 3; see _BAD_PATH_CHARS)
             return await self._refuse("path", 400, "invalid path", scope, receive, send)
-        limit = self.settings.max_body_bytes
+        limit, usual = _body_limit(self.settings, method, path, raw), self.settings.max_body_bytes
         lengths = [v for k, v in raw if k.lower() == b"content-length"]
         try:
-            if lengths and int(lengths[-1]) > limit:
-                return await self._refuse("body", 413, "request body too large", scope, receive, send)
+            declared = int(lengths[-1]) if lengths else 0
         except ValueError:
             return await self._refuse("body", 400, "invalid content-length", scope, receive, send)
+        if declared > limit:
+            return await self._refuse("body", 413, "request body too large", scope, receive, send)
+        busy = ("large_bodies", 503, "too many large requests at once; retry shortly")
+        held = declared > usual
+        if held and not self._take_large():
+            return await self._refuse(*busy, scope, receive, send, retry_after=1)
         received = 0
 
         async def limited_receive():
-            nonlocal received
+            nonlocal received, held
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > limit:
                     raise _TooLarge()
+                if received > usual and not held:       # a chunked body past the usual limit
+                    if not self._take_large():
+                        raise _Busy()
+                    held = True
             return message
         try:
             await self.app(scope, limited_receive, send)
         except _TooLarge:
             await self._refuse("body", 413, "request body too large", scope, receive, send)
+        except _Busy:
+            await self._refuse(*busy, scope, receive, send, retry_after=1)
+        finally:
+            if held:
+                self._large -= 1
 
 
 def create_app(manager: TaskManager, settings: ProxySettings | None = None, keys: KeyRegistry | None = None,

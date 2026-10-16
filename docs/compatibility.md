@@ -6,13 +6,19 @@ What Jevstiller works with, what callers see, and what a version number promises
 
 | | Tested with |
 |---|---|
-| TypeSafe SDK | `typesafe-sdk` 0.7.1, the current release, with both sync and async clients. CI runs the unmodified SDK against the proxy over real HTTP. 0.7.1 is also the version `pip install jevstiller` requires at least (for the Jev adapter). |
-| Jev | `jev-1.13.0`, which `jev-latest` resolved to on 2026-09-24 and 2026-09-25: a live replay ([benchmarks](benchmarks.md)) and recorded wire responses (`tests/fixtures/jev/`) that every test run replays through the proxy |
+| TypeSafe SDK | `typesafe-sdk` 0.7.1 (the version in `uv.lock`), with both sync and async clients. CI runs the unmodified SDK against the proxy over real HTTP. 0.7.1 is also the version `pip install jevstiller` requires at least (for the Jev adapter). 0.7.5 (2026-10-14, adds images) was checked by hand on 2026-10-16: text and image requests (1, 6 and 20 MiB) through the proxy to a stub Jev. |
+| Jev | `jev-1.13.0`, which `jev-latest` resolved to on 2026-09-24 and 2026-09-25: a live replay ([benchmarks](benchmarks.md)) and recorded wire responses (`tests/fixtures/jev/`) that every test run replays through the proxy. `jev-1.14.0` (released 2026-10-14 as `jev-preview`) has not been tested against the live API. |
 | TypeSafe JavaScript SDK | Not tested. It speaks the same HTTP API, so it should work; nothing in CI checks it. |
 | Other clients | Anything that speaks Jev's HTTP API. The proxy doesn't depend on the SDK; the SDK only needs `TYPESAFE_BASE_URL` (or `base_url=`) pointed at it. |
 
 **When Jev changes:**
 - **A new model behind `jev-latest`:** the task starts a new teacher lineage. Answers come from Jev until a student trained on the new model's answers passes shadow (`teacher_change`, DESIGN.md §7.12).
+  - TypeSafe announced on 2026-10-14 that `jev-latest` moves to `jev-1.14.0` about a week later. Expect the local share of `jev-latest` tasks to drop then, and to come back as each task's new student trains on 1.14's answers (`min_train_samples`, `min_calib_samples`) and passes shadow (`shadow_min_samples`).
+  - Tasks asked for `jev-1.13.0` by name keep their students. The requested model is part of the task, so moving a caller from `jev-latest` to `jev-1.13.0` starts new tasks from nothing.
+- **Jev 1.14's experimental features** (the `TypeSafe-Danger-Zone-*` headers, which the proxy forwards unchanged):
+  - images are forwarded and never learned from (below);
+  - `box` questions are forwarded, like `score`;
+  - with the long-context header the student still reads only the first 256 tokens ([coverage](coverage.md)).
 - **A response the proxy doesn't recognise:** it is returned to the caller unchanged and not recorded.
 - **New request fields or question types:** the request is forwarded as is (below).
 
@@ -26,6 +32,7 @@ The proxy never fails a request that Jev would have answered.
 | `POST /v1/systemone` whose questions are `choice` and yes/no (`noul`) questions of trained tasks | The same: answered locally when every question clears its task's policy. A `noul` answer is `{"type": "noul", "noul": p}` with the student's probability, on Jev's side of your cut-off (`noul_cutoffs`, default 0.5) on at least `target_agreement` of requests. |
 | `POST /v1/systemone` with other question types (`score`, …), a `noul` question with fields beyond `instructions` and `criteria`, or any `noul` question when `noul_cutoffs` is empty | Forwarded. The request's choice and noul answers are still recorded. |
 | `POST /v1/systemone` the proxy doesn't understand: invalid JSON, unknown top-level fields, no bearer key, more than `max_questions` distinct questions | Forwarded as is; nothing is recorded |
+| `POST /v1/systemone` with images (Jev 1.14): a multipart body, or `assets` in the JSON | Forwarded as is; nothing is recorded. With the `TypeSafe-Danger-Zone-Images: true` header the body may be up to `max_image_body_mb` (32 MiB, Jev's own limit). Without the header the usual `max_body_mb` (4 MiB) applies; Jev refuses an image request without it anyway. |
 | Any other path or method (`GET /v1/models`, …) | Forwarded unchanged |
 | `/healthz`, `/readyz`, `/metrics`, `/jevstiller/*` | Served by the proxy, never forwarded |
 

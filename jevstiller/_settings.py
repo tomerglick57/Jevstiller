@@ -114,6 +114,8 @@ class ServeSettings:
     allow_networks: list[str] = field(default_factory=list)
     trust_forwarded_for: list[str] = field(default_factory=list)   # proxies allowed to set X-Forwarded-For
     max_body_mb: float = 4.0
+    max_image_body_mb: float = 32.0             # POST /v1/systemone with Jev's images header (Jev's own limit)
+    max_large_bodies: int = 16                  # bodies above max_body_mb held at once; more get 503
     max_questions: int = 32                     # per request; more are forwarded without routing
     max_encoder_wait_ms: float = 200.0          # encoder backed up beyond this: forward instead (0 = never)
     tenants: dict[str, str] = field(default_factory=dict)          # key hash -> tenant
@@ -168,6 +170,10 @@ class ServeSettings:
             v = getattr(self, name)
             if v is not None and not (0 < v < math.inf):
                 raise ValueError(f"{name} must be a number of days > 0 (or unset: keep forever)")
+        if not 0 < self.max_image_body_mb < math.inf:
+            raise ValueError("max_image_body_mb must be a finite number of MiB > 0")
+        if self.max_large_bodies < 1:
+            raise ValueError("max_large_bodies must be at least 1")
         if not 0 <= self.key_ttl_s < math.inf:
             raise ValueError("key_ttl_s must be a finite number of seconds >= 0")
         from urllib.parse import urlsplit
@@ -279,8 +285,8 @@ SECTIONS = {
     "server": ("host", "port", "data_dir", "log_level", "log_format", "ssl_certfile", "ssl_keyfile", "admin_token",
                "admin_token_file", "metrics_public"),
     "proxy": ("upstream", "upstream_timeout_s", "max_upstream_inflight", "tenancy", "key_ttl_s", "access_token",
-              "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_questions",
-              "max_encoder_wait_ms", "tenants", "tenants_file", "price_per_mtok"),
+              "access_token_file", "allow_networks", "trust_forwarded_for", "max_body_mb", "max_image_body_mb",
+              "max_large_bodies", "max_questions", "max_encoder_wait_ms", "tenants", "tenants_file", "price_per_mtok"),
     "manager": ("target_agreement", "confidence_floor", "noul_cutoffs", "max_loaded", "max_memory_mb", "admit_after",
                 "admit_window_s",
                 "max_tasks",

@@ -63,6 +63,9 @@ def test_secrets_are_redacted(cfg):
     ("[tasks.k]\ntarget = 0.9\n", "unknown keys"),
     ("[server]\nssl_certfile = 'a.pem'\n", "ssl_keyfile"),
     ("[proxy]\nmax_encoder_wait_ms = -1\n", "max_encoder_wait_ms"),
+    ("[proxy]\nmax_image_body_mb = inf\n", "max_image_body_mb"),
+    ("[proxy]\nmax_image_body_mb = 0\n", "max_image_body_mb"),
+    ("[proxy]\nmax_large_bodies = 0\n", "max_large_bodies"),
 ])
 def test_invalid_configs_are_rejected(tmp_path, toml, err):
     p = tmp_path / "bad.toml"
