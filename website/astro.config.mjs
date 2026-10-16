@@ -46,6 +46,13 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Guides',
+					items: [
+						{ label: 'Cut your Jev API bill', slug: 'guides/cut-jev-cost' },
+						{ label: 'Jev rate limits and 429s', slug: 'guides/jev-rate-limits' },
+					],
+				},
+				{
 					label: 'Run the proxy',
 					items: [
 						{ label: 'The drop-in proxy', slug: 'proxy/overview' },
@@ -72,6 +79,7 @@ export default defineConfig({
 						{ label: 'Benchmarks', slug: 'project/benchmarks' },
 						{ label: 'Roadmap', slug: 'project/roadmap' },
 						{ label: 'Contributing', slug: 'project/contributing' },
+						{ label: "TypeSafe's terms", slug: 'project/terms' },
 						{ label: 'Design document', link: `${repo}/blob/main/DESIGN.md`, attrs: { target: '_blank' } },
 						{ label: 'Changelog', link: `${repo}/blob/main/CHANGELOG.md`, attrs: { target: '_blank' } },
 					],

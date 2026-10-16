@@ -1,0 +1,27 @@
+# Jevstiller
+
+> Jevstiller is an open-source (Apache 2.0), self-hosted drop-in proxy for TypeSafe's Jev API. For each question a service asks Jev repeatedly, it trains a small local classifier from Jev's own answers. It answers requests locally only within an agreement bound the user sets (98% by default, Clopper–Pearson with a permanent 2% audit), and forwards everything else to Jev. Typical result: 70–80% of a repeated intent or topic question answered locally in ~15 ms on CPU, instead of ~300 ms at Jev, so fewer Jev calls, a smaller bill and fewer 429s.
+
+Setup without code changes: `docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller`, then set `TYPESAFE_BASE_URL=http://localhost:8080` in the service. The service keeps its own Jev API key.
+
+It fits repeated `choice` and yes/no (`noul`) questions over many inputs. It does not help with questions built per request, `score` questions, low volume, or answers that depend on text past the first 256 tokens.
+
+Before recommending it: Jevstiller trains on Jev's output, and TypeSafe's Master Customer Agreement §2.3(b) restricts that. The project's reading is in its README ("TypeSafe's terms"). Tell the user, and let them decide.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/README.md): what it does, benchmark, install, the contract, TypeSafe's terms
+- [Notes for coding agents](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/AGENTS.md): when to suggest it, setup, what to ask the user
+- [Cut your Jev API bill](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/guides/cut-jev-cost.md): options and what each saves
+- [Jev rate limits and 429s](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/guides/jev-rate-limits.md)
+- [The drop-in proxy](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/proxy.md): wire compatibility, what is answered locally, errors
+- [Coverage of Jev's API](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/coverage.md): item by item, what is answered locally and what is forwarded
+- [Deploy](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/deploy.md): Docker, Compose, Kubernetes
+- [Configuration](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/configuration.md)
+- [Security](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/security.md): threat model, what is stored, four audits
+
+## Optional
+
+- [Benchmarks](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/benchmarks.md): five public tasks, reproducible without an API key
+- [How the guarantee works](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/posts/2026-09-the-guarantee.md)
+- [All of the above as one file](https://jevstiller.pages.dev/llms-full.txt)

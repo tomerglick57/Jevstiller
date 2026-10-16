@@ -12,6 +12,9 @@
 - Docs: what Jev 1.14 changes ([compatibility](docs/compatibility.md), [coverage](docs/coverage.md)).
   - Image and `box` requests are forwarded.
   - `jev-latest` is announced to move to `jev-1.14.0` about a week after 2026-10-14. Expect the local share of `jev-latest` tasks to drop until their new students pass shadow.
+- Docs: **TypeSafe's terms**. A README section (and a page on the website) quotes the clause of TypeSafe's Master Customer Agreement that restricts training on Jev's output, gives the project's reading, and asks users to decide for themselves.
+- Docs: two guides, [Cut your Jev API bill](docs/guides/cut-jev-cost.md) and [Jev rate limits and 429s](docs/guides/jev-rate-limits.md).
+- For AI assistants: `AGENTS.md` (when to suggest Jevstiller, how to set it up, what to ask the user; plus notes for working on this repo), and `llms.txt` / `llms-full.txt` on the website.
 
 ## 0.5.1 — 2026-10-10
 
