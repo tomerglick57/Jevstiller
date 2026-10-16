@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Image requests (Jev 1.14) are no longer refused above 4 MiB.**
+  - Jev 1.14 (2026-10-14) accepts images, experimentally, behind the `TypeSafe-Danger-Zone-Images: true` header, in bodies up to 32 MiB.
+  - The proxy forwarded image requests, but answered any body over `max_body_mb` (4 MiB) with a 413 that Jev would have answered: one large PNG was enough.
+  - `POST /v1/systemone` with that header may now send up to `max_image_body_mb` (32 MiB, `[proxy]`). These requests are forwarded unchanged and never parsed or learned from.
+  - At most `max_large_bodies` (16, `[proxy]`) bodies above 4 MiB are held at once. More get a 503 with `retry-after: 1`, which the SDK retries (`jevstiller_rejected_total{reason="large_bodies"}`).
+- The access log gives image requests `reason: "images"` (they were `not_understood`).
+- Python API: `ProxySettings.max_image_body_bytes` and `ProxySettings.max_large_bodies`.
+- Docs: what Jev 1.14 changes ([compatibility](docs/compatibility.md), [coverage](docs/coverage.md)).
+  - Image and `box` requests are forwarded.
+  - `jev-latest` is announced to move to `jev-1.14.0` about a week after 2026-10-14. Expect the local share of `jev-latest` tasks to drop until their new students pass shadow.
 - Docs: **TypeSafe's terms**. A README section (and a page on the website) quotes the clause of TypeSafe's Master Customer Agreement that restricts training on Jev's output, gives the project's reading, and asks users to decide for themselves.
 - Docs: two guides, [Cut your Jev API bill](docs/guides/cut-jev-cost.md) and [Jev rate limits and 429s](docs/guides/jev-rate-limits.md).
 - For AI assistants: `AGENTS.md` (when to suggest Jevstiller, how to set it up, what to ask the user; plus notes for working on this repo), and `llms.txt` / `llms-full.txt` on the website.

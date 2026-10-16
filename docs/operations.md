@@ -78,7 +78,7 @@ Agreement is with Jev, not accuracy.
 | `jevstiller_questions_total{outcome}` | Questions answered locally, or why they went to Jev (`co_deferred`, `key_unverified`, `not_admitted`, `unsupported`, …) |
 | `jevstiller_upstream_responses_total{status}` | Jev's `2xx` / `4xx` / `5xx`, or the proxy's own: `timeout` (504), `unreachable` / `error` (502), `invalid_url` (400), `backoff` (429 during `retry-after`), `overload` (503). `retried` counts the one retry of a connection Jev had just closed. |
 | `jevstiller_upstream_duration_seconds` | Jev latency as seen by the proxy |
-| `jevstiller_rejected_total{reason}` | Refused by the proxy: `network`, `token`, `duplicate_auth`, `path`, `body` |
+| `jevstiller_rejected_total{reason}` | Refused by the proxy: `network`, `token`, `duplicate_auth`, `path`, `body`, `large_bodies` (503: more than `max_large_bodies` image requests above `max_body_mb` at once) |
 | `jevstiller_tasks`, `jevstiller_tasks_loaded`, `jevstiller_student_memory_bytes` | Task counts and memory |
 | `jevstiller_training_jobs{state}` | `running` / `queued` |
 | `jevstiller_verified_keys` | API keys currently accepted |
@@ -99,7 +99,7 @@ Useful alerts:
 
 ## Logs
 
-With `log_format = "json"` there is one JSON object per line. Each `/v1/systemone` request produces an access-log line (`logger: jevstiller.access`) with these fields: `source`, `status`, `request_id`, `latency_ms`, `questions`, `tenant`, `tasks` (keys), `reasons` (counts). The line never contains an API key or request text.
+With `log_format = "json"` there is one JSON object per line. Each `/v1/systemone` request produces an access-log line (`logger: jevstiller.access`) with these fields: `source`, `status`, `request_id`, `latency_ms`, `questions`, `tenant`, `tasks` (keys), `reasons` (counts), and `reason` when the request was forwarded without routing (`not_understood`, `images`, `no_choice`, `too_many_questions`, `overloaded`, `proxy_error`). The line never contains an API key or request text.
 
 Events worth watching (logger `jevstiller`):
 
