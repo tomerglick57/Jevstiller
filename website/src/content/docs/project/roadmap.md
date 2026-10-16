@@ -53,6 +53,11 @@ and its own Jev key.
   disk is nearly full, admin changes no longer race loads and deletes, one caller can't flush others' admission
   counts, and the website's deploy token no longer shares a job with the build.
 
+**0.5.2:**
+- **Jev 1.14's image requests are forwarded** up to Jev's 32 MiB limit: above 4 MiB they got a 413 from the proxy.
+  Nothing is learned from them.
+- **Docs:** TypeSafe's terms, guides on cutting the Jev bill and on rate limits, and `AGENTS.md` for AI assistants.
+
 ## Next
 
 - **A tolerance for yes/no answers.** Since 0.5 a `noul` answer is covered for its side of your cut-off. For

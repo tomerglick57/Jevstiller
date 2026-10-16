@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 — 2026-10-17
+
+Jev 1.14 compatibility: requests with images, up to Jev's own 32 MiB limit, are forwarded instead of refused above 4 MiB. Also new docs: TypeSafe's terms, two guides, and `AGENTS.md`.
 
 - **Image requests (Jev 1.14) are no longer refused above 4 MiB.**
   - Jev 1.14 (2026-10-14) accepts images, experimentally, behind the `TypeSafe-Danger-Zone-Images: true` header, in bodies up to 32 MiB.
