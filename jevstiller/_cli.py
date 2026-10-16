@@ -119,7 +119,9 @@ def _serve(a: argparse.Namespace) -> None:
                              max_upstream_inflight=s.max_upstream_inflight, tenancy=s.tenancy,
                              key_ttl_s=s.key_ttl_s, price_per_mtok=s.price_per_mtok, tenant_map=s.tenants,
                              access_token=s.access_token, allow_networks=s.allow_networks,
-                             max_body_bytes=int(s.max_body_mb * 2**20), max_questions=s.max_questions,
+                             max_body_bytes=int(s.max_body_mb * 2**20),
+                             max_image_body_bytes=int(s.max_image_body_mb * 2**20),
+                             max_large_bodies=s.max_large_bodies, max_questions=s.max_questions,
                              max_encoder_wait_ms=s.max_encoder_wait_ms)
 
     import tempfile

@@ -54,7 +54,7 @@ By default anyone who can reach the port can use it, with their own Jev key. Res
 An empty token, token file or access-control variable stops startup rather than switching the control off, and the startup log names the controls in effect.
 
 Always enforced, for every path:
-- a body limit (`max_body_mb`, 4 MiB), checked on the declared length and while streaming;
+- a body limit (`max_body_mb`, 4 MiB), checked on the declared length and while streaming. `POST /v1/systemone` with Jev's images header may send up to `max_image_body_mb` (32 MiB, Jev's own limit), and at most `max_large_bodies` (16) bodies above 4 MiB are held at once (more get 503);
 - no `.`/`..` path segments, and no control characters or encoded `?`/`#` in the path; forwarded paths must stay under the `upstream` URL's path;
 - at most `max_questions` (32) distinct questions routed per request;
 - task caps (`max_tasks` 10,000, `max_tasks_per_tenant` 1,000).

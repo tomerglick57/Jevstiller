@@ -194,7 +194,9 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 | `access_token` / `access_token_file` | none | `--access-token`, `--access-token-file` | Callers must send `x-jevstiller-token`. Never forwarded. |
 | `allow_networks` | `[]` (all) | `--allow-network` (repeat) | Client CIDRs allowed to use the proxy. |
 | `trust_forwarded_for` | `[]` | `--trust-forwarded-for` (repeat) | Proxies whose `X-Forwarded-For` is trusted for `allow_networks`: addresses or networks without host bits (`10.0.0.5`, `10.0.0.0/24`; `10.0.0.5/24` is an error, since uvicorn would silently ignore it). Empty: the TCP peer is used. |
-| `max_body_mb` | `4.0` | `--max-body-mb` | Larger bodies get 413 (declared or streamed). |
+| `max_body_mb` | `4.0` | `--max-body-mb` | Larger bodies get 413 (declared or streamed), except image requests (next). |
+| `max_image_body_mb` | `32.0` | | Body limit for `POST /v1/systemone` with Jev's `TypeSafe-Danger-Zone-Images: true` header: Jev's own limit. These requests are forwarded and never parsed. Finite, > 0. |
+| `max_large_bodies` | `16` | | Image requests with a body above `max_body_mb` held at once (each is in memory until its response is sent); more → 503 `retry-after: 1`. At least 1. |
 | `max_questions` | `32` | `--max-questions` | Distinct choice questions routed per request; more → forwarded unrouted. |
 | `max_encoder_wait_ms` | `200` | `--max-encoder-wait-ms` | If a local answer would wait longer than this for the shared encoder (traffic beyond its capacity), forward the request to Jev instead. `0` never forwards for this reason (requests queue). |
 | `price_per_mtok` | `0.042` | | For cost accounting. |
@@ -232,4 +234,4 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 
 ## Library: `ProxySettings` and `create_app`
 
-For embedding the proxy in your own ASGI stack: `jevstiller.server.create_app(manager, ProxySettings(...), KeyRegistry(salt, ttl), admin_token=..., metrics_public=..., ready=..., closers=[...])`, with `manager` a `jevstiller.TaskManager`. `jevstiller.server` exports these four names (`create_app`, `ProxySettings`, `KeyRegistry`, `load_salt`); the rest of the proxy is internal. `ProxySettings` has the `[proxy]` fields above, with `tenant_map` in place of `tenants` and `max_body_bytes` in place of `max_body_mb`, and without the `*_file` settings (pass the values) and `trust_forwarded_for` (a setting of the ASGI server in front).
+For embedding the proxy in your own ASGI stack: `jevstiller.server.create_app(manager, ProxySettings(...), KeyRegistry(salt, ttl), admin_token=..., metrics_public=..., ready=..., closers=[...])`, with `manager` a `jevstiller.TaskManager`. `jevstiller.server` exports these four names (`create_app`, `ProxySettings`, `KeyRegistry`, `load_salt`); the rest of the proxy is internal. `ProxySettings` has the `[proxy]` fields above, with `tenant_map` in place of `tenants`, `max_body_bytes` in place of `max_body_mb` and `max_image_body_bytes` in place of `max_image_body_mb`, and without the `*_file` settings (pass the values) and `trust_forwarded_for` (a setting of the ASGI server in front).
