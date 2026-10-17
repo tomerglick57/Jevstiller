@@ -51,3 +51,10 @@ npm run dev
 
 Full guide: [CONTRIBUTING.md](https://github.com/tomerglick57/Jevstiller/blob/main/CONTRIBUTING.md).
 Security issues: [SECURITY.md](https://github.com/tomerglick57/Jevstiller/blob/main/SECURITY.md).
+
+## Citing
+
+If Jevstiller is part of research, cite it with the metadata in
+[`CITATION.cff`](https://github.com/tomerglick57/Jevstiller/blob/main/CITATION.cff); GitHub's "Cite this
+repository" button renders it as BibTeX or APA. The method is described in [A bound, not a threshold](/posts/the-guarantee/)
+and the prior art it builds on is listed under [How it compares](/concepts/comparison/).

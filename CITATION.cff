@@ -1,0 +1,42 @@
+# Citation metadata (https://citation-file-format.github.io). GitHub shows it as "Cite this repository";
+# Zenodo reads it when a release is archived. Bump `version` and `date-released` with each release.
+cff-version: 1.2.0
+message: "If you use Jevstiller in research, please cite it as below."
+type: software
+title: "Jevstiller: a drop-in proxy that distills repeated Jev classification calls into a local model, within an agreement bound"
+abstract: >-
+  Jevstiller is a self-hosted HTTP proxy for TypeSafe's Jev API. For each classification question a service
+  asks repeatedly, it trains a small local classifier (a logistic-regression head on a frozen sentence encoder)
+  from Jev's own answers and their probability distributions, and answers requests locally only within an
+  agreement bound the user sets: the routing threshold is chosen with a Clopper-Pearson bound so that, with 95%
+  confidence, the share of all requests answered locally and differently from Jev stays within the budget
+  (2% by default). A permanent random audit of live traffic re-checks the bound, with automatic fallback to Jev
+  and retraining on drift or a change of the upstream model. On five public text classification tasks replayed
+  against Jev's recorded answers, 22% to 80% of requests are answered locally at 98.7% to 99.7% agreement.
+authors:
+  - family-names: Glick
+    given-names: Tomer
+version: 0.5.2
+date-released: 2026-10-17
+license: Apache-2.0
+repository-code: "https://github.com/tomerglick57/Jevstiller"
+url: "https://jevstiller.pages.dev"
+keywords:
+  - knowledge distillation
+  - text classification
+  - model cascade
+  - selective prediction
+  - Clopper-Pearson bound
+  - TypeSafe Jev
+  - System One models
+  - proxy
+references:
+  - type: article
+    title: "A local model that answers like Jev 98% of the time, and how we know"
+    authors:
+      - family-names: Glick
+        given-names: Tomer
+    year: 2026
+    month: 9
+    url: "https://jevstiller.pages.dev/posts/the-guarantee/"
+    notes: "How the routing threshold is chosen, why a point estimate breaks the budget, and what the bound costs."
