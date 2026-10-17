@@ -93,7 +93,8 @@ def _replayer(names: dict[str, str]):
     return Starlette(routes=[Route("/{p:path}", handle, methods=["GET", "POST"])])
 
 
-@pytest.mark.parametrize("name", ["systemone_choice_200", "systemone_mixed_200"])
+@pytest.mark.parametrize("name", ["systemone_choice_200", "systemone_mixed_200",          # jev-1.13.0
+                                  "systemone_choice_200_jev-1.14.0", "systemone_mixed_200_jev-1.14.0"])
 def test_recorded_responses_parse_the_same_through_the_proxy(tmp_path, name):
     fx = _fixture(name)
     req = fx["request"]["json"]

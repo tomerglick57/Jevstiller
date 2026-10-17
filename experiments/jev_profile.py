@@ -2,6 +2,7 @@
 
     python experiments/jev_profile.py                   # needs TYPESAFE_API_KEY (.env is read)
     python experiments/jev_profile.py --no-fixtures
+    python experiments/jev_profile.py --model jev-1.14.0 --fixtures-only   # 2 requests: that model's answers
 
 Writes `tests/fixtures/jev/*.json` (status, the headers that matter, body; no keys: responses never carry one)
 and `experiments/results/jev-profile.json`. About 420 requests: cents.
@@ -57,17 +58,22 @@ def record(client: httpx.Client, name: str, method: str, path: str, **kw) -> htt
     return r
 
 
-def fixtures(base: str, key: str) -> None:
+def fixtures(base: str, key: str, model: str = "jev-latest") -> None:
+    """The answers of `model` (fixture names get a `_<model>` suffix unless it is jev-latest) and, for jev-latest,
+    the error responses and the model list too, which don't depend on the model."""
     h = {"Authorization": f"Bearer {key}"}
+    sfx = "" if model == "jev-latest" else f"_{model}"
     with httpx.Client(base_url=base, timeout=30) as c:
-        record(c, "systemone_choice_200", "POST", "/v1/systemone", headers=h,
-               json={"state": MESSAGES[0], "model": "jev-latest", "questions": {"label": QUESTION}})
-        record(c, "systemone_mixed_200", "POST", "/v1/systemone", headers=h,
-               json={"state": {"subject": "Refund", "body": MESSAGES[5]}, "model": "jev-latest",
+        record(c, f"systemone_choice_200{sfx}", "POST", "/v1/systemone", headers=h,
+               json={"state": MESSAGES[0], "model": model, "questions": {"label": QUESTION}})
+        record(c, f"systemone_mixed_200{sfx}", "POST", "/v1/systemone", headers=h,
+               json={"state": {"subject": "Refund", "body": MESSAGES[5]}, "model": model,
                      "questions": {"label": QUESTION,
                                    "urgent": {"type": "noul", "instructions": "Does the customer need an answer today?"},
                                    "tone": {"type": "score", "instructions": "How upset is the customer?",
                                             "criteria": ["calm", "annoyed", "angry"]}}})
+        if sfx:
+            return
         record(c, "systemone_401", "POST", "/v1/systemone", headers={"Authorization": "Bearer tsk_invalid_key"},
                json={"state": "x", "model": "jev-latest", "questions": {"label": QUESTION}})
         record(c, "systemone_422", "POST", "/v1/systemone", headers=h,
@@ -107,6 +113,8 @@ def latency(base: str, key: str, levels: list[int], per_level: int) -> dict:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-fixtures", action="store_true")
+    ap.add_argument("--fixtures-only", action="store_true", help="no latency profile")
+    ap.add_argument("--model", default="jev-latest", help="record this model's answers as extra fixtures")
     ap.add_argument("--levels", default="1,8,16")
     ap.add_argument("--per-level", type=int, default=30)
     a = ap.parse_args()
@@ -115,7 +123,9 @@ if __name__ == "__main__":
     base = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai")
     if not a.no_fixtures:
         print("recording fixtures ...")
-        fixtures(base, key)
+        fixtures(base, key, a.model)
+    if a.fixtures_only:
+        raise SystemExit(0)
     print("latency ...")
     lat = latency(base, key, [int(x) for x in a.levels.split(",")], a.per_level)
     out = ROOT / "experiments" / "results" / "jev-profile.json"

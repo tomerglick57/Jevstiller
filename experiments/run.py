@@ -24,10 +24,9 @@ from jevstiller.teachers import CachedTeacher, SyntheticTeacher  # noqa: E402
 
 class CacheOnlyTeacher:
     """Stands in for Jev when every answer is already in the cache (`--teacher cached`, no API key needed)."""
-    name = "jev:jev-1.13.0"
 
-    def __init__(self, cache: Path):
-        self.cache = cache
+    def __init__(self, cache: Path, model: str = "jev-1.13.0"):
+        self.cache, self.name = cache, f"jev:{model}"
 
     def classify(self, texts, task):
         raise SystemExit(f"{len(texts)} message(s) are not in {self.cache}. Unpack experiments/cache/banking77.jsonl.gz "
@@ -50,6 +49,21 @@ class OracleTeacher:
             probs = {c: (self.p_true if c == y else (1 - self.p_true) / (K - 1)) for c in task.labels}
             out.append(TeacherOutput(y, probs, peakedness(probs), input_tokens=len(t.split()) + 40, cost_usd=0.0))
         return out
+
+
+class Capped:
+    """Stops the run before a batch that would take the teacher past `max_calls`: never inside one, since the cache
+    is written when the batch returns and answers already paid for would be lost."""
+
+    def __init__(self, inner, max_calls: int):
+        self.inner, self.name, self.max_calls, self.calls = inner, inner.name, max_calls, 0
+
+    def classify(self, texts, task):
+        if self.calls + len(texts) > self.max_calls:
+            raise SystemExit(f"stopped before {len(texts)} more Jev calls: {self.calls:,} made, --max-jev-calls "
+                             f"{self.max_calls:,}. Answers so far are cached; run again with a higher cap to go on.")
+        self.calls += len(texts)
+        return self.inner.classify(texts, task)
 
 
 CHECKPOINTS = [250, 500, 1000, 2000, 3000, 5000, 7500, 10000, 15000, 20000, 30000, 50000, 75000, 100000]
@@ -89,9 +103,11 @@ def main() -> None:
     ap.add_argument("--rare-classes", default=None, choices=["wait", "defer"],
                     help="classes below --min-per-class: train and defer them to the teacher (Config's default), "
                          "or wait for them")
-    ap.add_argument("--jev-model", default="jev-1.14.0", help="image datasets: the Jev model asked (and cached)")
+    ap.add_argument("--jev-model", default=None,
+                    help="the Jev model asked (and cached separately): jev-1.13.0 for text, jev-1.14.0 for images")
     ap.add_argument("--max-jev-calls", type=int, default=0,
-                    help="image datasets with --teacher jev: required cap on Jev calls; the run stops before exceeding it")
+                    help="cap on Jev calls with --teacher jev (required for image datasets): the run stops before "
+                         "exceeding it")
     ap.add_argument("--out", default="experiments/results")
     ap.add_argument("--tag", default="")
     a = ap.parse_args()
@@ -99,6 +115,7 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     load_env(root / ".env")
     images = a.dataset in IMAGE_LOADERS
+    model = a.jev_model or ("jev-1.14.0" if images else "jev-1.13.0")
     if images and a.teacher == "jev" and a.max_jev_calls <= 0:
         raise SystemExit("image datasets ask Jev about images, billed per token: set --max-jev-calls")
     ds = (IMAGE_LOADERS if images else LOADERS)[a.dataset]()
@@ -112,17 +129,21 @@ def main() -> None:
 
     if images and a.teacher in ("jev", "cached"):
         # the states are image ids: the image teacher sends the images, never the ids as text
-        cache = cache_path(a.dataset.removeprefix("img_"), a.jev_model)
-        inner = (ImageJevTeacher(a.dataset.removeprefix("img_"), a.jev_model, max_calls=a.max_jev_calls)
-                 if a.teacher == "jev" else CacheOnlyTeacher(cache))
+        cache = cache_path(a.dataset.removeprefix("img_"), model)
+        inner = (ImageJevTeacher(a.dataset.removeprefix("img_"), model, max_calls=a.max_jev_calls)
+                 if a.teacher == "jev" else CacheOnlyTeacher(cache, model))
         teacher = CachedTeacher(inner, cache)
     elif a.teacher in ("jev", "cached"):
-        cache = root / "experiments" / "cache" / f"{a.dataset}.jsonl"
+        # one cache per model: the key is (task version, text), and another model's answer to the same text differs
+        name = a.dataset if model == "jev-1.13.0" else f"{a.dataset}-{model}"
+        cache = root / "experiments" / "cache" / f"{name}.jsonl"
         if a.teacher == "cached":
-            inner = CacheOnlyTeacher(cache)
+            inner = CacheOnlyTeacher(cache, model)
         else:
             from jevstiller.teachers.jev import JevTeacher
-            inner = JevTeacher()
+            inner = JevTeacher(model=model)
+            if a.max_jev_calls > 0:
+                inner = Capped(inner, a.max_jev_calls)
         teacher = CachedTeacher(inner, cache)
     elif a.teacher == "oracle":
         teacher = OracleTeacher(dict(ds["rows"]))          # dry run: the hidden labels as a perfect teacher

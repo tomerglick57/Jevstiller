@@ -226,6 +226,40 @@ The task's audit at the end of the session, after 15,000 requests and four stude
 
 The engine recorded one teacher answer it could not use (`teacher_errors: 1`), which the SDK still received from Jev unchanged.
 
+## Jev 1.14
+
+Measured on 2026-10-17 against `jev-1.14.0`, released on 2026-10-14 as `jev-preview`. TypeSafe announced that
+`jev-latest` moves to it about a week later.
+
+- **Wire format: unchanged.** A choice answer, and a request mixing choice, yes/no and score questions, come back
+  with the same fields, types and headers as 1.13's (`tests/fixtures/jev/*_jev-1.14.0.json`, replayed through the
+  proxy by every test run).
+- **Same answers? On 95.0% of messages.** On Banking77's 2,000 held-out messages, 1.14 gave the same label as 1.13's
+  recorded answers for 95.0%. The two are about as accurate against the dataset's labels (78.8% and 78.5%), and as
+  often unsure (below 0.6 on 12.2% and 11.8%). The changes are where Jev is unsure: where either answer was below 0.6
+  (16% of messages), they agreed on 69%. Where both were at least 0.9 sure (45% of the 8,085 messages both answered),
+  they agreed on every one.
+- **So a 1.13 student can't serve 1.14.** It would disagree with 1.14 on about 5% of requests, more than the 2%
+  budget. That is why `teacher_change = "fallback"` (the default) sends everything to Jev until a 1.14 student passes
+  shadow: at least about 3,500 requests per task with the default settings ([compatibility](compatibility.md)).
+- **A 1.14 student.** The benchmark's Banking77 replay, live against 1.14 (`run.py --teacher jev --jev-model
+  jev-1.14.0 --encoder small --backend onnx`), with the same code and settings as the same replay of 1.13's recorded
+  answers:
+
+| Answers from | First student after | Coverage (held out) | Agreement (held out) | Jev latency (mean) |
+|---|---|---|---|---|
+| `jev-1.13.0` (recorded 2026-09-26) | 2,000 requests | 61.7% | 99.40% | – |
+| `jev-1.14.0` (live, 2026-10-17) | 2,000 requests | 54.9% | 99.75% | 262 ms |
+
+One run each. The 1.14 student covered 60.9% at 5,000 messages and 54.9% at the end of the stream, after retrains;
+coverage moves by several points between retrains and splits (see "Banking77 against live Jev"). 8,085 Jev answers,
+13.7M tokens (1,697 per request, as with 1.13), $0.58. The answers are a release asset
+([answers-2026-10-17](https://github.com/tomerglick57/Jevstiller/releases/tag/answers-2026-10-17)): unpacked into
+`experiments/cache/`, the same command with `--teacher cached` reproduces the 1.14 row exactly, without a key.
+
+Both runs use `rare_classes = "defer"`, the default since 0.3.4. The 71.9% in the tables above was measured before
+that change, with `"wait"`. Today's code with `--rare-classes wait` gives 71.7% on the same replay of 1.13's answers.
+
 ## Replays with a perfect ("oracle") teacher
 
 Upper bounds on distillation (the hidden labels play the teacher). `python experiments/run.py --dataset <d> --teacher oracle --encoder <tier>`. Measured before the 2026-09-25 calibration correction. On the live Banking77 replay the correction changed coverage by +0.1 points, so these should be close, but they have not been re-run.

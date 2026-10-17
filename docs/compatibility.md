@@ -8,13 +8,15 @@ What Jevstiller works with, what callers see, and what a version number promises
 | | Tested with |
 |---|---|
 | TypeSafe SDK | `typesafe-sdk` 0.7.1 (the version in `uv.lock`), with both sync and async clients. CI runs the unmodified SDK against the proxy over real HTTP. 0.7.1 is also the version `pip install jevstiller` requires at least (for the Jev adapter). 0.7.5 (2026-10-14, adds images) was checked by hand on 2026-10-16: text and image requests (1, 6 and 20 MiB) through the proxy to a stub Jev. |
-| Jev | `jev-1.13.0`, which `jev-latest` resolved to on 2026-09-24 and 2026-09-25: a live replay ([benchmarks](benchmarks.md)) and recorded wire responses (`tests/fixtures/jev/`) that every test run replays through the proxy. `jev-1.14.0` (released 2026-10-14 as `jev-preview`) has not been tested against the live API. |
+| Jev | `jev-1.13.0`, which `jev-latest` resolved to on 2026-09-24 and 2026-09-25: a live replay ([benchmarks](benchmarks.md)) and recorded wire responses (`tests/fixtures/jev/`) that every test run replays through the proxy. `jev-1.14.0` (released 2026-10-14 as `jev-preview`), tested live on 2026-10-17: its answers have the same fields, types and headers as 1.13's (`tests/fixtures/jev/*_jev-1.14.0.json`, replayed through the proxy by every test run), and a Banking77 replay against it ([benchmarks](benchmarks.md#jev-114)) |
 | TypeSafe JavaScript SDK | Not tested. It speaks the same HTTP API, so it should work; nothing in CI checks it. |
 | Other clients | Anything that speaks Jev's HTTP API. The proxy doesn't depend on the SDK; the SDK only needs `TYPESAFE_BASE_URL` (or `base_url=`) pointed at it. |
 
 **When Jev changes:**
 - **A new model behind `jev-latest`:** the task starts a new teacher lineage. Answers come from Jev until a student trained on the new model's answers passes shadow (`teacher_change`, DESIGN.md §7.12).
   - TypeSafe announced on 2026-10-14 that `jev-latest` moves to `jev-1.14.0` about a week later. Expect the local share of `jev-latest` tasks to drop then, and to come back as each task's new student trains on 1.14's answers (`min_train_samples`, `min_calib_samples`) and passes shadow (`shadow_min_samples`).
+  - Measured on Banking77 ([benchmarks](benchmarks.md#jev-114)): 1.14 gives the same answer as 1.13 on 95% of messages, so a student of 1.13 would disagree with 1.14 on about 5% of requests, more than the 2% budget. That is why the default sends everything to Jev until a 1.14 student passes shadow.
+  - With the default settings that takes each task at least about 3,500 requests after the switch: about 2,500 for its first calibration rows (500 at the 20% calibration share), then 1,000 in shadow. A quiet task stays on Jev for longer.
   - Tasks asked for `jev-1.13.0` by name keep their students. The requested model is part of the task, so moving a caller from `jev-latest` to `jev-1.13.0` starts new tasks from nothing.
 - **Jev 1.14's experimental features** (the `TypeSafe-Danger-Zone-*` headers, which the proxy forwards unchanged):
   - images are forwarded and never learned from (below);

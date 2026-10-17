@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Docs: **Jev 1.14 tested** (docs/compatibility.md, docs/benchmarks.md).
+  - The wire format is unchanged, and recorded 1.14 answers are part of the test fixtures.
+  - On Banking77, 1.14 gives the same answer as 1.13 on 95% of messages, so a 1.13 student can't serve 1.14. The default `teacher_change = "fallback"` handles this: after `jev-latest` moves, each task answers from Jev for at least about 3,500 requests.
 - `CITATION.cff` and `.zenodo.json`: citation metadata for GitHub's "Cite this repository" and for archiving releases on Zenodo. A test keeps the cited version equal to `pyproject.toml`'s.
 - Website: a [savings calculator](https://jevstiller.pages.dev/calculator/). Requests a day, tokens per request and the closest benchmark task give the monthly Jev bill with and without the proxy, the calls that never reach Jev, the time spent waiting, the warm-up and the agreement bound. Every constant has its source.
 - Website: schema.org structured data. A `SoftwareApplication` block on the landing page, a `TechArticle` block on every docs page (title, description, canonical URL, last-updated date), and `FAQPage` on the guides.
