@@ -1,0 +1,9 @@
+# https://jevstiller.pages.dev - project site and docs for Jevstiller.
+# Everything here is public documentation. Search engines and AI assistants are welcome to index and quote it.
+User-agent: *
+Allow: /
+
+# Cloudflare Content Signals (https://contentsignals.org): index it, use it to answer questions.
+Content-Signal: search=yes, ai-input=yes
+
+Sitemap: https://jevstiller.pages.dev/sitemap-index.xml

@@ -18,3 +18,16 @@ points Pages at `dist/`; there is no server code.
 Deploys normally happen in CI (`.github/workflows/website.yml`): a push to `main` that touches `website/`
 goes to production, and a pull request from this repo gets a preview at `https://<branch>.jevstiller.pages.dev`.
 `npm run deploy` is the manual fallback.
+
+## Search engines
+
+`public/robots.txt` allows everything and points at the sitemap Starlight generates (`/sitemap-index.xml`).
+
+**Bing, and through it ChatGPT search and Copilot:** `npm run indexnow` reads the live sitemap and submits every
+page to IndexNow. Run it after a deploy that adds or rewrites pages. The key file `public/<key>.txt` proves we own
+the host; keep it, and keep it in sync with the script if you ever rotate it.
+
+**Google:** indexing requests go through [Search Console](https://search.google.com/search-console). Add a
+URL-prefix property for `https://jevstiller.pages.dev/`, pick the "HTML file" method, put the downloaded
+`google<token>.html` in `public/`, deploy, then verify and submit `sitemap-index.xml`. Bing Webmaster Tools can
+then import the verified property in one click, which also lets you watch IndexNow submissions there.
