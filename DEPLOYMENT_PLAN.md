@@ -244,6 +244,80 @@ The current `Jevstiller` class holds one lock across encoding, the Jev network c
 - [x] **P7.7** Public API stability pass on what the hosted repo will import (`Engine`, `TaskManager`, store/validator/metering protocols). Mark everything else private.
   *Result (2026-09-25):* the public API is the `__all__` of `jevstiller`, `jevstiller.server`, `jevstiller.encoders`, `jevstiller.teachers` and `jevstiller.teachers.jev`, pinned by `tests/test_public_api.py` against `tests/public_api.txt`. Every other module is `_`-prefixed. The engine's options are keyword-only, and its task-manager methods are private. The store, key-validator and metering hooks will be designed when the hosted repo exists and can say what it needs (backlog: "Hooks the hosted repo needs"); keyword-only parameters leave room to add them without breaking callers.
 
+## Phase 8 — Images (draft, 2026-10-17; not agreed yet)
+
+Jev 1.14 (2026-10-14) accepts images, experimentally (`TypeSafe-Danger-Zone-Images: true`). Since 0.5.2 the proxy
+forwards image requests up to Jev's 32 MiB and learns nothing from them. Whether it should learn them was measured
+first (experiments/README.md, "Images"):
+- Students on frozen image embeddings, replayed against `jev-1.14.0`'s answers at a 98% target, held the guarantee
+  on three questions: 91% answered locally (crack or not), 62% (which of 101 dishes), 40% (which of 16 document types).
+- Text intent and topic tasks run 70–80%, so photos of things are close behind and documents are like the noisy tasks.
+- The cost is on the local side: 60–75 ms per image on CPU with CLIP B/32, 150–200 ms with SigLIP B/16 (PyTorch,
+  preprocessing included), against ~10 ms for text. Jev took ~270–320 ms per image request.
+
+**Decisions needed before building:**
+- **When.** TypeSafe calls images not for production and may change the request format, answers and limits between
+  releases. Build now as an opt-in, or wait until images leave the danger zone? P8.1–P8.3 follow the format closely.
+- **Default encoder.** CLIP B/32 is cheaper on CPU. SigLIP B/16 covered 16 points more on documents and 4 more on
+  photos against the labels.
+- **Scope of v1.** Proposed: one image in the state (the whole state, or one field of a JSON object), images in the
+  instructions or criteria only as part of the question's identity, `choice` and `noul` questions. Anything else is
+  forwarded: several images, `box` questions.
+- **TypeSafe's terms** (README): training on Jev's output applies to images as much as to text.
+
+- [ ] **P8.0** Measurements still missing (small; reuse the cached answers):
+  - CLIP against Jev's answers on Food-101 and RVL-CDIP; only the uncached rows cost Jev calls;
+  - ONNX Runtime latency of the vision towers on CPU, with fast preprocessing (the PyTorch numbers above include
+    transformers' slow Python preprocessing);
+  - more than one seed;
+  - a state with an image and text fields;
+  - the crack question as a `noul`.
+- [ ] **P8.1** Read image requests (M). Multipart (the `request` part and file parts) and base64 `assets` in JSON,
+  within `max_image_body_bytes`.
+  - Limits on part count and sizes, and image bytes never written to disk.
+  - Anything the proxy can't parse is forwarded, as today.
+- [ ] **P8.2** Question identity (S).
+  - SDKs make a random reference per image (`<image:{uuid}>`). Replace references with a hash of the image's
+    content in the instructions, criteria and state before fingerprinting, so one question is one task. Text tasks
+    keep their fingerprints.
+  - The modality is part of the task key: the same instructions over images and over text are two tasks.
+- [ ] **P8.3** Answer locally only what Jev would accept (M). Check each image against Jev's documented rules first:
+  - the images header;
+  - every asset referenced;
+  - PNG or JPEG, not animated;
+  - 280–1,568 px a side, 78,400–2,458,624 px;
+  - 16 MiB per file;
+  - the reference lengths.
+  Any doubt: forward. One test per rule. Follow docs.typesafe.ai/go/images when it changes.
+- [ ] **P8.4** An image encoder (L).
+  - The vision tower in ONNX (CLIP B/32 or SigLIP B/16), with its preprocessing (resize, crop, normalize) in
+    Pillow and NumPy. One code path for serving and for replays, so stored embeddings match served ones.
+  - The encoder id covers the model and the preprocessing.
+  - The manager holds it next to the text encoder, and image tasks' engines use it.
+  - A state with text fields too: the image embedding with the text encoder's embedding of the rest (P8.0 decides
+    whether that helps).
+- [ ] **P8.5** Decode untrusted images safely (M).
+  - Read the size from the header before decoding, and refuse anything beyond Jev's limits.
+  - Decode in the encoder's bounded worker pool.
+  - A fifth security audit covering the multipart parser and the decoder, with malformed-file fuzzing.
+- [ ] **P8.6** Store and privacy (S).
+  - Never store image bytes: rows keep the content hash and the embedding, as with `store_text = false`.
+  - Without the bytes, an encoder change can't re-embed old rows, so it starts a new lineage. Document it.
+- [ ] **P8.7** Capacity (M).
+  - Image encoding costs 6–20× text per item on CPU. A separate queue keeps image traffic from slowing text tasks.
+  - `max_encoder_wait_ms` applies per queue.
+  - Sizing in docs/deploy.md: CPU and GPU numbers.
+- [ ] **P8.8** Packaging (S).
+  - `pip install "jevstiller[images]"` (Pillow and the image encoder), and `images = true` in `[proxy]`, off by default.
+  - A container image variant with the encoder baked in (about +350 MB for CLIP B/32, more for SigLIP).
+- [ ] **P8.9** Tests and docs (M).
+  - CI runs typesafe-sdk ≥ 0.7.5's `Image` objects end to end through the proxy. The lock pins 0.7.1, which has no
+    images.
+  - docs/coverage.md, configuration, compatibility, and an image section in docs/benchmarks.md from the experiments.
+
+Order: P8.0 (it can change P8.4 and the scope), then P8.4 with its latency, P8.2, P8.1, P8.3, then P8.5 with the
+audit, then P8.6–P8.9. Release it as experimental for as long as Jev's images are.
+
 ---
 
 ## Suggested order
