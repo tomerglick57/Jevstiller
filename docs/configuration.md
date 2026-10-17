@@ -108,7 +108,7 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 | `target_agreement` | `0.98` | For new tasks. |
 | `confidence_floor` | `None` | `Task.confidence_floor` for new tasks. |
 | `noul_cutoffs` | `0.5` | `Task.cutoffs` for new yes/no tasks: a number, or two for an unsure band. `None`: yes/no questions are not tasks (`resolve` raises `ValueError`). |
-| `max_loaded` | `64` | Loaded engines. Idle ones are unloaded least-recently-used. |
+| `max_loaded` | `64` | Loaded engines. Idle ones are unloaded least-recently-used. One with a request in flight, a maintenance pass running or training queued stays loaded until it is idle, so the count can briefly exceed this. |
 | `max_memory_mb` | `None` | Also unload while the loaded students exceed this (heads + OOD references). |
 | `admission` | `Admission()` | `Admission(min_requests=50, window_s=86400, max_tracked=100_000)`: a question becomes a task only after this many requests in the window. Earlier requests go to the teacher unrecorded (`not_admitted`). |
 | `max_tasks` | `10000` | Beyond this many tasks, new questions stay pass-through (`task_limit`). |
