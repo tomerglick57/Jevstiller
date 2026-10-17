@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `CITATION.cff` and `.zenodo.json`: citation metadata for GitHub's "Cite this repository" and for archiving releases on Zenodo. A test keeps the cited version equal to `pyproject.toml`'s.
 - Website: a [savings calculator](https://jevstiller.pages.dev/calculator/). Requests a day, tokens per request and the closest benchmark task give the monthly Jev bill with and without the proxy, the calls that never reach Jev, the time spent waiting, the warm-up and the agreement bound. Every constant has its source.
 - Website: schema.org structured data. A `SoftwareApplication` block on the landing page, a `TechArticle` block on every docs page (title, description, canonical URL, last-updated date), and `FAQPage` on the guides.
 - **Metric:** `jevstiller_unrouted_total{reason}` counts `/v1/systemone` requests forwarded without routing or recording. `reason="images"` shows how much image traffic (Jev 1.14) passes through the proxy. The other reasons were only in the access log.

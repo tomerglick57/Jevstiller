@@ -1,0 +1,15 @@
+{
+  "title": "Jevstiller: a drop-in proxy that distills repeated Jev classification calls into a local model, within an agreement bound",
+  "description": "<p>Jevstiller is a self-hosted HTTP proxy for TypeSafe's Jev API. For each classification question a service asks repeatedly, it trains a small local classifier from Jev's own answers and their probability distributions, and answers requests locally only within an agreement bound the user sets: the routing threshold is chosen with a Clopper-Pearson bound so that, with 95% confidence, the share of all requests answered locally and differently from Jev stays within the budget (2% by default). A permanent random audit of live traffic re-checks the bound, with automatic fallback to Jev and retraining on drift or a change of the upstream model.</p><p>Documentation: https://jevstiller.pages.dev. Benchmarks on five public tasks, reproducible without an API key, are in docs/benchmarks.md.</p>",
+  "creators": [{ "name": "Glick, Tomer" }],
+  "license": "Apache-2.0",
+  "upload_type": "software",
+  "access_right": "open",
+  "language": "eng",
+  "keywords": ["knowledge distillation", "text classification", "model cascade", "selective prediction", "Clopper-Pearson bound", "TypeSafe Jev", "System One models", "proxy"],
+  "related_identifiers": [
+    { "identifier": "https://github.com/tomerglick57/Jevstiller", "relation": "isSupplementTo", "scheme": "url" },
+    { "identifier": "https://jevstiller.pages.dev", "relation": "isDocumentedBy", "scheme": "url" },
+    { "identifier": "https://pypi.org/project/jevstiller/", "relation": "isIdenticalTo", "scheme": "url" }
+  ]
+}

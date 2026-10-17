@@ -253,6 +253,10 @@ This is our reading, not legal advice, and TypeSafe hasn't reviewed it. If your 
 - **Bugs**: [open an issue](https://github.com/tomerglick57/Jevstiller/issues/new?template=bug.md). PRs welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Security**: see [SECURITY.md](SECURITY.md), not a public issue.
 
+## Citing
+
+If Jevstiller is part of research, cite it with the metadata in [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository" button renders it as BibTeX or APA). The method is described in [A bound, not a threshold](https://jevstiller.pages.dev/posts/the-guarantee/) and [DESIGN.md](DESIGN.md); the prior art it builds on is listed under [How it compares](#how-it-compares).
+
 ## License
 
 Apache 2.0 (see `LICENSE` and `NOTICE`). Jevstiller is an independent project and is not affiliated with, endorsed by, or supported by TypeSafe. "Jev" is their model; this tool only talks to its public API.
