@@ -11,6 +11,32 @@ const title = 'Jevstiller: Jev, distilled on the fly';
 const description =
 	"A drop-in proxy for Jev that learns your repeated classification questions from Jev's own answers and answers them locally, within an agreement budget you set.";
 const site = Astro.site ?? new URL('https://jevstiller.pages.dev');
+// Structured data (schema.org) for search engines and AI assistants. The docs pages get a TechArticle block from
+// src/components/Head.astro; this is the one place that describes the software itself.
+const app = {
+	'@context': 'https://schema.org',
+	'@type': 'SoftwareApplication',
+	name: 'Jevstiller',
+	alternateName: 'Jev, distilled on the fly',
+	description,
+	url: site.href,
+	applicationCategory: 'DeveloperApplication',
+	applicationSubCategory: 'HTTP proxy for the TypeSafe Jev API',
+	operatingSystem: 'Linux, macOS, Windows; Docker; Kubernetes',
+	softwareVersion: version,
+	license: 'https://www.apache.org/licenses/LICENSE-2.0',
+	isAccessibleForFree: true,
+	offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+	codeRepository: repo,
+	installUrl: new URL('/getting-started/', site).href,
+	downloadUrl: ['https://pypi.org/project/jevstiller/', 'https://github.com/tomerglick57/Jevstiller/pkgs/container/jevstiller'],
+	softwareHelp: new URL('/getting-started/', site).href,
+	releaseNotes: `${repo}/blob/main/CHANGELOG.md`,
+	programmingLanguage: 'Python',
+	keywords: 'Jev, TypeSafe, System One, classification, distillation, proxy, agreement bound, Clopper-Pearson',
+	author: { '@type': 'Organization', name: 'Jevstiller', url: site.href },
+	sameAs: [repo, 'https://pypi.org/project/jevstiller/'],
+};
 const mark =
 	'M32 4 C24 18 12 30 12 42 A20 20 0 0 0 52 42 C52 30 40 18 32 4 Z M32 25 C28.5 31.5 23 36.5 23 42 A9 9 0 0 0 41 42 C41 36.5 35.5 31.5 32 25 Z';
 ---
@@ -33,6 +59,7 @@ const mark =
 		<meta property="og:image" content={new URL('/social-preview.png', site).href} />
 		<meta name="twitter:card" content="summary_large_image" />
 		<meta name="theme-color" content="#0b1716" />
+		<script type="application/ld+json" set:html={JSON.stringify(app)} />
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link

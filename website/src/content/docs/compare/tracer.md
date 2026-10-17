@@ -1,6 +1,7 @@
 ---
 title: "Jevstiller vs TRACER: two Clopper–Pearson bounds that promise different things"
 description: "TRACER is a provider-agnostic Python library that fits a classical-ML student on your LLM traces and certifies it once with a lower bound on agreement among accepted requests. Jevstiller is a Jev proxy that bounds disagreement over all requests and keeps auditing live traffic. What each bound covers, what runs after deployment, and which to pick."
+lastUpdated: 2026-10-17
 editUrl: "https://github.com/tomerglick57/Jevstiller/edit/main/docs/compare/tracer.md"
 ---
 

@@ -4,6 +4,7 @@
 // Each page gets Starlight frontmatter (its H1 becomes the title), an edit link to its source file, and links
 // rewritten: to another synced page -> its site URL; to any other repo file -> GitHub.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -94,14 +95,25 @@ function faqJsonLd(body) {
 	return JSON.stringify({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: pairs });
 }
 
+// The generated pages are not in git, so Starlight cannot date them itself; take the source file's last commit.
+function lastCommitDate(source) {
+	try {
+		return execFileSync('git', ['log', '-1', '--format=%cs', '--', source], { cwd: root, encoding: 'utf8' }).trim() || null;
+	} catch {
+		return null;
+	}
+}
+
 function write(slug, heading, md, source) {
 	const { title = heading, description, body } = overrides(md);
 	const faq = faqJsonLd(body);
+	const dated = lastCommitDate(source);
 	const front = [
 		'---',
 		`title: ${JSON.stringify(title)}`,
 		`description: ${JSON.stringify(description ?? firstParagraph(body))}`,
 		...(faq ? [`head: ${JSON.stringify([{ tag: 'script', attrs: { type: 'application/ld+json' }, content: faq }])}`] : []),
+		...(dated ? [`lastUpdated: ${dated}`] : []),
 		`editUrl: ${JSON.stringify(`${REPO}/edit/main/${source}`)}`,
 		'---',
 		'',

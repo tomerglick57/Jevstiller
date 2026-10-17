@@ -1,6 +1,7 @@
 ---
 title: "Jevstiller vs Distil Labs and cloud distillation: a swapped model or a bounded proxy"
 description: "Distil Labs, Amazon Bedrock model distillation, OpenAI and Azure distillation post-train a small model from your traffic as a separate job and switch traffic to it. Jevstiller answers each Jev request locally only within a stated bound and forwards the rest. What each is for, what falls back when, and which to pick."
+lastUpdated: 2026-10-17
 editUrl: "https://github.com/tomerglick57/Jevstiller/edit/main/docs/compare/distil-labs.md"
 ---
 

@@ -1,6 +1,7 @@
 ---
 title: "Jevstiller vs stuntd: two local proxies that learn Jev decisions"
 description: "stuntd is the project closest to Jevstiller: a self-hosted Jev-compatible proxy that trains a head per question and checks 2% of live traffic. Where the two differ (the bound, automation, keys, CPU), where stuntd goes further (OpenAI and Anthropic APIs, score questions, no-key mode), and which to pick."
+lastUpdated: 2026-10-17
 editUrl: "https://github.com/tomerglick57/Jevstiller/edit/main/docs/compare/stuntd.md"
 ---
 

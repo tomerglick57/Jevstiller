@@ -1,0 +1,149 @@
+---
+// The savings calculator: what a repeated Jev question costs today and what changes with Jevstiller in front,
+// from the user's volume and one of the benchmark tasks (docs/benchmarks.md, held-out coverage and agreement at a
+// 98% target). Everything is computed in the browser; the constants below are the only inputs that are not the
+// user's, and each has its source next to it.
+const PRICE_PER_MTOK = 0.042; // $ per million input tokens, TypeSafe's models page, 2026-10-17
+const AUDIT = 0.02; // share of all traffic always sent to Jev (configuration reference, audit_rate)
+const JEV_MS = 300; // Jev's median per answer at every load we tried (benchmarks, "Live Jev")
+const LOCAL_MS = 16; // median local answer on CPU, encoder included (benchmarks, "Proxy")
+const WARMUP = 2500; // Jev answers a question needs before its first local answer: 1,000 to train, 500 to calibrate, 1,000 in shadow
+// Held-out coverage and agreement with Jev at a 98% target (benchmarks, "Quality")
+const TASKS = [
+	{ id: 'banking77', label: 'Banking77: 77 customer-support intents', coverage: 0.719, agreement: 0.995 },
+	{ id: 'clinc150', label: 'CLINC150: 150 intents and "other"', coverage: 0.69, agreement: 0.9965 },
+	{ id: 'agnews', label: 'AG News: 4 topics', coverage: 0.802, agreement: 0.994 },
+	{ id: 'tweet-sentiment', label: 'TweetEval sentiment: 3 classes', coverage: 0.222, agreement: 0.987 },
+	{ id: 'tweet-offensive', label: 'TweetEval offensive: yes/no', coverage: 0.241, agreement: 0.988 },
+	{ id: 'custom', label: 'Custom: enter a local share', coverage: 0.5, agreement: 0.98 },
+];
+const consts = { PRICE_PER_MTOK, AUDIT, JEV_MS, LOCAL_MS, WARMUP, TASKS };
+---
+
+<form class="calc" data-consts={JSON.stringify(consts)} onsubmit="return false">
+	<div class="calc-inputs">
+		<label>
+			<span>Requests a day for this question</span>
+			<input name="requests" type="number" min="1" step="1000" value="100000" inputmode="numeric" />
+		</label>
+		<label>
+			<span>Input tokens per request <small>(state, instructions and options)</small></span>
+			<input name="tokens" type="number" min="1" step="50" value="400" inputmode="numeric" />
+		</label>
+		<label>
+			<span>Closest benchmark task</span>
+			<select name="task">
+				{TASKS.map((t) => <option value={t.id}>{t.label}</option>)}
+			</select>
+		</label>
+		<label class="calc-custom" hidden>
+			<span>Share answered locally once trained (%)</span>
+			<input name="coverage" type="number" min="0" max="100" step="1" value="50" inputmode="numeric" />
+		</label>
+	</div>
+
+	<div class="calc-out">
+		<div class="calc-card">
+			<p class="calc-k">Jev today, per month</p>
+			<p class="calc-v" data-out="cost-now">—</p>
+			<p class="calc-s"><span data-out="req-now">—</span> requests, <span data-out="tok-now">—</span> input tokens, at $0.042 per million</p>
+		</div>
+		<div class="calc-card calc-main">
+			<p class="calc-k">With Jevstiller, per month</p>
+			<p class="calc-v" data-out="cost-after">—</p>
+			<p class="calc-s"><span data-out="saved">—</span> saved (<span data-out="saved-pct">—</span>). <span data-out="local-pct">—</span> of requests answered locally; the rest and a 2% audit still go to Jev.</p>
+		</div>
+		<div class="calc-card">
+			<p class="calc-k">Calls that never reach Jev</p>
+			<p class="calc-v" data-out="avoided">—</p>
+			<p class="calc-s">a month. They don't count against rate limits: Jev sees <span data-out="jev-share">—</span> of the traffic.</p>
+		</div>
+		<div class="calc-card">
+			<p class="calc-k">Time waiting on answers, per day</p>
+			<p class="calc-v"><span data-out="wait-now">—</span> → <span data-out="wait-after">—</span></p>
+			<p class="calc-s">at a median of {JEV_MS} ms from Jev and {LOCAL_MS} ms from the local model, request by request.</p>
+		</div>
+	</div>
+
+	<ul class="calc-notes">
+		<li><strong>Agreement:</strong> on this task the benchmark measured <span data-out="agreement">—</span> agreement with Jev against the 98% target. The bound promises at most 2% of all requests answered differently from Jev, with 95% confidence. Agreement is not accuracy: where Jev is wrong, the local model is wrong the same way.</li>
+		<li><strong>Warm-up:</strong> about {WARMUP.toLocaleString('en-US')} of this question's requests go to Jev before the first local answer (training, calibration and a shadow test), about <span data-out="warmup">—</span> at your volume. They were going to Jev anyway.</li>
+		<li><strong>These are replays, not your traffic.</strong> The local share comes from a public dataset replayed against Jev's recorded answers. Yours depends on how consistent Jev is on your question. Run the proxy in front of a copy of your traffic and read the status page before believing a number.</li>
+	</ul>
+</form>
+
+<style>
+	.calc { margin: 1.5rem 0; display: grid; gap: 1.25rem; }
+	.calc-inputs { display: grid; gap: 0.9rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+	.calc label { display: grid; gap: 0.3rem; font-size: var(--sl-text-sm); }
+	.calc label[hidden] { display: none; }
+	.calc label small { color: var(--sl-color-gray-3); font-weight: 400; }
+	.calc input, .calc select {
+		font: inherit; padding: 0.45rem 0.6rem; border-radius: 0.4rem;
+		border: 1px solid var(--sl-color-gray-5); background: var(--sl-color-bg-nav); color: var(--sl-color-white);
+	}
+	.calc-out { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
+	.calc-card { border: 1px solid var(--sl-color-gray-5); border-radius: 0.6rem; padding: 0.9rem 1rem; background: var(--sl-color-bg-nav); }
+	.calc-main { border-color: var(--sl-color-accent); }
+	.calc-card p { margin: 0 !important; }
+	.calc-k { font-size: var(--sl-text-xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--sl-color-gray-3); }
+	.calc-v { font-size: var(--sl-text-2xl); font-weight: 600; margin-top: 0.2rem !important; font-variant-numeric: tabular-nums; }
+	.calc-s { font-size: var(--sl-text-sm); color: var(--sl-color-gray-2); margin-top: 0.3rem !important; }
+	.calc-notes { font-size: var(--sl-text-sm); }
+</style>
+
+<script>
+	type Task = { id: string; coverage: number; agreement: number };
+	type Consts = { PRICE_PER_MTOK: number; AUDIT: number; JEV_MS: number; LOCAL_MS: number; WARMUP: number; TASKS: Task[] };
+
+	const money = (v: number) => (v < 10 ? `$${v.toFixed(2)}` : `$${Math.round(v).toLocaleString('en-US')}`);
+	const num = (v: number) => Math.round(v).toLocaleString('en-US');
+	const pct = (v: number, d = 0) => `${(v * 100).toFixed(d)}%`;
+	const warmup = (days: number) => {
+		const hours = days * 24;
+		if (hours < 1) return 'under an hour';
+		if (hours < 48) return `${Math.round(hours)} hour${Math.round(hours) === 1 ? '' : 's'}`;
+		return `${days.toFixed(days < 10 ? 1 : 0)} days`;
+	};
+	const dur = (ms: number) => {
+		const s = ms / 1000;
+		if (s < 90) return `${s.toFixed(0)} s`;
+		if (s < 5400) return `${(s / 60).toFixed(0)} min`;
+		return `${(s / 3600).toFixed(1)} h`;
+	};
+
+	for (const form of document.querySelectorAll<HTMLFormElement>('form.calc')) {
+		const c: Consts = JSON.parse(form.dataset.consts!);
+		const el = (name: string) => form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement;
+		const out = (k: string, v: string) => form.querySelectorAll<HTMLElement>(`[data-out="${k}"]`).forEach((e) => (e.textContent = v));
+		const customRow = form.querySelector<HTMLElement>('.calc-custom')!;
+
+		const compute = () => {
+			const task = c.TASKS.find((t) => t.id === el('task').value) ?? c.TASKS[0];
+			const custom = task.id === 'custom';
+			customRow.hidden = !custom;
+			const perDay = Math.max(0, Number(el('requests').value) || 0);
+			const tokens = Math.max(0, Number(el('tokens').value) || 0);
+			const coverage = custom ? Math.min(1, Math.max(0, (Number(el('coverage').value) || 0) / 100)) : task.coverage;
+			const local = coverage * (1 - c.AUDIT); // steady state: the audit slice goes to Jev whatever the model says
+			const perMonth = perDay * 30;
+			const costNow = (perMonth * tokens * c.PRICE_PER_MTOK) / 1e6;
+			const costAfter = costNow * (1 - local);
+			out('cost-now', money(costNow));
+			out('req-now', num(perMonth));
+			out('tok-now', num(perMonth * tokens));
+			out('cost-after', money(costAfter));
+			out('saved', money(costNow - costAfter));
+			out('saved-pct', pct(local));
+			out('local-pct', pct(local));
+			out('avoided', num(perMonth * local));
+			out('jev-share', pct(1 - local));
+			out('wait-now', dur(perDay * c.JEV_MS));
+			out('wait-after', dur(perDay * (local * c.LOCAL_MS + (1 - local) * (c.JEV_MS + c.LOCAL_MS))));
+			out('agreement', custom ? 'at least 98%' : pct(task.agreement, 2));
+			out('warmup', perDay > 0 ? warmup(c.WARMUP / perDay) : '—');
+		};
+		form.addEventListener('input', compute);
+		compute();
+	}
+</script>

@@ -1,0 +1,31 @@
+---
+// Starlight's <head>, plus TechArticle structured data (schema.org) for every docs page: title, description,
+// canonical URL, last-updated date from git, and the project as author and publisher. Search engines and AI
+// assistants read it as a typed summary of the page. The landing page (src/pages/index.astro) carries its own
+// SoftwareApplication block. A page's own `head` frontmatter (for example the FAQPage block that sync-docs emits
+// for a "## FAQ" section) is rendered by the default component and kept.
+import Default from '@astrojs/starlight/components/Head.astro';
+
+const { entry, lastUpdated } = Astro.locals.starlightRoute;
+const site = Astro.site ?? new URL('https://jevstiller.pages.dev');
+const url = new URL(Astro.url.pathname, site).href;
+const org = { '@type': 'Organization', name: 'Jevstiller', url: site.href, logo: new URL('/favicon.svg', site).href };
+const article = {
+	'@context': 'https://schema.org',
+	'@type': 'TechArticle',
+	headline: entry.data.title,
+	description: entry.data.description,
+	url,
+	mainEntityOfPage: url,
+	inLanguage: 'en',
+	isPartOf: { '@type': 'WebSite', name: 'Jevstiller', url: site.href },
+	about: { '@type': 'SoftwareApplication', name: 'Jevstiller', url: site.href },
+	author: org,
+	publisher: org,
+	license: 'https://www.apache.org/licenses/LICENSE-2.0',
+	...(lastUpdated ? { dateModified: lastUpdated.toISOString().slice(0, 10) } : {}),
+};
+---
+
+<Default><slot /></Default>
+<script type="application/ld+json" set:html={JSON.stringify(article)} />
