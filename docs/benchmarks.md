@@ -1,4 +1,6 @@
 # Benchmarks and measurements
+<!-- title: Benchmarks: Jevstiller against Jev on five public tasks -->
+<!-- description: Coverage, agreement and accuracy on Banking77, CLINC150, AG News and TweetEval, plus latency, load, soak, drift and chaos measurements, each with the command that produced it. -->
 
 Every number quoted in the README, DESIGN.md and DEPLOYMENT_PLAN.md, with the command that produced it. Unless noted, the machine is a 16-vCPU WSL2 VM (Linux 6.6, Python 3.14, numpy with OpenBLAS). Several runs on 2026-09-24 overlapped with unrelated load on the machine (load averages up to 30); those are marked, and comparisons were made under the same conditions or as medians of interleaved repeats.
 

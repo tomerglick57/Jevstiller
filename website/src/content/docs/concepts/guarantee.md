@@ -1,5 +1,5 @@
 ---
-title: The guarantee
+title: The agreement guarantee
 description: What target_agreement promises, how the routing threshold is chosen so the promise holds, and how it is checked in production.
 ---
 

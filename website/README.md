@@ -31,3 +31,17 @@ the host; keep it, and keep it in sync with the script if you ever rotate it.
 URL-prefix property for `https://jevstiller.pages.dev/`, pick the "HTML file" method, put the downloaded
 `google<token>.html` in `public/`, deploy, then verify and submit `sitemap-index.xml`. Bing Webmaster Tools can
 then import the verified property in one click, which also lets you watch IndexNow submissions there.
+
+## Page titles and descriptions
+
+A synced page's `<title>` and meta description come from its source file's heading and first paragraph, unless the
+source carries overrides in HTML comments right under the heading (invisible on GitHub):
+
+```markdown
+# Cut your Jev API bill
+<!-- title: Cut your Jev API bill: where the spend comes from and three ways to pay less -->
+<!-- description: Jev bills per input token. Shorter states, ... -->
+```
+
+Write them for the person searching: say "Jev" and the subject, keep the description to about two lines of plain
+prose, and make it true of the page. Hand-written pages set `title` and `description` in their frontmatter.

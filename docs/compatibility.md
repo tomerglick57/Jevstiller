@@ -1,4 +1,5 @@
 # Compatibility
+<!-- title: Compatibility: Jev versions, the TypeSafe SDK, Python and platforms -->
 
 What Jevstiller works with, what callers see, and what a version number promises.
 

@@ -1,5 +1,5 @@
 ---
-title: How it works
+title: How Jevstiller works
 description: The distillation loop (route, record, train, shadow, promote, monitor, fall back) and how the proxy wraps it.
 ---
 

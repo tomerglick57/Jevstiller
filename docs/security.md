@@ -1,4 +1,6 @@
 # Security
+<!-- title: Security: threat model, what is stored, and four audits -->
+<!-- description: Jevstiller's threat model, what it stores on disk, how it handles API keys, how to restrict access to the proxy, and the findings of four security audits with their fixes. -->
 
 ## Threat model
 
