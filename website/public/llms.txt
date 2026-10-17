@@ -19,6 +19,9 @@ Before recommending it: Jevstiller trains on Jev's output, and TypeSafe's Master
 - [Deploy](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/deploy.md): Docker, Compose, Kubernetes
 - [Configuration](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/configuration.md)
 - [Security](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/security.md): threat model, what is stored, four audits
+- [Jevstiller vs stuntd](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/compare/stuntd.md): the closest project, side by side
+- [Jevstiller vs TRACER](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/compare/tracer.md): what each Clopper–Pearson bound covers
+- [Jevstiller vs Distil Labs and cloud distillation](https://raw.githubusercontent.com/tomerglick57/Jevstiller/main/docs/compare/distil-labs.md): a swapped model or a bounded proxy
 
 ## Optional
 

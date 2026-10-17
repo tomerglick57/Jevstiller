@@ -3,6 +3,9 @@
 ## Unreleased
 
 - **Metric:** `jevstiller_unrouted_total{reason}` counts `/v1/systemone` requests forwarded without routing or recording. `reason="images"` shows how much image traffic (Jev 1.14) passes through the proxy. The other reasons were only in the access log.
+- Docs: three comparison pages, [Jevstiller vs stuntd](docs/compare/stuntd.md), [vs TRACER](docs/compare/tracer.md) and [vs Distil Labs and cloud distillation](docs/compare/distil-labs.md), each with a side-by-side table, where the other project goes further, and sources pinned to a commit. The README's "How it compares" now covers TRACER and links to them.
+- Docs: the two guides lead with TypeSafe's published facts (price, context limits, what a 429 and a 529 mean, the SDK's retry defaults) and end with a FAQ, which the website also emits as FAQPage structured data.
+- Docs: TypeSafe's models page no longer publishes rate-limit figures (limits are per organization, in the developer console). The guide, the "when to use it" page and the landing page said otherwise; the earlier figures are kept as dated history.
 
 ## 0.5.2 — 2026-10-17
 

@@ -180,7 +180,7 @@ With a live teacher, coverage came out higher than with the "oracle" labels and 
 
 ### Jev alone, under load (2026-09-26)
 
-`examples/race.py` lanes straight to `api.typesafe.ai`, one key, the 6-class routing question, real Banking77 messages. The published limit was 1,200 requests/minute at the time (TypeSafe's models page says 80 requests/s and 100,000 tokens/s since early October 2026); none of these runs saw a 429.
+`examples/race.py` lanes straight to `api.typesafe.ai`, one key, the 6-class routing question, real Banking77 messages. The published limit was 1,200 requests/minute at the time (TypeSafe's models page said 80 requests/s and 100,000 tokens/s in early October 2026; since mid-October it publishes no figures and points to the per-organization developer console 2026); none of these runs saw a 429.
 
 | Callers | Duration | Answered | Rate | p50 | p99 |
 |---|---|---|---|---|---|
