@@ -1,8 +1,11 @@
-"""Step 1 of the image benchmark: a table of the image replays.
+"""Tables of the image benchmark's replays (experiments/README.md, "Images").
 
     for d in crack food101 rvl_cdip; do for e in clip-b32 siglip-b16 dinov2-s; do
         python3 experiments/run.py --dataset img_$d --teacher oracle --encoder $e --tag img; done; done
     python3 experiments/image_bench.py
+
+Step 2's rows come from the replays against Jev's answers (`--teacher jev`, or `--teacher cached` from the
+recorded answers), with the settings in experiments/README.md.
 
 Each image dataset is replayed through the loop with its own labels as the teacher (`--teacher oracle`), no Jev
 call. That measures whether a frozen image encoder separates the classes well enough for the bound to let a
@@ -44,13 +47,42 @@ def row(d: str, e: str) -> str | None:
             f"{r['final_status']['teacher_calls']:,} | {cpu} |")
 
 
+def jev_row(d: str, e: str) -> str | None:
+    """Step 2: the replay against Jev's answers, from the cache if it was replayed from it, else the live run."""
+    for teacher, tag in (("cached", "img-cached"), ("cached", "img"), ("jev", "img")):
+        p = ROOT / "experiments" / "results" / f"img_{d}-{teacher}-{e}-probs-t98-{tag}" / "results.json"
+        if p.exists():
+            break
+    else:
+        return None
+    r = json.loads(p.read_text())
+    evals = [c for c in r["checkpoints"] if c.get("eval")]
+    f = evals[-1]["eval"] if evals else {}
+    tp, fs = r["teacher_profile"], r["final_status"]
+    calls = fs["teacher_calls"] + tp["n"]                  # the stream's teacher calls and the held-out rows
+    cost = fs["teacher_cost_usd"] + tp["cost_usd"]
+    return (f"| {d} | {e} | {pct(tp['teacher_accuracy_vs_truth'])} | {pct(tp['share_below_0.6'])} | "
+            f"{r['n_eval']:,} | {r['n_stream']:,} | {pct(f.get('coverage'))} | {pct(f.get('system_agreement'))} | "
+            f"{calls:,} | {cost / 0.042:.1f}M | ${cost:.2f} |")
+
+
 def main() -> None:
+    print("Step 1, the labels as the teacher:\n")
     print("| Dataset | Encoder | Classes | Stream | Labels before the first student | Coverage (held out) | "
           "Agreement (held out) | Student alone | Labels used in all | CPU ms/image |")
     print("|---|---|---|---|---|---|---|---|---|---|")
     for d in SPECS:
         for e in ENCODERS:
             line = row(d, e)
+            if line:
+                print(line)
+    print("\nStep 2, Jev's answers (jev-1.14.0):\n")
+    print("| Dataset | Encoder | Jev vs labels | Jev below 0.6 | Held out | Stream | Coverage (held out) | "
+          "Agreement with Jev (held out) | Jev calls | Tokens | Cost |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    for d in SPECS:
+        for e in ENCODERS:
+            line = jev_row(d, e)
             if line:
                 print(line)
 

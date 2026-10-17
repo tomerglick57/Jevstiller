@@ -65,10 +65,44 @@ How to read it:
 - Coverage levels off well before the end of the stream: Food-101 with SigLIP reached 62% after 6,700 labels,
   RVL-CDIP 47% after 8,000, the crack question 98% after 1,300. That sizes step 2.
 
-Step 2 asks Jev instead (`image_jev.py`): a live replay with `--teacher jev`, which asks Jev only about the held-out
-rows and the rows the loop sends to the teacher, every answer cached, under a required `--max-jev-calls` cap.
-`image_jev.py --probe 3` sends 3 images first and prints the tokens per image and a projected cost. Images are
-sent at Jev's minimum size (shorter side 280 px) except document pages, which keep theirs.
+## Images: step 2, Jev's answers
+
+The same replays against Jev (`jev-1.14.0`, 2026-10-17), with each question's best encoder from step 1 and 1,000
+rows held out. `--teacher jev` asks Jev only about the held-out rows and the rows the loop sends to the teacher, not
+the whole dataset; every answer is cached, and `--max-jev-calls` is required. Images are sent at Jev's minimum size
+(shorter side 280 px), document pages at theirs (`image_jev.py`).
+
+```bash
+python3 experiments/image_jev.py --dataset crack --probe 3                          # 3 images: tokens per image, projected cost
+python3 experiments/run.py --dataset img_crack --teacher jev --encoder clip-b32 --eval-size 1000 --limit 3000 --max-jev-calls 4000 --tag img
+python3 experiments/run.py --dataset img_food101 --teacher jev --encoder siglip-b16 --eval-size 1000 --limit 10000 --max-jev-calls 11000 --tag img
+python3 experiments/run.py --dataset img_rvl_cdip --teacher jev --encoder siglip-b16 --eval-size 1000 --limit 10000 --max-jev-calls 11000 --tag img
+```
+
+Without a key: the answers are a release asset. With the datasets and embeddings built as in step 1, the same
+commands with `--teacher cached` (and no cap) reproduce the table exactly:
+
+```bash
+ANSWERS=https://github.com/tomerglick57/Jevstiller/releases/download/answers-images-2026-10-17
+for f in img_crack-jev-1.14.0-s280 img_food101-jev-1.14.0-s280 img_rvl_cdip-jev-1.14.0-snative; do
+    curl -fsSL "$ANSWERS/$f.jsonl.gz" | gunzip > "experiments/cache/$f.jsonl"; done
+```
+
+| Dataset | Encoder | Jev vs labels | Jev below 0.6 | Held out | Stream | Coverage (held out) | Agreement with Jev (held out) | Jev calls | Tokens | Cost |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Concrete crack | clip-b32 | 96.4% | 9.5% | 1,000 | 3,000 | 91.4% | 99.4% | 2,491 | 1.3M | $0.06 |
+| Food-101 | siglip-b16 | 88.6% | 10.0% | 1,000 | 10,000 | 62.5% | 99.0% | 6,443 | 8.8M | $0.37 |
+| RVL-CDIP | siglip-b16 | 68.8% | 17.1% | 1,000 | 10,000 | 40.1% | 98.1% | 8,557 | 20.7M | $0.87 |
+
+- The guarantee held on all three: at least 98% agreement with Jev on held-out rows (1,000 rows: about ±0.9 points).
+- Jev's answers were not easier to imitate than the labels here, unlike Banking77's. At the same point of the
+  stream, Food-101 came out the same (62%), the crack question and RVL-CDIP lower (91% against 98%, 40% against 47%).
+  Where Jev is unsure (17% of RVL-CDIP pages below 0.6), less is answered locally, as on the noisy text tasks.
+- Jev took 270–320 ms on average per image request (`teacher profile` in each run's report). Tokens per request:
+  about 527 for a 280×280 photo with 2 options, 1,336 with Food-101's 101 options, 2,394 for a 755×1,000 page:
+  roughly 2,100–2,500 tokens per megapixel of image.
+- One run per question: no seeds, no other encoders against Jev (a replay with another encoder asks Jev about the
+  rows that one sends to the teacher and the cache doesn't have).
 
 ## Dry-run results (oracle teacher, Banking77, 77 classes, target agreement 98%)
 
