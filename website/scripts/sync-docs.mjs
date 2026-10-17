@@ -59,11 +59,26 @@ function firstParagraph(md) {
 	return text.length > 200 ? `${text.slice(0, 197).replace(/\s+\S*$/, '')}…` : text;
 }
 
-function write(slug, title, body, source) {
+// A source file may carry a website-only title and description in HTML comments right under its heading
+// (invisible on GitHub): <!-- title: ... --> and <!-- description: ... -->. They become the page's <title> and
+// meta description, which search engines and AI assistants show; the heading in the repo stays as it is.
+// Without them the heading and the first paragraph are used.
+const OVERRIDE = /^<!--\s*(title|description):\s*([\s\S]*?)\s*-->[ \t]*\n/gm;
+function overrides(md) {
+	const found = {};
+	const body = md.replace(OVERRIDE, (_, key, value) => {
+		found[key] = value.replace(/\s+/g, ' ').trim();
+		return '';
+	});
+	return { ...found, body };
+}
+
+function write(slug, heading, md, source) {
+	const { title = heading, description, body } = overrides(md);
 	const front = [
 		'---',
 		`title: ${JSON.stringify(title)}`,
-		`description: ${JSON.stringify(firstParagraph(body))}`,
+		`description: ${JSON.stringify(description ?? firstParagraph(body))}`,
 		`editUrl: ${JSON.stringify(`${REPO}/edit/main/${source}`)}`,
 		'---',
 		'',
@@ -92,7 +107,7 @@ for (const { file, heading, slug } of SECTIONS) {
 }
 
 const full = LLMS_FULL.map((f) => {
-	const md = readFileSync(join(root, f), 'utf8').replace(/<picture>[\s\S]*?<\/picture>\n*/g, '');
+	const md = readFileSync(join(root, f), 'utf8').replace(/<picture>[\s\S]*?<\/picture>\n*/g, '').replace(OVERRIDE, '');
 	return `<!-- ${REPO}/blob/main/${f} -->\n\n${md.trim()}\n`;
 });
 writeFileSync(join(root, 'website', 'public', 'llms-full.txt'), full.join('\n\n'));

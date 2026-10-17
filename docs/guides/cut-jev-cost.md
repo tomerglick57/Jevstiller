@@ -1,4 +1,6 @@
 # Cut your Jev API bill
+<!-- title: Cut your Jev API bill: where the spend comes from and three ways to pay less -->
+<!-- description: Jev bills per input token. Shorter states, several questions per request, and answering repeated questions locally with Jevstiller (typically 70–80% of an intent or topic question): what each saves, when it applies, and when none of them helps. -->
 
 Jev bills per input token. When a service asks the same question about a stream of inputs (route this ticket, flag this message, pick an intent), the bill grows with traffic, and so does the number of calls going to one external API. This page covers the options, what each one saves, and when Jevstiller is not the answer.
 

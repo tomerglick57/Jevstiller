@@ -1,4 +1,6 @@
 # The drop-in proxy
+<!-- title: The drop-in Jev proxy -->
+<!-- description: jevstiller serve speaks Jev's API: set TYPESAFE_BASE_URL and nothing else changes. What happens to each request, what a local answer looks like, API keys, errors and limits, and measured performance. -->
 
 `jevstiller serve` runs an HTTP server that speaks Jev's API. Services point the TypeSafe SDK at it and change nothing else:
 

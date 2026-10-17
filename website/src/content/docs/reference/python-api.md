@@ -1,5 +1,5 @@
 ---
-title: Python API
+title: Python API reference
 description: Task, Jevstiller, TaskManager, results and status, teachers, encoders and training executors.
 ---
 

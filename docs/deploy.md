@@ -1,4 +1,6 @@
 # Deploying Jevstiller
+<!-- title: Deploying Jevstiller: Docker, Compose and Kubernetes -->
+<!-- description: One process, one data directory, anywhere that can reach Jev: the container image, Compose and Kubernetes manifests, GPU builds, configuration and upgrades. -->
 
 One process, one data directory, anywhere that can reach Jev. The calling services change one environment variable:
 

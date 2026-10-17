@@ -1,4 +1,5 @@
 # A local model that answers like Jev 98% of the time, and how we know
+<!-- description: Set one number, say 98%, and Jevstiller returns the label Jev would have returned on at least that share of requests. Why a plain confidence threshold does not deliver that, what the Clopper–Pearson bound does instead, and what it costs in coverage. -->
 
 *September 2026. Every number here is from [the benchmarks](../benchmarks.md), and `bash experiments/bench.sh --no-record` reruns them without an API key.*
 

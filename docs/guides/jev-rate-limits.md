@@ -1,4 +1,6 @@
 # Jev rate limits and 429s
+<!-- title: Jev rate limits and 429 errors: the limits, retry-after, and sending fewer requests -->
+<!-- description: Jev's published limits (80 requests and 100,000 tokens a second as of October 2026), what a 429 looks like, how to back off, and how a local proxy keeps 70–80% of a repeated question's requests from reaching Jev at all. -->
 
 TypeSafe publishes Jev's rate limits on its models page: 80 requests and 100,000 tokens a second as of October 2026. At launch they were 1,200 requests a minute. TypeSafe changes them at its own discretion. Over a limit, Jev answers `429` with a `retry-after` header, and the TypeSafe SDK retries 429s with back-off.
 

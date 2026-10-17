@@ -1,5 +1,5 @@
 ---
-title: Contributing
+title: Contributing to Jevstiller
 description: Set up a dev environment, the rules that keep the guarantee honest, and how to send a PR.
 ---
 

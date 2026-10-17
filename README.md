@@ -117,6 +117,8 @@ Performance of one process (16 vCPU, bge-small on CPU, [docs/benchmarks.md](docs
 Operations: a TOML config, an admin API and CLI (`jevstiller admin ...`), Prometheus `/metrics`, `/readyz`, JSON logs, `jevstiller backup`, and a Docker image and Kubernetes manifest. Docs: [deploy](docs/deploy.md), [operations](docs/operations.md), [the proxy](docs/proxy.md), [configuration](docs/configuration.md), [security](docs/security.md), [compatibility](docs/compatibility.md). Website: [jevstiller.pages.dev](https://jevstiller.pages.dev).
 
 ## How it compares
+<!-- title: How Jevstiller compares with stuntd, Distil Labs, routers, caches and open Jev models -->
+<!-- description: Where Jevstiller differs from stuntd (the closest project), from Distil Labs and cloud distillation, from LLM routers and semantic caches, from open Jev-compatible models, and from the research it builds on. -->
 
 As of September 2026:
 
@@ -231,6 +233,8 @@ python experiments/run.py --dataset banking77 --teacher oracle --encoder base   
 See [experiments/README.md](experiments/README.md).
 
 ## TypeSafe's terms
+<!-- title: TypeSafe's terms and Jevstiller -->
+<!-- description: TypeSafe's Master Customer Agreement §2.3(b) restricts training on Jev's output. What the clause says, why we read Jevstiller's small per-question classifiers as outside it, and why you should decide for your own deployment. -->
 
 Jevstiller runs on your own Jev key and your own traffic, so TypeSafe's [Master Customer Agreement](https://typesafe.ai/legal/mca) applies to how you use it. Read it first. §2.3(b) says a customer may not use Jev's output to "perform model distillation, train a model to imitate the output of the Services, or develop (or to facilitate the development of) a similar or competing product or service", and §6(a) lets TypeSafe suspend access over a breach.
 

@@ -1,4 +1,6 @@
 # Configuration reference
+<!-- title: Configuration reference: every Jevstiller setting and its default -->
+<!-- description: Every knob across the four layers (engine Config, TaskManager, ProxySettings, and jevstiller serve via TOML, JEVSTILLER_* variables and flags), including target_agreement, noul_cutoffs, confidence_floor and tenancy. -->
 
 Every knob, where it lives, and its default. There are four layers:
 

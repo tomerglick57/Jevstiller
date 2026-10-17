@@ -1,4 +1,6 @@
 # Operating Jevstiller
+<!-- title: Operating Jevstiller: health checks, status page, admin CLI and metrics -->
+<!-- description: Health and readiness endpoints, the status page, the admin API and CLI, Prometheus metrics, logs, what is on disk, and what to do in common situations. -->
 
 ## Is it healthy?
 
