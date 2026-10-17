@@ -4,13 +4,14 @@ and this check ties the citation file to the same number, so "Cite this reposito
 import re
 from pathlib import Path
 
-import tomllib
-
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_citation_version_matches_pyproject():
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    # a regex rather than tomllib, which Python 3.10 (still supported) does not have
+    m = re.search(r'^version = "([^"]+)"$', (ROOT / "pyproject.toml").read_text(), re.M)
+    assert m, "pyproject.toml: no version line"
+    version = m.group(1)
     cff = (ROOT / "CITATION.cff").read_text()
     assert re.search(rf"^version: {re.escape(version)}$", cff, re.M), (
         f"CITATION.cff must say 'version: {version}' (and a matching date-released)"
