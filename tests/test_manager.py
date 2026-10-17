@@ -231,6 +231,10 @@ def test_the_loaded_cap_holds_under_concurrent_loads(tmp_path, teacher, world):
     # unloaded; how many passes run at once grows when the machine is busy: a peak of 20 was seen under load),
     # never all 40
     assert m.unloads > 0 and peak[0] <= 4 + 8 + 12, peak[0]
+    # once idle, every engine over the cap goes. A pass can still start after the workers return (passes are at
+    # least maintenance_interval_s apart), and an engine mid-pass is not unloaded: one sweep then left 5 (#22)
+    for key in m.loaded():
+        m.engine(key).drain(timeout=30)
     m.sweep()
     assert len(m.loaded()) <= 4
     m.close()
