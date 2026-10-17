@@ -278,6 +278,9 @@ class ProxyMetrics:
         self.upstream_latency = registry.histogram("jevstiller_upstream_duration_seconds", "Upstream call time")
         self.rejected = registry.counter("jevstiller_rejected_total", "Requests refused by the proxy itself",
                                          ["reason"])
+        self.unrouted = registry.counter("jevstiller_unrouted_total",
+                                         "/v1/systemone requests forwarded without routing or recording, by reason",
+                                         ["reason"])
 
 
 class Proxy:
@@ -540,6 +543,7 @@ class Proxy:
                              log_rec: dict) -> Response:
         """Forward without routing or recording anything."""
         self.stats["passthrough"] += 1
+        self.metrics.unrouted.inc(reason)               # e.g. how much image traffic passes through (Jev 1.14)
         resp = await self.forward(request, body, kh)
         log_rec["reason"] = reason
         return self._upstream_reply(resp, None, t0, log_rec)

@@ -15,6 +15,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from datasets import LOADERS  # noqa: E402
+from image_data import IMAGE_LOADERS, PrecomputedEncoder  # noqa: E402
+from image_jev import ImageJevTeacher, cache_path  # noqa: E402
 
 from jevstiller import Config, Jevstiller, Task, load_encoder  # noqa: E402
 from jevstiller.teachers import CachedTeacher, SyntheticTeacher  # noqa: E402
@@ -64,7 +66,8 @@ def load_env(path: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset", default="banking77", choices=list(LOADERS))
+    ap.add_argument("--dataset", default="banking77", choices=list(LOADERS) + list(IMAGE_LOADERS),
+                    help="img_*: an image dataset (image_data.py); --encoder then names its embeddings (image_embed.py)")
     ap.add_argument("--teacher", default="jev", choices=["jev", "cached", "synthetic", "oracle"],
                     help="cached: Jev's recorded answers only (experiments/cache/), no API key")
     ap.add_argument("--encoder", default="base")
@@ -86,13 +89,19 @@ def main() -> None:
     ap.add_argument("--rare-classes", default=None, choices=["wait", "defer"],
                     help="classes below --min-per-class: train and defer them to the teacher (Config's default), "
                          "or wait for them")
+    ap.add_argument("--jev-model", default="jev-1.14.0", help="image datasets: the Jev model asked (and cached)")
+    ap.add_argument("--max-jev-calls", type=int, default=0,
+                    help="image datasets with --teacher jev: required cap on Jev calls; the run stops before exceeding it")
     ap.add_argument("--out", default="experiments/results")
     ap.add_argument("--tag", default="")
     a = ap.parse_args()
 
     root = Path(__file__).resolve().parents[1]
     load_env(root / ".env")
-    ds = LOADERS[a.dataset]()
+    images = a.dataset in IMAGE_LOADERS
+    if images and a.teacher == "jev" and a.max_jev_calls <= 0:
+        raise SystemExit("image datasets ask Jev about images, billed per token: set --max-jev-calls")
+    ds = (IMAGE_LOADERS if images else LOADERS)[a.dataset]()
     rng = np.random.default_rng(a.seed)
     rows = list(ds["rows"])
     rng.shuffle(rows)
@@ -101,7 +110,13 @@ def main() -> None:
         stream = stream[:a.limit]
     task = Task(name=a.dataset, instructions=ds["instructions"], classes=ds["classes"], target_agreement=a.target)
 
-    if a.teacher in ("jev", "cached"):
+    if images and a.teacher in ("jev", "cached"):
+        # the states are image ids: the image teacher sends the images, never the ids as text
+        cache = cache_path(a.dataset.removeprefix("img_"), a.jev_model)
+        inner = (ImageJevTeacher(a.dataset.removeprefix("img_"), a.jev_model, max_calls=a.max_jev_calls)
+                 if a.teacher == "jev" else CacheOnlyTeacher(cache))
+        teacher = CachedTeacher(inner, cache)
+    elif a.teacher in ("jev", "cached"):
         cache = root / "experiments" / "cache" / f"{a.dataset}.jsonl"
         if a.teacher == "cached":
             inner = CacheOnlyTeacher(cache)
@@ -124,7 +139,10 @@ def main() -> None:
         shutil.rmtree(data_dir)
 
     t0 = time.perf_counter()
-    enc = load_encoder(a.encoder, backend=a.backend, device=a.device)
+    if images:
+        enc = PrecomputedEncoder(a.dataset.removeprefix("img_"), a.encoder)
+    else:
+        enc = load_encoder(a.encoder, backend=a.backend, device=a.device)
     ev_texts = [t for t, _ in ev]
     ev_truth = np.array([c for _, c in ev])
     enc.encode(ev_texts[:64])                                   # warm-up

@@ -104,17 +104,23 @@ def test_image_requests_up_to_jevs_limit_are_forwarded_unchanged(manager):
 def test_json_image_requests_are_forwarded_and_never_tasks(manager, caplog):
     caplog.set_level(logging.INFO, logger="jevstiller.access")
     jev = ImageJev()
-    with serve(jev.app()) as up, serve(create_app(manager, settings(up))) as proxy:
-        ref = f"<image:{uuid.uuid4().hex}>"
-        req = {"state": ref, "model": "jev-latest", "questions": QUESTIONS,
-               "assets": {ref: {"type": "image", "format": "jpg", "data_base64": "/9j/" + "A" * 400}}}
-        for _ in range(3):
-            assert post(proxy, json.dumps(req).encode(), "application/json").status_code == 200
-        ct, body = multipart(100)
-        post(proxy, body, ct)
-    assert len(jev.got) == 4 and manager.tasks() == []
+    with serve(jev.app()) as up:
+        app = create_app(manager, settings(up))
+        with serve(app) as proxy:
+            ref = f"<image:{uuid.uuid4().hex}>"
+            req = {"state": ref, "model": "jev-latest", "questions": QUESTIONS,
+                   "assets": {ref: {"type": "image", "format": "jpg", "data_base64": "/9j/" + "A" * 400}}}
+            for _ in range(3):
+                assert post(proxy, json.dumps(req).encode(), "application/json").status_code == 200
+            ct, body = multipart(100)
+            post(proxy, body, ct)
+            post(proxy, b"{not json", "application/json")                 # not an image request
+    assert len(jev.got) == 5 and manager.tasks() == []
     reasons = [json.loads(r.getMessage()).get("reason") for r in caplog.records if r.name == "jevstiller.access"]
-    assert reasons == ["images"] * 4
+    assert reasons == ["images"] * 4 + ["not_understood"]
+    metrics = app.state.metrics.render()                   # how much image traffic passes through
+    assert 'jevstiller_unrouted_total{reason="images"} 4' in metrics
+    assert 'jevstiller_unrouted_total{reason="not_understood"} 1' in metrics
 
 
 def test_large_bodies_held_at_once_are_capped(manager):
