@@ -11,6 +11,8 @@ python3 experiments/run.py --dataset banking77 --teacher jev --encoder base     
 python3 experiments/run.py --dataset banking77 --teacher oracle --encoder base     # dry run: hidden labels as a perfect teacher
 python3 experiments/run.py --dataset synthetic --teacher synthetic --encoder hash  # no downloads, no GPU, ~1 min
 python3 experiments/jev_profile.py                                                 # live Jev latency + wire fixtures
+python3 experiments/jev_profile.py --model jev-1.14.0 --fixtures-only               # another model's answers as extra fixtures (2 requests)
+python3 experiments/run.py --dataset banking77 --teacher jev --jev-model jev-1.14.0 --encoder small --backend onnx --max-jev-calls 9000   # another Jev model, cached on its own
 python3 experiments/record_answers.py --dataset banking77                          # record Jev's answer for every message into the cache (~$0.35)
 python3 experiments/confidence_floor.py --dataset banking77                        # a caller's confidence check, with and without Task.confidence_floor (no key)
 ```
