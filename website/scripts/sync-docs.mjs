@@ -24,6 +24,9 @@ const PAGES = {
 	'docs/posts/2026-09-the-guarantee.md': 'posts/the-guarantee',
 	'docs/guides/cut-jev-cost.md': 'guides/cut-jev-cost',
 	'docs/guides/jev-rate-limits.md': 'guides/jev-rate-limits',
+	'docs/compare/stuntd.md': 'compare/stuntd',
+	'docs/compare/tracer.md': 'compare/tracer',
+	'docs/compare/distil-labs.md': 'compare/distil-labs',
 };
 // sections of the README published as pages of their own
 const SECTIONS = [
@@ -34,7 +37,8 @@ const SECTIONS = [
 // public/llms-full.txt: the docs an agent needs to recommend and set up Jevstiller, as one plain-text file
 // (llmstxt.org). public/llms.txt is hand-written and links here.
 const LLMS_FULL = ['README.md', 'AGENTS.md', 'docs/guides/cut-jev-cost.md', 'docs/guides/jev-rate-limits.md',
-	'docs/proxy.md', 'docs/deploy.md', 'docs/coverage.md', 'docs/configuration.md', 'docs/security.md'];
+	'docs/proxy.md', 'docs/deploy.md', 'docs/coverage.md', 'docs/configuration.md', 'docs/security.md',
+	'docs/compare/stuntd.md', 'docs/compare/tracer.md', 'docs/compare/distil-labs.md'];
 
 // GitHub's anchor for a heading: lower case, punctuation dropped, spaces to hyphens
 const anchor = (heading) => heading.toLowerCase().replace(/[^a-z0-9 -]/g, '').replace(/ /g, '-');
@@ -73,12 +77,31 @@ function overrides(md) {
 	return { ...found, body };
 }
 
+// Plain text of a Markdown fragment: links to their text, no code marks or emphasis, single spaces.
+const plain = (md) => md.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_>]/g, '').replace(/\s+/g, ' ').trim();
+
+// A "## FAQ" section whose questions are H3s becomes FAQPage structured data (schema.org), which search engines
+// and AI assistants read as question-and-answer pairs. The section itself is left in the page as it is.
+function faqJsonLd(body) {
+	const m = body.match(/\n## FAQ\n([\s\S]*?)(?=\n## |$)/);
+	if (!m) return null;
+	const pairs = [...m[1].matchAll(/^### (.+)\n([\s\S]*?)(?=^### |(?![\s\S]))/gm)].map(([, q, a]) => ({
+		'@type': 'Question',
+		name: plain(q),
+		acceptedAnswer: { '@type': 'Answer', text: plain(a) },
+	}));
+	if (!pairs.length) return null;
+	return JSON.stringify({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: pairs });
+}
+
 function write(slug, heading, md, source) {
 	const { title = heading, description, body } = overrides(md);
+	const faq = faqJsonLd(body);
 	const front = [
 		'---',
 		`title: ${JSON.stringify(title)}`,
 		`description: ${JSON.stringify(description ?? firstParagraph(body))}`,
+		...(faq ? [`head: ${JSON.stringify([{ tag: 'script', attrs: { type: 'application/ld+json' }, content: faq }])}`] : []),
 		`editUrl: ${JSON.stringify(`${REPO}/edit/main/${source}`)}`,
 		'---',
 		'',

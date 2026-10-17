@@ -13,10 +13,12 @@ In rough order of importance:
    through the proxy ([benchmarks](/project/benchmarks/)).
 2. **Availability and independence.** The student keeps answering through Jev outages, rate limiting, and
    restricted network egress, and not every classification depends on one external API.
-3. **Headroom.** Jev's published limits are 80 requests and 100,000 tokens a second (October 2026; 1,200 requests
-   a minute at launch), adjusted at TypeSafe's discretion. Local answers don't count against them.
-4. **Cost**, last. Jev is cheap (about $17 per million short support messages with a 5-class question), so
-   savings only matter at very high volume.
+3. **Headroom.** Jev's rate limits are set per organization, in requests and tokens per second, and shown in
+   TypeSafe's developer console (1,200 requests a minute was the published limit at launch). Local answers don't
+   count against them. See [Jev rate limits and 429s](/guides/jev-rate-limits/).
+4. **Cost**, last. Jev is cheap: $0.042 per million input tokens, about $17 per million short support messages with
+   a 5-class question at roughly 400 tokens each, so savings only matter at very high volume. See
+   [Cut your Jev API bill](/guides/cut-jev-cost/).
 
 The warm-up costs nothing extra: the requests were going to Jev anyway, and each answer becomes a training row.
 The ongoing Jev cost is the audit slice plus whatever the student passes on.

@@ -1,20 +1,33 @@
 # Cut your Jev API bill
-<!-- title: Cut your Jev API bill: where the spend comes from and three ways to pay less -->
-<!-- description: Jev bills per input token. Shorter states, several questions per request, and answering repeated questions locally with Jevstiller (typically 70–80% of an intent or topic question): what each saves, when it applies, and when none of them helps. -->
+<!-- title: Cut your Jev API bill: what Jev costs and three ways to pay less -->
+<!-- description: Jev costs $0.042 per million input tokens and nothing for output, so the bill is requests × tokens per request. Shorter states, several questions per request, and answering repeated questions locally with Jevstiller (typically 70–80% of an intent or topic question): what each saves, when it applies, and when none of them helps. -->
 
-Jev bills per input token. When a service asks the same question about a stream of inputs (route this ticket, flag this message, pick an intent), the bill grows with traffic, and so does the number of calls going to one external API. This page covers the options, what each one saves, and when Jevstiller is not the answer.
+## What Jev costs
 
-## Where the spend comes from
+From TypeSafe's [models page](https://docs.typesafe.ai/models), checked on 2026-10-17:
 
-A Jev call is one state (the text) plus one or more questions. For a fixed question, the cost of a request is its input tokens, so the spend is roughly requests × average state length × price. Shortening states and asking several questions in one request (one state, many questions) both help, and need no new software.
+| | Jev 1.14 (`jev-1.14.0`, `jev-preview`) | Jev 1.13 (`jev-1.13.0`, `jev-latest`) |
+|---|---|---|
+| Input tokens | $0.042 per million ($42 per billion) | $0.042 per million |
+| Output tokens | free | free |
+| Context | 64k tokens per request, 32k per question | same |
+| Long context (`TypeSafe-Danger-Zone-Long-Context: true`) | 262k, same price per token | same |
 
-## Options
+Everything you pay for is input: the state (your text), the instructions and the options or criteria of every question in the request. There is no per-call fee and no charge for the answer. So for a fixed question:
+
+> spend ≈ requests × input tokens per request × $0.042 per million
+
+A short support message with a five-class question runs to roughly 400 input tokens once the instructions and class descriptions are counted, which is about $17 per million requests. Banking77, with 77 described intents per request, cost $0.62 for 11,083 requests in [the benchmark](../benchmarks.md), about $56 per million. Jev is cheap; the bill only matters at high volume, and at high volume it is one more external call per decision.
+
+## Three ways to pay less
 
 | Option | Saves | Works when |
 |---|---|---|
-| Cache identical requests | the repeats | the same text arrives again: retries, duplicate events. Most real text is never exactly repeated. |
-| Ask several questions per request | one state's tokens per extra question | your service asks several questions about the same input |
-| Answer locally from Jev's own answers ([Jevstiller](https://github.com/tomerglick57/Jevstiller)) | the share answered locally, typically 70–80% on intent and topic questions | the same question is asked thousands of times about different inputs |
+| Send less per request: shorter states, tighter instructions | tokens on every request | always; it is the first thing to try, and needs no software |
+| Ask several questions per request | one state's tokens per extra question (the state is billed once) | your service asks several questions about the same input |
+| Answer repeated questions locally from Jev's own answers ([Jevstiller](https://github.com/tomerglick57/Jevstiller)) | the share answered locally, typically 70–80% on intent and topic questions | the same question is asked thousands of times about different inputs |
+
+Caching identical requests helps only with retries and duplicate events: most real text is never repeated exactly.
 
 ## Answering locally
 
@@ -44,3 +57,29 @@ The share answered locally is the share of calls, and of input tokens, that neve
 ## Before you deploy
 
 Jevstiller trains on Jev's output, and TypeSafe's terms restrict that. Read [TypeSafe's terms](../../README.md#typesafes-terms) and decide for your own use.
+
+## FAQ
+
+### How much does Jev cost?
+
+$0.042 per million input tokens, for both Jev 1.13 and Jev 1.14, as of October 2026. Output tokens are free. A request's cost is its input tokens: the state plus every question's instructions and options.
+
+### Does Jev charge for output tokens?
+
+No. TypeSafe's models page says output tokens are free. Only input is billed.
+
+### Does putting several questions in one request save money?
+
+Yes. The state is sent and billed once per request, so each extra question costs only its own instructions and options, not another copy of the state.
+
+### How much of a Jev bill can Jevstiller remove?
+
+The share of requests it answers locally. On intent and topic classification that was 69% to 80% in the benchmarks at a 98% agreement target; on noisy sentiment tasks, 22% to 24%. The remaining requests and a 2% audit sample still go to Jev.
+
+### Does Jevstiller save money from the first day?
+
+No. Every request goes to Jev until a question has about a thousand of Jev's answers, a local model has trained, and it has passed a shadow test on live traffic. Those requests were going to Jev anyway; each one becomes a training row.
+
+### Is answering locally from Jev's answers allowed under TypeSafe's terms?
+
+TypeSafe's Master Customer Agreement restricts training on Jev's output. The project's reading, and why it may not apply to a small per-question classifier used only in your own deployment, is in the README under "TypeSafe's terms". It is not legal advice; decide for your own use.

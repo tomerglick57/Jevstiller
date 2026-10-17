@@ -46,6 +46,14 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Compared with',
+					items: [
+						{ label: 'stuntd', slug: 'compare/stuntd' },
+						{ label: 'TRACER', slug: 'compare/tracer' },
+						{ label: 'Distil Labs', slug: 'compare/distil-labs' },
+					],
+				},
+				{
 					label: 'Guides',
 					items: [
 						{ label: 'Cut your Jev API bill', slug: 'guides/cut-jev-cost' },
