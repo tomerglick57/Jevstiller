@@ -45,3 +45,22 @@ source carries overrides in HTML comments right under the heading (invisible on 
 
 Write them for the person searching: say "Jev" and the subject, keep the description to about two lines of plain
 prose, and make it true of the page. Hand-written pages set `title` and `description` in their frontmatter.
+
+## Structured data
+
+Every docs page carries a schema.org `TechArticle` block (`src/components/Head.astro`, registered as Starlight's
+`Head` component override): title, description, canonical URL and the last-updated date from git. The landing page
+carries a `SoftwareApplication` block (in `src/pages/index.astro`; `softwareVersion` follows the `version` constant
+bumped at each release). A synced page with a `## FAQ` section whose questions are H3s also gets a `FAQPage` block
+from `scripts/sync-docs.mjs`. Check a page with Google's Rich Results Test, or:
+
+```bash
+curl -s https://jevstiller.pages.dev/guides/cut-jev-cost/ | grep -o '<script type="application/ld+json">[^<]*</script>'
+```
+
+## Savings calculator
+
+`src/content/docs/calculator.mdx` embeds `src/components/SavingsCalculator.astro`: a client-side form that turns a
+volume and one of the benchmark tasks into a monthly Jev bill with and without the proxy. The constants (price,
+audit rate, latencies, warm-up, per-task coverage and agreement) sit at the top of the component with their
+sources; update them when `docs/benchmarks.md` changes.

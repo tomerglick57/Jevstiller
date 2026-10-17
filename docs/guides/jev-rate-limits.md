@@ -15,7 +15,7 @@ From TypeSafe's [models page](https://docs.typesafe.ai/models) and [API referenc
 
 - **Honour `retry-after` and spread bursts.** The SDK does the first part. Many callers retrying at once is what turns a short limit into an outage; cap concurrency per key.
 - **Ask several questions per request.** One state with several questions is one request against the request limit, and the state's tokens count once.
-- **Send fewer requests.** Requests answered locally never reach Jev and never count against its limits. With [Jevstiller](https://github.com/tomerglick57/Jevstiller) in front, that's typically 70–80% of a repeated intent or topic question once its local model has trained ([benchmarks](../benchmarks.md)). The remaining requests and a 2% audit still go to Jev.
+- **Send fewer requests.** Requests answered locally never reach Jev and never count against its limits. With [Jevstiller](https://github.com/tomerglick57/Jevstiller) in front, that's typically 70–80% of a repeated intent or topic question once its local model has trained ([benchmarks](../benchmarks.md)). The remaining requests and a 2% audit still go to Jev. The [savings calculator](https://jevstiller.pages.dev/calculator/) shows the share of your traffic Jev would still see.
 
 ## How Jevstiller handles a 429
 

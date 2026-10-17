@@ -47,6 +47,8 @@ The share answered locally is the share of calls, and of input tokens, that neve
 
 `jevstiller admin status <task>` reports the calls avoided and their estimated cost (`price_per_mtok`, default $0.042 per million input tokens).
 
+To see what this means at your volume before deploying anything, put your numbers into the [savings calculator](https://jevstiller.pages.dev/calculator/).
+
 ## When it won't help
 
 - **Questions that change on every request** (criteria built per request, re-ranking) never repeat enough to train on. They are forwarded.

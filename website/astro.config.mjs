@@ -20,6 +20,7 @@ export default defineConfig({
 			social: [{ icon: 'github', label: 'GitHub', href: repo }],
 			editLink: { baseUrl: `${repo}/edit/main/website/` },
 			customCss: ['./src/styles/custom.css'],
+			components: { Head: './src/components/Head.astro' },   // adds TechArticle structured data to every docs page
 			head: [
 				{ tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
 				{ tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: true } },
@@ -58,6 +59,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Cut your Jev API bill', slug: 'guides/cut-jev-cost' },
 						{ label: 'Jev rate limits and 429s', slug: 'guides/jev-rate-limits' },
+						{ label: 'Savings calculator', slug: 'calculator' },
 					],
 				},
 				{

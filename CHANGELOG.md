@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Website: a [savings calculator](https://jevstiller.pages.dev/calculator/). Requests a day, tokens per request and the closest benchmark task give the monthly Jev bill with and without the proxy, the calls that never reach Jev, the time spent waiting, the warm-up and the agreement bound. Every constant has its source.
+- Website: schema.org structured data. A `SoftwareApplication` block on the landing page, a `TechArticle` block on every docs page (title, description, canonical URL, last-updated date), and `FAQPage` on the guides.
 - **Metric:** `jevstiller_unrouted_total{reason}` counts `/v1/systemone` requests forwarded without routing or recording. `reason="images"` shows how much image traffic (Jev 1.14) passes through the proxy. The other reasons were only in the access log.
 - Docs: three comparison pages, [Jevstiller vs stuntd](docs/compare/stuntd.md), [vs TRACER](docs/compare/tracer.md) and [vs Distil Labs and cloud distillation](docs/compare/distil-labs.md), each with a side-by-side table, where the other project goes further, and sources pinned to a commit. The README's "How it compares" now covers TRACER and links to them.
 - Docs: the two guides lead with TypeSafe's published facts (price, context limits, what a 429 and a 529 mean, the SDK's retry defaults) and end with a FAQ, which the website also emits as FAQPage structured data.

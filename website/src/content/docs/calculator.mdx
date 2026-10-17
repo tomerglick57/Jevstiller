@@ -1,0 +1,24 @@
+---
+title: Jev savings calculator
+description: Put in how often one question is asked and how long a request is, pick the closest benchmark task, and see what the Jev bill, the calls reaching Jev and the time spent waiting look like with Jevstiller in front, with the warm-up and the agreement bound next to the numbers.
+---
+
+import SavingsCalculator from '../../components/SavingsCalculator.astro';
+
+Jev costs [$0.042 per million input tokens](/guides/cut-jev-cost/) and answers in about 300 ms. Jevstiller answers a repeated question locally once it has learned it from Jev's own answers, within an agreement bound you set, and forwards the rest. This page estimates what that changes for one question at your volume. The local share comes from the [benchmarks](/project/benchmarks/): five public tasks replayed against Jev's recorded answers at a 98% target.
+
+<SavingsCalculator />
+
+## How the numbers are computed
+
+- **Jev today** is requests × input tokens × $0.042 per million. Output tokens are free, so that is the whole bill for the question.
+- **Answered locally** is the task's held-out coverage from the benchmark, times 98%: a random 2% of all traffic always goes to Jev as the audit that keeps the bound honest.
+- **With Jevstiller** is the same bill times the share that still reaches Jev. Jevstiller itself is free (Apache-2.0) and runs on one CPU container next to your services; that machine is the cost it adds.
+- **Time waiting** is the per-request median summed over a day: 300 ms for an answer from Jev, 16 ms for a local one, and 316 ms for a request the local model passes on, since it is encoded first.
+- **Warm-up** is 1,000 Jev answers to train the first model, 500 held out to calibrate the threshold, and 1,000 requests in shadow before it is promoted ([configuration reference](/reference/configuration/)).
+
+Every constant is at the top of [the calculator's source](https://github.com/tomerglick57/Jevstiller/blob/main/website/src/components/SavingsCalculator.astro), each with where it comes from. The benchmark tables and the one-command reproduction are in [benchmarks](/project/benchmarks/).
+
+## Before you deploy
+
+Jevstiller trains on Jev's output, and TypeSafe's terms restrict that. Read [TypeSafe's terms](/project/terms/) and decide for your own use. Then run the proxy in front of a copy of your traffic: the [status page](/proxy/operations/) shows the real local share and agreement for your question.
