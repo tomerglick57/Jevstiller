@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Metric:** `jevstiller_unrouted_total{reason}` counts `/v1/systemone` requests forwarded without routing or recording. `reason="images"` shows how much image traffic (Jev 1.14) passes through the proxy. The other reasons were only in the access log.
+
 ## 0.5.2 — 2026-10-17
 
 Jev 1.14 compatibility: requests with images, up to Jev's own 32 MiB limit, are forwarded instead of refused above 4 MiB. Also new docs: TypeSafe's terms, two guides, and `AGENTS.md`.

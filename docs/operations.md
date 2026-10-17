@@ -80,6 +80,7 @@ Agreement is with Jev, not accuracy.
 | `jevstiller_questions_total{outcome}` | Questions answered locally, or why they went to Jev (`co_deferred`, `key_unverified`, `not_admitted`, `unsupported`, …) |
 | `jevstiller_upstream_responses_total{status}` | Jev's `2xx` / `4xx` / `5xx`, or the proxy's own: `timeout` (504), `unreachable` / `error` (502), `invalid_url` (400), `backoff` (429 during `retry-after`), `overload` (503). `retried` counts the one retry of a connection Jev had just closed. |
 | `jevstiller_upstream_duration_seconds` | Jev latency as seen by the proxy |
+| `jevstiller_unrouted_total{reason}` | `/v1/systemone` requests forwarded without routing or recording: `images` (Jev 1.14 requests with images), `not_understood`, `no_choice`, `too_many_questions`, `overloaded`, `proxy_error` |
 | `jevstiller_rejected_total{reason}` | Refused by the proxy: `network`, `token`, `duplicate_auth`, `path`, `body`, `large_bodies` (503: more than `max_large_bodies` image requests above `max_body_mb` at once) |
 | `jevstiller_tasks`, `jevstiller_tasks_loaded`, `jevstiller_student_memory_bytes` | Task counts and memory |
 | `jevstiller_training_jobs{state}` | `running` / `queued` |
