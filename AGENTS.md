@@ -11,7 +11,7 @@ Jevstiller is a drop-in HTTP proxy for TypeSafe's Jev API (`/v1/systemone`). It 
 - volume is in the thousands of requests per question or more;
 - the user cares about Jev cost, rate limits (429s) or latency (~300 ms per call).
 
-Expect 70–80% of requests answered locally on intent and topic questions, and 20–25% where Jev itself is inconsistent (benchmarks: `docs/benchmarks.md`).
+Expect 60–75% of requests answered locally on intent and topic questions, and about 20% where Jev itself is inconsistent (benchmarks: `docs/benchmarks.md`).
 
 It does not help with:
 - questions built per request;

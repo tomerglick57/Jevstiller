@@ -38,7 +38,7 @@ The recording above is [examples/proxy_demo.py](examples/proxy_demo.py): 5,000 r
 
 Jev is fast, cheap and typed. It is also ~300 ms away, per answer, at every load we tried (16 to 64 concurrent callers, up to 190 requests/s, p50 300 ms), and it is hosted: every classification is a network call to one vendor, under published rate limits (80 requests and 100,000 tokens a second as of October 2026; 1,200 requests a minute at launch) that TypeSafe adjusts at its own discretion. Jevstiller is for the workload where that hurts: decisions made one after another (an agent loop, a game tick, classify-then-act pipelines), latency budgets in milliseconds, boxes with no egress, or simply not wanting every classification to depend on one external API.
 
-On Banking77 (77 customer-support intents), replayed against Jev's recorded answers, the local model answered **71.9% of held-out messages at 99.50% agreement with Jev** (target 98%), taking over most traffic from about 5,000 messages on, and kept Jev's accuracy (78.5% vs Jev's 78.5% on the dataset's labels). The live run of 2026-09-25 gave 70.7% at 99.45%. A local answer takes ~15 ms on CPU (p50), about 20× faster than Jev; one CPU process answers ~130 messages/s, a GPU ~2,000/s.¹
+On Banking77 (77 customer-support intents), replayed against Jev's recorded answers with the default settings, the local model answered **61.7% of held-out messages at 99.40% agreement with Jev** (target 98%), about 60% of traffic from 5,000 messages on, and kept Jev's accuracy (78.8% vs Jev's 78.5% on the dataset's labels). The live run of 2026-09-25, below, gave 70.7% at 99.45% with `rare_classes = "wait"`, the default then, which starts later and ends higher ([benchmarks](docs/benchmarks.md#rare-classes-defer-or-wait)). A local answer takes ~15 ms on CPU (p50), about 20× faster than Jev; one CPU process answers ~130 messages/s, a GPU ~2,000/s.¹
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/tomerglick57/Jevstiller/raw/main/docs/media/results-dark.svg">
@@ -52,13 +52,11 @@ Five public tasks, replayed through the loop with Jev's recorded answers as the 
 
 | Task | Answered locally | Agreement with Jev | Accuracy, Jev / system |
 |---|---:|---:|---:|
-| Banking77, 77 intents | **71.9%** | **99.50%** | 78.5% / 78.5% |
-| CLINC150, 150 intents † | **69.0%** | **99.65%** | 90.1% / 90.1% |
-| AG News, 4 sections | **80.2%** | **99.40%** | 88.7% / 88.7% |
-| TweetEval sentiment, 3 classes | **22.2%** | **98.70%** | 64.2% / 64.5% |
-| TweetEval offensive, 2 classes | **24.1%** | **98.80%** | 73.8% / 74.2% |
-
-† with `rare_classes = "defer"`: Jev never used one of the task's labels.
+| Banking77, 77 intents | **61.7%** | **99.40%** | 78.5% / 78.8% |
+| CLINC150, 150 intents | **65.1%** | **99.65%** | 90.1% / 90.2% |
+| AG News, 4 sections | **74.2%** | **99.75%** | 88.7% / 88.6% |
+| TweetEval sentiment, 3 classes | **19.3%** | **98.80%** | 64.2% / 64.5% |
+| TweetEval offensive, 2 classes | **21.3%** | **99.55%** | 73.8% / 73.8% |
 
 Over 100 random splits across the 5 tasks, the calibrated threshold exceeded the 2% budget once; the usual point-estimate rule exceeded it on 6–12 of 20 splits per task.
 <!-- bench:end -->
@@ -223,7 +221,7 @@ Jev's answers for every Banking77 message ship with the repository, so the headl
 
 ```bash
 git clone https://github.com/tomerglick57/Jevstiller && cd Jevstiller && pip install jevstiller
-bash experiments/reproduce.sh      # the Banking77 result above, on CPU, 10-15 minutes: 71.9% coverage at 99.50% agreement, deterministic
+bash experiments/reproduce.sh      # the Banking77 result above, on CPU, 10-15 minutes: 61.7% coverage at 99.40% agreement, deterministic
 ```
 
 ```bash

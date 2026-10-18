@@ -1,6 +1,6 @@
 # Jevstiller
 
-> Jevstiller is an open-source (Apache 2.0), self-hosted drop-in proxy for TypeSafe's Jev API. For each question a service asks Jev repeatedly, it trains a small local classifier from Jev's own answers. It answers requests locally only within an agreement bound the user sets (98% by default, Clopper–Pearson with a permanent 2% audit), and forwards everything else to Jev. Typical result: 70–80% of a repeated intent or topic question answered locally in ~15 ms on CPU, instead of ~300 ms at Jev, so fewer Jev calls, a smaller bill and fewer 429s.
+> Jevstiller is an open-source (Apache 2.0), self-hosted drop-in proxy for TypeSafe's Jev API. For each question a service asks Jev repeatedly, it trains a small local classifier from Jev's own answers. It answers requests locally only within an agreement bound the user sets (98% by default, Clopper–Pearson with a permanent 2% audit), and forwards everything else to Jev. Typical result: 60–75% of a repeated intent or topic question answered locally in ~15 ms on CPU, instead of ~300 ms at Jev, so fewer Jev calls, a smaller bill and fewer 429s.
 
 Setup without code changes: `docker run -d -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller`, then set `TYPESAFE_BASE_URL=http://localhost:8080` in the service. The service keeps its own Jev API key.
 

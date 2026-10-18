@@ -25,13 +25,14 @@ r = json.load(open("experiments/results/banking77-cached-small-probs-t98-reprodu
 e = [c for c in r["checkpoints"] if c.get("eval")][-1]["eval"]
 cache = r["teacher_cache"]
 print()
-print("                              this run   shipped replay   live run (README)")
-print(f"  held-out coverage           {e['coverage']:6.1%}       71.9%            70.7%")
-print(f"  system agreement with Jev   {e['system_agreement']:6.2%}      99.50%           99.45%   (target 98%)")
-print(f"  accuracy vs true labels     {e['system_accuracy_vs_truth']:6.1%}       78.5%            78.5%   (Jev alone: {e['teacher_accuracy_vs_truth']:.1%})")
+print("                              this run   published replay   live run, 2026-09-25 (README)")
+print(f"  held-out coverage           {e['coverage']:6.1%}       61.7%              70.7%")
+print(f"  system agreement with Jev   {e['system_agreement']:6.2%}      99.40%             99.45%   (target 98%)")
+print(f"  accuracy vs true labels     {e['system_accuracy_vs_truth']:6.1%}       78.8%              78.5%   (Jev alone: {e['teacher_accuracy_vs_truth']:.1%})")
 print(f"  Jev answers from the cache  {cache['hits']:,} hits, {cache['misses']} misses")
 print()
-print("The replay is deterministic, so 'this run' should match 'shipped replay' exactly on the same kind of CPU;")
+print("The replay is deterministic, so 'this run' should match 'published replay' exactly on the same kind of CPU;")
 print("another CPU's floating point can move the numbers by a few tenths of a point. The live run of 2026-09-25")
-print("saw Jev's answers for ~650 messages that were re-recorded since, and used a different train/calibration split.")
+print("saw Jev's answers for ~650 messages that were re-recorded since, used a different train/calibration split, and")
+print("ran with rare_classes = 'wait', the default then (docs/benchmarks.md, 'Rare classes: defer or wait').")
 PYEOF
