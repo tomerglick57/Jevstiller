@@ -1,6 +1,6 @@
 # Jev rate limits and 429s
 <!-- title: Jev rate limits and 429 errors: what the limits are, how the SDK retries, and how to send fewer requests -->
-<!-- description: Jev's rate limits are set per organization in requests and tokens per second and shown in TypeSafe's developer console. What a 429 and a 529 mean, the TypeSafe SDK's retry defaults, what helps, and how a local proxy keeps 70–80% of a repeated question's requests from reaching Jev at all. -->
+<!-- description: Jev's rate limits are set per organization in requests and tokens per second and shown in TypeSafe's developer console. What a 429 and a 529 mean, the TypeSafe SDK's retry defaults, what helps, and how a local proxy keeps 60–75% of a repeated question's requests from reaching Jev at all. -->
 
 ## What the limits are
 
@@ -15,7 +15,7 @@ From TypeSafe's [models page](https://docs.typesafe.ai/models) and [API referenc
 
 - **Honour `retry-after` and spread bursts.** The SDK does the first part. Many callers retrying at once is what turns a short limit into an outage; cap concurrency per key.
 - **Ask several questions per request.** One state with several questions is one request against the request limit, and the state's tokens count once.
-- **Send fewer requests.** Requests answered locally never reach Jev and never count against its limits. With [Jevstiller](https://github.com/tomerglick57/Jevstiller) in front, that's typically 70–80% of a repeated intent or topic question once its local model has trained ([benchmarks](../benchmarks.md)). The remaining requests and a 2% audit still go to Jev. The [savings calculator](https://jevstiller.pages.dev/calculator/) shows the share of your traffic Jev would still see.
+- **Send fewer requests.** Requests answered locally never reach Jev and never count against its limits. With [Jevstiller](https://github.com/tomerglick57/Jevstiller) in front, that's typically 60–75% of a repeated intent or topic question once its local model has trained ([benchmarks](../benchmarks.md)). The remaining requests and a 2% audit still go to Jev. The [savings calculator](https://jevstiller.pages.dev/calculator/) shows the share of your traffic Jev would still see.
 
 ## How Jevstiller handles a 429
 
@@ -52,7 +52,7 @@ Yes. By default the Python SDK retries 408, 429 and 5xx responses twice, waiting
 
 ### How does a local proxy reduce 429s?
 
-A request answered locally is never sent to Jev, so it cannot count against the limit. Jevstiller answers 70–80% of a repeated intent or topic question locally once trained, within an agreement bound you set; the rest and a 2% audit still go to Jev.
+A request answered locally is never sent to Jev, so it cannot count against the limit. Jevstiller answers 60–75% of a repeated intent or topic question locally once trained, within an agreement bound you set; the rest and a 2% audit still go to Jev.
 
 ### What happens to requests Jevstiller forwards while Jev is rate limiting?
 

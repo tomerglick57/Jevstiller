@@ -1,6 +1,6 @@
 # Cut your Jev API bill
 <!-- title: Cut your Jev API bill: what Jev costs and three ways to pay less -->
-<!-- description: Jev costs $0.042 per million input tokens and nothing for output, so the bill is requests × tokens per request. Shorter states, several questions per request, and answering repeated questions locally with Jevstiller (typically 70–80% of an intent or topic question): what each saves, when it applies, and when none of them helps. -->
+<!-- description: Jev costs $0.042 per million input tokens and nothing for output, so the bill is requests × tokens per request. Shorter states, several questions per request, and answering repeated questions locally with Jevstiller (typically 60–75% of an intent or topic question): what each saves, when it applies, and when none of them helps. -->
 
 ## What Jev costs
 
@@ -25,7 +25,7 @@ A short support message with a five-class question runs to roughly 400 input tok
 |---|---|---|
 | Send less per request: shorter states, tighter instructions | tokens on every request | always; it is the first thing to try, and needs no software |
 | Ask several questions per request | one state's tokens per extra question (the state is billed once) | your service asks several questions about the same input |
-| Answer repeated questions locally from Jev's own answers ([Jevstiller](https://github.com/tomerglick57/Jevstiller)) | the share answered locally, typically 70–80% on intent and topic questions | the same question is asked thousands of times about different inputs |
+| Answer repeated questions locally from Jev's own answers ([Jevstiller](https://github.com/tomerglick57/Jevstiller)) | the share answered locally, typically 60–75% on intent and topic questions | the same question is asked thousands of times about different inputs |
 
 Caching identical requests helps only with retries and duplicate events: most real text is never repeated exactly.
 
@@ -37,11 +37,11 @@ On five public tasks replayed against Jev's recorded answers ([benchmarks](../be
 
 | Task | Requests answered locally (no Jev call) | Agreement with Jev |
 |---|---:|---:|
-| Banking77, 77 intents | 71.9% | 99.50% |
-| CLINC150, 150 intents | 69.0% | 99.65% |
-| AG News, 4 topics | 80.2% | 99.40% |
-| TweetEval sentiment | 22.2% | 98.70% |
-| TweetEval offensive | 24.1% | 98.80% |
+| Banking77, 77 intents | 61.7% | 99.40% |
+| CLINC150, 150 intents | 65.1% | 99.65% |
+| AG News, 4 topics | 74.2% | 99.75% |
+| TweetEval sentiment | 19.3% | 98.80% |
+| TweetEval offensive | 21.3% | 99.55% |
 
 The share answered locally is the share of calls, and of input tokens, that never reach Jev. It follows how consistent Jev is on the task. Where Jev itself is noisy (the tweet tasks), most requests still go to Jev. Lowering the target to 95% roughly doubles the local share on the noisy tasks.
 

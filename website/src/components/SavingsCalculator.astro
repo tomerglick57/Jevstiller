@@ -8,13 +8,13 @@ const AUDIT = 0.02; // share of all traffic always sent to Jev (configuration re
 const JEV_MS = 300; // Jev's median per answer at every load we tried (benchmarks, "Live Jev")
 const LOCAL_MS = 16; // median local answer on CPU, encoder included (benchmarks, "Proxy")
 const WARMUP = 2500; // Jev answers a question needs before its first local answer: 1,000 to train, 500 to calibrate, 1,000 in shadow
-// Held-out coverage and agreement with Jev at a 98% target (benchmarks, "Quality")
+// Held-out coverage and agreement with Jev at a 98% target, default settings (benchmarks, "Quality", 2026-10-18)
 const TASKS = [
-	{ id: 'banking77', label: 'Banking77: 77 customer-support intents', coverage: 0.719, agreement: 0.995 },
-	{ id: 'clinc150', label: 'CLINC150: 150 intents and "other"', coverage: 0.69, agreement: 0.9965 },
-	{ id: 'agnews', label: 'AG News: 4 topics', coverage: 0.802, agreement: 0.994 },
-	{ id: 'tweet-sentiment', label: 'TweetEval sentiment: 3 classes', coverage: 0.222, agreement: 0.987 },
-	{ id: 'tweet-offensive', label: 'TweetEval offensive: yes/no', coverage: 0.241, agreement: 0.988 },
+	{ id: 'banking77', label: 'Banking77: 77 customer-support intents', coverage: 0.617, agreement: 0.994 },
+	{ id: 'clinc150', label: 'CLINC150: 150 intents and "other"', coverage: 0.651, agreement: 0.9965 },
+	{ id: 'agnews', label: 'AG News: 4 topics', coverage: 0.742, agreement: 0.9975 },
+	{ id: 'tweet-sentiment', label: 'TweetEval sentiment: 3 classes', coverage: 0.193, agreement: 0.988 },
+	{ id: 'tweet-offensive', label: 'TweetEval offensive: yes/no', coverage: 0.213, agreement: 0.9955 },
 	{ id: 'custom', label: 'Custom: enter a local share', coverage: 0.5, agreement: 0.98 },
 ];
 const consts = { PRICE_PER_MTOK, AUDIT, JEV_MS, LOCAL_MS, WARMUP, TASKS };

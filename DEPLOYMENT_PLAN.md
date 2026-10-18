@@ -251,7 +251,8 @@ forwards image requests up to Jev's 32 MiB and learns nothing from them. Whether
 first (experiments/README.md, "Images"):
 - Students on frozen image embeddings, replayed against `jev-1.14.0`'s answers at a 98% target, held the guarantee
   on three questions: 91% answered locally (crack or not), 62% (which of 101 dishes), 40% (which of 16 document types).
-- Text intent and topic tasks run 70–80%, so photos of things are close behind and documents are like the noisy tasks.
+- Text intent and topic tasks run 60–75% with the default settings, so photos of things are in the same range and
+  documents are like the noisy tasks.
 - The cost is on the local side: 60–75 ms per image on CPU with CLIP B/32, 150–200 ms with SigLIP B/16 (PyTorch,
   preprocessing included), against ~10 ms for text. Jev took ~270–320 ms per image request.
 

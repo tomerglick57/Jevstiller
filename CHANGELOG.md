@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Docs: **benchmark numbers re-measured with the default settings.**
+  - The published numbers were measured with `rare_classes = "wait"`, the default until 0.3.4. Since 0.3.4 the default `defer` lets a task's first student train sooner, and it ends lower.
+  - Held-out coverage: Banking77 71.9% → 61.7%, CLINC150 69.0% → 65.1%, AG News 80.2% → 74.2%, TweetEval sentiment 22.2% → 19.3%, TweetEval offensive 24.1% → 21.3%. Agreement stays at 98.8–99.75%.
+  - Over the whole stream Banking77 answers more locally than before (50% against 40%), because its first student comes at 2,000 messages instead of 5,000.
+  - The README, `docs/benchmarks.md` (with a new "Rare classes: defer or wait" section), the guides, the savings calculator, `AGENTS.md` and `llms.txt` now use these numbers, and `bash experiments/reproduce.sh` gives them.
 - Docs: **Jev 1.14 tested** (docs/compatibility.md, docs/benchmarks.md).
   - The wire format is unchanged, and recorded 1.14 answers are part of the test fixtures.
   - On Banking77, 1.14 gives the same answer as 1.13 on 95% of messages, so a 1.13 student can't serve 1.14. The default `teacher_change = "fallback"` handles this: after `jev-latest` moves, each task answers from Jev for at least about 3,500 requests.

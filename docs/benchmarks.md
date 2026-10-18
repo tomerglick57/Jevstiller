@@ -13,13 +13,11 @@ One replay per task (`experiments/bench.sh`): the dataset's labels are hidden, 2
 
 | Task | Stream | Held-out coverage | Agreement with Jev | Accuracy: Jev / system | Local share | Student path | Jev cost |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Banking77 (77 intents) | 11,083 | **71.9%** | **99.50%** | 78.5% / 78.5% | 40% | 111/s | $0.62 |
-| CLINC150 (150 intents + other, 12k sample) † | 10,000 | **69.0%** | **99.65%** | 90.1% / 90.1% | 41% | 348/s | $0.83 |
-| AG News (4 sections, 20k sample) | 18,000 | **80.2%** | **99.40%** | 88.7% / 88.7% | 64% | 38/s | $0.15 |
-| TweetEval sentiment (3) | 57,899 | **22.2%** | **98.70%** | 64.2% / 64.5% | 16% | 114/s | $0.80 |
-| TweetEval offensive (2) | 12,100 | **24.1%** | **98.80%** | 73.8% / 74.2% | 20% | 55/s | $0.18 |
-
-† run with `rare_classes = "defer"`, the default since 0.3.4: Jev never used one of the task's labels, and `wait`, the default before, would have kept the first student from training for the whole stream.
+| Banking77 (77 intents) | 11,083 | **61.7%** | **99.40%** | 78.5% / 78.8% | 50% | 152/s | $0.54 |
+| CLINC150 (150 intents + other, 12k sample) | 10,000 | **65.1%** | **99.65%** | 90.1% / 90.2% | 43% | 373/s | $0.81 |
+| AG News (4 sections, 20k sample) | 18,000 | **74.2%** | **99.75%** | 88.7% / 88.6% | 62% | 46/s | $0.16 |
+| TweetEval sentiment (3) | 57,899 | **19.3%** | **98.80%** | 64.2% / 64.5% | 13% | 146/s | $0.83 |
+| TweetEval offensive (2) | 12,100 | **21.3%** | **99.55%** | 73.8% / 73.8% | 16% | 34/s | $0.18 |
 
 ### Threshold rules on the same data
 
@@ -54,19 +52,38 @@ One replay per task (`experiments/bench.sh`): the dataset's labels are hidden, 2
 
 | Task | target 99% | target 98% | target 97% | target 95% | target 93% | target 90% | Accuracy (Jev / system) |
 |---|---:|---:|---:|---:|---:|---:|---|
-| Banking77 (77 intents) | 54% @ 100.0% | 72% @ 99.5% | 77% @ 99.0% | 84% @ 97.5% | 89% @ 96.0% | 93% @ 94.5% | 78.5% / 78.5%–78.8% |
-| CLINC150 (150 intents + other, 12k sample) | 50% @ 99.9% | 69% @ 99.7% | 72% @ 99.4% | 82% @ 98.4% | 87% @ 97.5% | 94% @ 95.1% | 90.1% / 89.8%–90.3% |
-| AG News (4 sections, 20k sample) | 66% @ 100.0% | 80% @ 99.4% | 87% @ 98.7% | 93% @ 97.5% | 94% @ 97.2% | 97% @ 95.9% | 88.7% / 87.8%–88.7% |
-| TweetEval sentiment (3) | 8% @ 99.8% | 18% @ 98.9% | 25% @ 98.3% | 32% @ 97.8% | 40% @ 96.2% | 48% @ 94.6% | 64.2% / 64.3%–65.0% |
-| TweetEval offensive (2) | 8% @ 99.8% | 24% @ 98.8% | 32% @ 98.0% | 44% @ 96.2% | 49% @ 95.2% | 56% @ 93.5% | 73.8% / 73.9%–74.5% |
+| Banking77 (77 intents) | – | 62% @ 99.4% | 74% @ 98.2% | 78% @ 97.4% | 82% @ 96.5% | 88% @ 94.3% | 78.5% / 78.2%–78.8% |
+| CLINC150 (150 intents + other, 12k sample) | 65% @ 99.7% | 68% @ 99.6% | 77% @ 98.9% | 86% @ 97.5% | 90% @ 96.5% | 94% @ 95.0% | 90.1% / 89.5%–90.2% |
+| AG News (4 sections, 20k sample) | 66% @ 99.9% | 75% @ 99.7% | 84% @ 98.8% | 90% @ 98.0% | 93% @ 97.1% | 96% @ 96.0% | 88.7% / 88.0%–88.7% |
+| TweetEval sentiment (3) | 5% @ 99.9% | 19% @ 98.8% | 25% @ 98.6% | 32% @ 97.7% | 39% @ 96.5% | 52% @ 94.2% | 64.2% / 64.2%–64.9% |
+| TweetEval offensive (2) | 14% @ 99.9% | 21% @ 99.6% | 27% @ 99.1% | 36% @ 98.0% | 56% @ 94.9% | 69% @ 92.0% | 73.8% / 73.8%–74.7% |
 <!-- bench:end -->
 
 What the tables say, read together:
 
 - **The bound holds; the point estimate does not.** Over 100 splits across five tasks, Jevstiller's rule exceeded the 2% budget once (TweetEval sentiment, 2.10%); the point-estimate rule, which is what most local-model recipes use, exceeded it on 6 to 12 of 20 splits per task, by up to a full point. The price is four to eight points of coverage. The soft labels buy two to three points of coverage on the many-class tasks and nothing on the easy ones.
 - **Coverage tracks Jev's own consistency, not the task's difficulty.** On the two tweet tasks Jev agrees with the dataset's labels only 64% and 74% of the time, so its answers near the class boundaries are noisy, and a student cannot reproduce noise within a 2% budget: it answers the confident quarter and forwards the rest. The system's accuracy still matches Jev's. The budget is a promise about agreement with Jev, and these tasks show what that costs when Jev itself is unsure.
-- **The target is a dial, and accuracy does not move with it.** Going from 98% to 95% roughly doubles what the tweet tasks answer locally (18% → 32%, 24% → 44%) and lifts the intent tasks from ~70% to 82–84%; at 90% the easy tasks answer nearly everything. Across the whole range the system's accuracy against the datasets' labels stays within a point of Jev's, because where the student differs from Jev it is about as often right as Jev was. That is a property of these five tasks, not a law: on a task where Jev is much better than the student at the margin, accuracy would fall with the target.
+- **The target is a dial, and accuracy does not move with it.** Going from 98% to 95% lifts what the tweet tasks answer locally by about 70% (19% → 32%, 21% → 36%) and the intent tasks from 62–68% to 78–86%; at 90% the easy tasks answer nearly everything. Across the whole range the system's accuracy against the datasets' labels stays within a point of Jev's, because where the student differs from Jev it is about as often right as Jev was. That is a property of these five tasks, not a law: on a task where Jev is much better than the student at the margin, accuracy would fall with the target.
 - **A label Jev never uses blocked the old default configuration.** CLINC150 has 151 labels and Jev never answered `reminder_update` in 12,000 messages, so `rare_classes = "wait"` waited for it for the whole stream. With `defer` the loop trains on the classes it has and forwards the rest. `defer` is the default since 0.3.4.
+
+### Rare classes: defer or wait
+
+`rare_classes` decides whether a task's first student can train while some classes have fewer than
+`min_samples_per_class` (50) examples.
+- `defer`, the default since 0.3.4, trains as soon as the other thresholds are met and sends the rare classes to Jev.
+- `wait` holds the first student back until every class has enough, which is forever if Jev never uses a label (CLINC150
+  above).
+
+The benchmark numbers published before 2026-10-18 were measured with `wait`, which is why they were higher. On
+Banking77, with the same answers and code (2026-10-17):
+
+| `rare_classes` | First student | Local share of the stream | Held-out coverage at the end | Agreement |
+|---|---|---:|---:|---:|
+| `defer` (default) | after 2,000 messages | 50% | 61.7% | 99.40% |
+| `wait` | after 5,000 messages | 41% | 71.7% | 99.45% |
+
+`defer` answers more of a stream this long because it starts sooner; `wait` ends higher. Why `defer` settles lower
+isn't understood yet. `run.py --rare-classes wait`, or `rare_classes = "wait"` in `[engine]`, gives the `wait` row.
 
 ### A caller's confidence check (`confidence_floor`, 2026-09-27)
 
@@ -158,7 +175,7 @@ A 5-class question with a one-sentence message used 400 input tokens (instructio
 
 `python experiments/run.py --dataset banking77 --teacher jev --encoder small --backend onnx --device cpu --tag live-bound`
 
-Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-09-25 with the corrected calibration (joint-loss bound, fixed-sequence testing; DESIGN §7.6). The first run, with the flawed rule, got 70.6% coverage at 99.40% agreement, so the correction cost nothing here. bge-small (ONNX, CPU), target agreement 98%, audit rate 2%. 11,083 replayed messages, with 2,000 held out and labelled by Jev for evaluation. All Jev answers are cached in `experiments/cache/banking77.jsonl`, so re-runs are free; the cache ships with the repository (gzipped, completed for all 13,083 messages with `experiments/record_answers.py` on 2026-09-26), and `bash experiments/reproduce.sh` replays it without an API key.
+Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-09-25 with the corrected calibration (joint-loss bound, fixed-sequence testing; DESIGN §7.6). The first run, with the flawed rule, got 70.6% coverage at 99.40% agreement, so the correction cost nothing here. bge-small (ONNX, CPU), target agreement 98%, audit rate 2%, `rare_classes = "wait"` (the default then). 11,083 replayed messages, with 2,000 held out and labelled by Jev for evaluation. All Jev answers are cached in `experiments/cache/banking77.jsonl`, so re-runs are free; the cache ships with the repository (gzipped, completed for all 13,083 messages with `experiments/record_answers.py` on 2026-09-26), and `bash experiments/reproduce.sh` replays it without an API key.
 
 | Measure | Result |
 |---|---|
@@ -174,7 +191,7 @@ Jev answers recorded 2026-09-24 (`jev-latest` → `jev-1.13.0`). Replayed 2026-0
 | Student path throughput (held-out, CPU) | 129 rows/s, encoder-bound at 7 ms/text on this machine (Jev's published limit: 20 rows/s; measured 190/s, see below) |
 | Wall-clock for the whole replay | 11 min |
 
-**Reproduction (2026-09-26).** `bash experiments/reproduce.sh` replays the shipped answers with `--teacher cached`: held-out coverage **71.9%**, system agreement **99.50%**, accuracy against the dataset's labels 78.5% (Jev: 78.5%), 8,666 cache hits and no misses. The replay is deterministic since the train/calibration split is seeded from the config (before, from the store's file path). Four earlier replays of the same stream with different splits gave 66.8–70.7% coverage at 99.45–99.65% agreement: the split moves coverage by a few points, agreement stays inside the contract every time.
+**Reproduction (2026-10-18).** `bash experiments/reproduce.sh` replays the shipped answers with `--teacher cached`: held-out coverage **61.7%**, system agreement **99.40%**, accuracy against the dataset's labels 78.8% (Jev: 78.5%), 7,578 cache hits and no misses. A fresh environment built from `uv.lock` gives the same. The replay is deterministic since the train/calibration split is seeded from the config (before, from the store's file path). On 2026-09-26 it gave 71.9% at 99.50%, with `rare_classes = "wait"`, the default until 0.3.4 (see "Rare classes: defer or wait"). Four earlier replays of the same stream with different splits, also with `wait`, gave 66.8–70.7% coverage at 99.45–99.65% agreement: the split moves coverage by a few points, and agreement stays inside the contract every time.
 
 With a live teacher, coverage came out higher than with the "oracle" labels and the same encoder (65.7%). A plausible explanation, not tested: a model's labels are more consistent with the surface of the text than human labels, so they're easier to reproduce.
 
@@ -257,8 +274,8 @@ coverage moves by several points between retrains and splits (see "Banking77 aga
 ([answers-2026-10-17](https://github.com/tomerglick57/Jevstiller/releases/tag/answers-2026-10-17)): unpacked into
 `experiments/cache/`, the same command with `--teacher cached` reproduces the 1.14 row exactly, without a key.
 
-Both runs use `rare_classes = "defer"`, the default since 0.3.4. The 71.9% in the tables above was measured before
-that change, with `"wait"`. Today's code with `--rare-classes wait` gives 71.7% on the same replay of 1.13's answers.
+Both runs use the default settings, as do the tables above (`rare_classes = "defer"`; see "Rare classes: defer or
+wait").
 
 ## Replays with a perfect ("oracle") teacher
 
