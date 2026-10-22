@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.3 — 2026-10-22
+
+Security: the proxy no longer trusts the root of eMudhra's compromised intermediate CA keys when it connects to Jev (certifi 2026.10.19). The image is rebuilt on Debian's fixes and no longer contains pip. Also a metric for image traffic, and new docs: comparison pages, a savings calculator and re-measured benchmarks.
 
 - **Security: certifi 2026.10.19 or later.** The proxy checks Jev's TLS certificate against certifi's CA bundle. Before 2026.10.19, that bundle trusts "emSign ECC Root CA - G3".
   - The private keys of eight eMudhra intermediate CAs under that root turned out to be public (2026-10-17; GHSA-6q48-6c7w-9gw2).
@@ -10,6 +12,7 @@
 - **Image:** rebuilt on Debian's fixes for ca-certificates (DSA-6572-1, the same eMudhra roots) and xz-utils (DSA-6549-1).
   - **It no longer contains pip.** The server never ran it, and pip 25.0.1 brings its own CA bundle and has advisories of its own. To add packages, build your own image from `python:3.12-slim` with `pip install jevstiller`.
   - `deploy/smoke_test.py` checks that neither CA bundle in the image (certifi's, the system's) trusts the compromised roots, and that there is no pip.
+- Release pipeline: pypi-publish 1.14.3 and BuildKit 0.34.1, which no longer trust the eMudhra keys, and the newest Node 22 (22.23.4, 2026-10-21 security release) for the website.
 - `truststore>=0.10.5`, which the Python API's `JevTeacher` uses through typesafe-sdk. Before 0.10.5, concurrent TLS handshakes could turn certificate checks off on macOS and Windows (GHSA-pmqj-r2x2-vx88). Linux and the image weren't affected.
 - The lock and the image move filelock to 4.2.4. It had 18 advisories on 2026-10-17, all needing another local user who can write to the lock directory. Jevstiller doesn't use filelock itself; huggingface_hub does.
 - Docs: the GPU build now suggests a current CUDA image and an `apt-get upgrade`. The image it suggested was last updated in April 2024.
