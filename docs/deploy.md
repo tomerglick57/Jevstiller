@@ -13,19 +13,19 @@ export TYPESAFE_BASE_URL=http://jevstiller:8080
 ### Docker
 
 ```bash
-docker run -d --name jevstiller -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller:0.5.2
+docker run -d --name jevstiller -p 8080:8080 -v jevstiller-data:/data ghcr.io/tomerglick57/jevstiller:0.5.3
 curl -s localhost:8080/readyz
 ```
 
 About the image:
 - Published for every release for linux/amd64 and linux/arm64: `ghcr.io/tomerglick57/jevstiller:<version>` (also `:<major>.<minor>` and `:latest`), with build provenance and an SBOM attached.
 - CPU, ONNX Runtime, bge-small baked in. It runs as uid 10001, with `/data` as the volume, and needs no network except to Jev: `HF_HUB_OFFLINE` is set when the encoder is baked in.
-- It works with a read-only root filesystem when `/tmp` is writable, and with all capabilities dropped. `deploy/smoke_test.py` checks this, and more, against any image: `python deploy/smoke_test.py ghcr.io/tomerglick57/jevstiller:0.5.2`. CI runs it on every image build.
+- It works with a read-only root filesystem when `/tmp` is writable, and with all capabilities dropped. `deploy/smoke_test.py` checks this, and more, against any image: `python deploy/smoke_test.py ghcr.io/tomerglick57/jevstiller:0.5.3`. CI runs it on every image build.
 
 To build it yourself: `docker build -t jevstiller .`. Every package in the build is hash-checked: the dependencies from `uv.lock`, and the build tools (the build backend, `build`, `uv`) from `build-requirements.txt`. The project is built without build isolation, so nothing unpinned is fetched. Build arguments: `PRELOAD_ENCODER` (default `small`; `base`, or empty, which downloads on first start), `EXTRAS` (default none; `gpu` adds PyTorch), `PYTHON=3.12`.
 
 **GPU:**
-1. Build on a CUDA base image with `--build-arg EXTRAS=gpu` (adds PyTorch), e.g. start from `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` and install Python 3.12.
+1. Build on a CUDA base image with `--build-arg EXTRAS=gpu` (adds PyTorch), e.g. start from `nvidia/cuda:13.4.3-cudnn-runtime-ubuntu24.04` and install Python 3.12 (Ubuntu 24.04's `python3`). CUDA images aren't rebuilt for every Ubuntu security update, so run `apt-get update && apt-get -y upgrade` in the build, and rebuild regularly.
 2. Run with `--gpus all`. With CUDA available, the encoder runs on PyTorch automatically.
 
 The encoder is the only GPU user. On CPU, bge-small encodes about 1.6–7 ms per text. Measured student-path throughput on CPU is about 130 messages/s per process, bounded by the encoder; a GPU raises it to ~2,000/s.

@@ -58,6 +58,11 @@ and its own Jev key.
   Nothing is learned from them.
 - **Docs:** TypeSafe's terms, guides on cutting the Jev bill and on rate limits, and `AGENTS.md` for AI assistants.
 
+**0.5.3:**
+- **Security:** the proxy no longer trusts eMudhra's compromised CA keys when it connects to Jev (certifi
+  2026.10.19). The image is rebuilt on Debian's fixes and drops pip.
+- **Docs:** comparison pages, a savings calculator, and benchmark numbers re-measured with the default settings.
+
 ## Next
 
 - **A tolerance for yes/no answers.** Since 0.5 a `noul` answer is covered for its side of your cut-off. For

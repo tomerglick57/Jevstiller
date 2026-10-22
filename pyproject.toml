@@ -1,6 +1,6 @@
 [project]
 name = "jevstiller"
-version = "0.5.2"
+version = "0.5.3"
 description = "Distill a repeated Jev classification task into a local model, on the fly — same answers, your hardware."
 dynamic = ["readme"]
 requires-python = ">=3.10"
@@ -24,7 +24,11 @@ classifiers = [
 # `pip install jevstiller` is everything most people need: the proxy, the default encoder (ONNX Runtime, CPU) and
 # the Jev adapter. ONNX Runtime is required only where it ships wheels (x86-64 and ARM64); elsewhere the proxy
 # still installs and says what to do (the hash encoder, or PyTorch). GPUs: `jevstiller[gpu]`, which adds PyTorch.
-# Floors: no known advisories at these versions (pip-audit, 2026-09-25); CI tests the lowest ones.
+# Floors: no known advisories at these versions (OSV, 2026-10-22); CI tests the lowest ones.
+# certifi and truststore aren't imported here; their floors are for TLS to Jev. The proxy (httpx) verifies Jev with
+# certifi's bundle, which before 2026.10.19 trusts eMudhra's compromised intermediate CA keys (2026-10-17). The
+# Python API's JevTeacher (typesafe-sdk) uses truststore, which before 0.10.5 could stop checking certificates after
+# concurrent handshakes on macOS and Windows (GHSA-pmqj-r2x2-vx88).
 dependencies = [
     "numpy>=1.24",
     "threadpoolctl>=3.1",
@@ -38,6 +42,8 @@ dependencies = [
     "tokenizers>=0.15",
     "huggingface_hub>=0.20",
     "typesafe-sdk>=0.7.1",
+    "certifi>=2026.10.19",
+    "truststore>=0.10.5; sys_platform != 'emscripten'",
 ]
 
 [project.optional-dependencies]
