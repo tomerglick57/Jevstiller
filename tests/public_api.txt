@@ -94,7 +94,7 @@ module jevstiller
       field to_teacher: list[int]
       field t0: float
       property local
-  class jevstiller.Routing(key: 'str', task: 'Task', engine: 'Jevstiller | None', routed: 'Routed | None', reason: 'str | None', tenant: 'str | None' = None, model: 'str | None' = None, uncounted: 'bool' = False, caller: 'str | None' = None) -> None
+  class jevstiller.Routing(key: 'str', task: 'Task', engine: 'Jevstiller | None', routed: 'Routed | None', reason: 'str | None', tenant: 'str | None' = None, model: 'str | None' = None, uncounted: 'bool' = False, caller: 'str | None' = None, modality: 'str' = 'text') -> None
       field key: str
       field task: Task
       field engine: Jevstiller | None
@@ -104,6 +104,7 @@ module jevstiller
       field model: str | None
       field uncounted: bool
       field caller: str | None
+      field modality: str
       property local
   jevstiller.State = str | dict | list
   class jevstiller.Status(task: 'str', task_version: 'str', mode: 'str', audit_rate: 'float', production: 'str | None', shadow: 'str | None', requests: 'int', served_by_student: 'int', served_by_teacher: 'int', channels: 'dict', student_share: 'float', teacher_share: 'float', audit_n: 'int', audit_agreement: 'float | None', audit_agreement_lb: 'float | None', audit_agreement_ub: 'float | None', target_agreement: 'float', teacher_calls: 'int', teacher_calls_avoided: 'int', teacher_cost_usd: 'float', teacher_cost_avoided_usd: 'float', labelled_train: 'int', labelled_calib: 'int', policy: 'dict | None', events: 'list' = <factory>, teacher_errors: 'int' = 0, teacher_model: 'str | None' = None, readiness: 'dict | None' = None, confidence_floor: 'float | None' = None, kind: 'str' = 'choice', cutoffs: 'tuple | None' = None) -> None
@@ -157,7 +158,7 @@ module jevstiller
       property labels
       classmethod noul(cls, name: 'str', instructions: 'Any', criteria: 'Mapping[str, Any] | None' = None, *, cutoffs: 'Sequence[float] | float' = 0.5, target_agreement: 'float' = 0.98) -> 'Task'
       property version
-  class jevstiller.TaskInfo(key: 'str', tenant: 'str', instructions: 'Any', classes: 'dict', target_agreement: 'float', created: 'float', last_seen: 'float', model: 'str | None' = None, mode: 'str | None' = None, confidence_floor: 'float | None' = None, kind: 'str' = 'choice', cutoffs: 'list | None' = None) -> None
+  class jevstiller.TaskInfo(key: 'str', tenant: 'str', instructions: 'Any', classes: 'dict', target_agreement: 'float', created: 'float', last_seen: 'float', model: 'str | None' = None, mode: 'str | None' = None, confidence_floor: 'float | None' = None, kind: 'str' = 'choice', cutoffs: 'list | None' = None, modality: 'str' = 'text') -> None
       field key: str
       field tenant: str
       field instructions: Any
@@ -170,8 +171,9 @@ module jevstiller
       field confidence_floor: float | None
       field kind: str
       field cutoffs: list | None
+      field modality: str
       def task(self) -> 'Task'
-  class jevstiller.TaskManager(data_dir: 'str | Path', teacher: 'Teacher', encoder: 'Encoder', config: 'Config | None' = None, *, target_agreement: 'float' = 0.98, max_loaded: 'int' = 64, max_memory_mb: 'float | None' = None, admission: 'Admission | None' = None, max_tasks_per_tenant: 'int | None' = None, idle_ttl_s: 'float | None' = None, train_executor: 'Executor | None' = None, janitor_interval_s: 'float' = 5.0, blas_threads: 'int | None' = 1, text_retention_s: 'float | None' = None, max_tasks: 'int | None' = 10000, hash_key: 'bytes | None' = None, task_overrides: 'Mapping[str, Mapping[str, Any]] | None' = None, max_new_tasks_per_caller: 'int | None' = 100, confidence_floor: 'float | None' = None, noul_cutoffs: 'Sequence[float] | float | None' = 0.5)
+  class jevstiller.TaskManager(data_dir: 'str | Path', teacher: 'Teacher', encoder: 'Encoder', config: 'Config | None' = None, *, target_agreement: 'float' = 0.98, max_loaded: 'int' = 64, max_memory_mb: 'float | None' = None, admission: 'Admission | None' = None, max_tasks_per_tenant: 'int | None' = None, idle_ttl_s: 'float | None' = None, train_executor: 'Executor | None' = None, janitor_interval_s: 'float' = 5.0, blas_threads: 'int | None' = 1, text_retention_s: 'float | None' = None, max_tasks: 'int | None' = 10000, hash_key: 'bytes | None' = None, task_overrides: 'Mapping[str, Mapping[str, Any]] | None' = None, max_new_tasks_per_caller: 'int | None' = 100, confidence_floor: 'float | None' = None, noul_cutoffs: 'Sequence[float] | float | None' = 0.5, image_encoder: 'Encoder | None' = None)
       def apply_retention(self) -> 'int'
       def classify(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str] | None', states: 'Sequence[State]', *, teacher: 'Teacher | None' = None, errors: 'str' = 'raise', model: 'str | None' = None, kind: 'str' = 'choice') -> 'list[Result]'
       def close(self) -> 'None'
@@ -183,8 +185,8 @@ module jevstiller
       def loaded(self) -> 'list[str]'
       def memory_mb(self) -> 'float'
       def observe(self, routing: 'Routing') -> 'bool'
-      def resolve(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str] | None', model: 'str | None' = None, kind: 'str' = 'choice') -> 'tuple[str, Task]'
-      def route(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str] | None', states: 'Sequence[State]', model: 'str | None' = None, stexts: 'Sequence[str] | None' = None, X: 'Any' = None, admit: 'bool' = True, caller: 'str | None' = None, kind: 'str' = 'choice') -> 'Routing'
+      def resolve(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str] | None', model: 'str | None' = None, kind: 'str' = 'choice', modality: 'str' = 'text') -> 'tuple[str, Task]'
+      def route(self, tenant: 'str', instructions: 'Any', classes: 'Mapping[str, Any] | Sequence[str] | None', states: 'Sequence[State]', model: 'str | None' = None, stexts: 'Sequence[str] | None' = None, X: 'Any' = None, admit: 'bool' = True, caller: 'str | None' = None, kind: 'str' = 'choice', modality: 'str' = 'text') -> 'Routing'
       def set_confidence_floor(self, key: 'str', floor: 'float | None') -> 'None'
       def set_cutoffs(self, key: 'str', cutoffs: 'Sequence[float] | float') -> 'None'
       def set_mode(self, key: 'str', mode: 'str | None') -> 'None'
@@ -251,8 +253,11 @@ module jevstiller.encoders
   jevstiller.encoders.BatchingEncoder -> jevstiller.BatchingEncoder
   jevstiller.encoders.Encoder -> jevstiller.Encoder
   jevstiller.encoders.HashEncoder -> jevstiller.HashEncoder
+  jevstiller.encoders.IMAGE_MODELS: dict
   jevstiller.encoders.TIERS: dict
+  def jevstiller.encoders.image_choice(spec: 'str', backend: 'str' = 'auto', cuda: 'bool' = False, torch: 'bool' = False)
   jevstiller.encoders.load_encoder -> jevstiller.load_encoder
+  def jevstiller.encoders.load_image_encoder(spec: 'str' = 'auto', backend: 'str' = 'auto', device: 'str' = 'auto', **kw)
 module jevstiller.teachers
   jevstiller.teachers.CachedTeacher -> jevstiller.CachedTeacher
   jevstiller.teachers.ReplayTeacher -> jevstiller.ReplayTeacher

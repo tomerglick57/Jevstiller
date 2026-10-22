@@ -49,6 +49,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from . import _images
 from ._admin import Admin
 from ._manager import Routing, TaskManager
 from ._metrics import Registry as MetricsRegistry
@@ -402,18 +403,26 @@ class Proxy:
         key = _bearer(request)
         kh = self.keys.hash(key)
         log_rec: dict[str, Any] = {"path": SYSTEM_ONE}
-        if (len(body) > self.settings.max_body_bytes
-                or request.headers.get("content-type", "").lower().startswith("multipart/")):
-            # images (Jev 1.14): a multipart body, or one only a request with images may send. Never parsed
-            return await self._plain_forward(request, body, kh, "images", t0, log_rec)
-        try:
-            req = json.loads(body)
-        except Exception:                               # includes RecursionError on absurd nesting
-            req = None
+        ctype = request.headers.get("content-type", "")
+        image: _images.ImageRequest | None = None
+        req: Any = None
+        multipart = ctype.lower().startswith("multipart/")
+        if not multipart and len(body) <= self.settings.max_body_bytes:
+            try:
+                req = json.loads(body)
+            except Exception:                           # includes RecursionError on absurd nesting
+                req = None
+        if multipart or len(body) > self.settings.max_body_bytes or (isinstance(req, dict) and "assets" in req):
+            # images (Jev 1.14): a multipart body, `assets`, or a body only a request with images may send
+            if self.manager.image_encoder is None:
+                return await self._plain_forward(request, body, kh, "images", t0, log_rec)
+            read = await anyio.to_thread.run_sync(_images.read, ctype, body, _images_requested(request.headers.raw))
+            if isinstance(read, str):                   # not one an image task can take: Jev decides
+                return await self._plain_forward(request, body, kh, read, t0, log_rec)
+            image, req = read, read.req
         if not (isinstance(req, dict) and set(req) <= KNOWN_FIELDS and isinstance(req.get("questions"), dict)
                 and req["questions"] and isinstance(req.get("model"), str) and "state" in req and key):
-            reason = "images" if isinstance(req, dict) and "assets" in req else "not_understood"
-            return await self._plain_forward(request, body, kh, reason, t0, log_rec)
+            return await self._plain_forward(request, body, kh, "not_understood", t0, log_rec)
 
         # one routing per distinct choice or noul question; duplicates under other names share it
         groups: dict[str, list[str]] = {}
@@ -457,8 +466,8 @@ class Proxy:
             answer = _systemone_answer(resp)
             if answer is not None:
                 self.keys.accept(kh)
-            if answer is not None and not self._overloaded():       # record it, unless the encoder is saturated
-                routings, _ = await self._route(groups, specs, tenant, req,
+            if answer is not None and not self._overloaded(image):  # record it, unless the encoder is saturated
+                routings, _ = await self._route(groups, specs, tenant, req, image=image,
                                                 answered=_answered(answer, groups, specs), kh=kh)
                 if routings is not None:                # None: routing failed and released everything
                     try:
@@ -469,9 +478,9 @@ class Proxy:
             return self._upstream_reply(resp, {n: "key_unverified" for g in groups.values() for n in g}, t0,
                                         log_rec)
 
-        if self._overloaded():                          # the local path would be slower than Jev: forward
+        if self._overloaded(image):                     # the local path would be slower than Jev: forward
             return await self._plain_forward(request, body, kh, "overloaded", t0, log_rec)
-        routings, unsupported = await self._route(groups, specs, tenant, req, kh=kh)
+        routings, unsupported = await self._route(groups, specs, tenant, req, kh=kh, image=image)
         if routings is None:                            # routing itself failed: fail open
             return await self._plain_forward(request, body, kh, "proxy_error", t0, log_rec)
         log_rec["tasks"] = [r.key for r in routings.values()][:8]
@@ -501,7 +510,8 @@ class Proxy:
         finally:
             admitted = await self._finish(routings, groups, answer, resp, (time.perf_counter() - t_up) * 1000)
         if admitted and answer is not None:             # this answer made them tasks: record it as their first row
-            more, _ = await self._route({s: groups[s] for s in admitted}, specs, tenant, req, answered=set(admitted),
+            more, _ = await self._route({s: groups[s] for s in admitted}, specs, tenant, req, image=image,
+                                        answered=set(admitted),
                                         kh=kh)
             if more:
                 try:
@@ -517,12 +527,13 @@ class Proxy:
             reasons[n] = "unsupported"
         return self._upstream_reply(resp, reasons, t0, log_rec)
 
-    def _overloaded(self) -> bool:
-        """The shared encoder is so backed up that a local answer would take longer than `max_encoder_wait_ms`.
-        Such requests go to Jev as they are: not routed, encoded or recorded. Without this, a burst beyond the
-        encoder's capacity queued without bound, and callers hit their timeouts (the P6.4 load test)."""
+    def _overloaded(self, image: _images.ImageRequest | None = None) -> bool:
+        """The shared encoder (the image encoder, for a request with an image) is so backed up that a local answer
+        would take longer than `max_encoder_wait_ms`. Such requests go to Jev as they are: not routed, encoded or
+        recorded. Without this, a burst beyond the encoder's capacity queued without bound, and callers hit their
+        timeouts (the P6.4 load test)."""
         limit = self.settings.max_encoder_wait_ms
-        enc = self.manager.encoder
+        enc = self.manager.image_encoder if image is not None else self.manager.encoder
         wait = getattr(enc, "expected_wait_s", None)
         per = getattr(enc, "time_per_text_s", None)
         pending = getattr(enc, "pending", None)
@@ -577,8 +588,8 @@ class Proxy:
         access_log.info(json.dumps(rec, separators=(",", ":")))
 
     async def _route(self, groups: Mapping[str, list[str]], specs: Mapping[str, dict], tenant: str,
-                     req: dict, answered: set[str] | None = None,
-                     kh: str | None = None) -> tuple[dict[str, Routing] | None, list[str]]:
+                     req: dict, answered: set[str] | None = None, kh: str | None = None,
+                     image: _images.ImageRequest | None = None) -> tuple[dict[str, Routing] | None, list[str]]:
         """Route each distinct question once. Returns (routings by spec, specs that can't be tasks), or
         (None, []) if routing failed unexpectedly (everything routed so far is released).
 
@@ -590,13 +601,19 @@ class Proxy:
         self._routing += 1
         try:
             # the state is the same for every question: canonical text and embedding once per request, and the
-            # embedding only if some question is a task (requests that are only forwarded never pay for it)
-            stexts = [state_text(req["state"])]
+            # embedding only if some question is a task (requests that are only forwarded never pay for it). With
+            # an image, the text stored is the state with the image's content hash, and the embedding the image's
+            if image is not None:
+                stexts, items, modality = [image.state_text], [image.image], "image"
+                encoder = self.manager.image_encoder
+            else:
+                stexts = [state_text(req["state"])]
+                encoder, items, modality = self.manager.encoder, stexts, "text"
             memo: list = []
 
             def X():
                 if not memo:
-                    memo.append(self.manager.encoder.encode(stexts))
+                    memo.append(encoder.encode(items))
                 return memo[0]
             for spec in groups:
                 q = specs[spec]
@@ -605,7 +622,7 @@ class Proxy:
                     routings[spec] = await anyio.to_thread.run_sync(
                         lambda q=q, admit=admit: self.manager.route(
                             tenant, q.get("instructions"), q.get("criteria"), [req["state"]], req["model"],
-                            stexts=stexts, X=X, admit=admit, caller=kh, kind=_kind(q)))
+                            stexts=stexts, X=X, admit=admit, caller=kh, kind=_kind(q), modality=modality))
                 except ValueError:
                     unsupported.append(spec)            # not a valid task (e.g. one class): Jev decides
         except Exception:

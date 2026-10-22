@@ -41,8 +41,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gpu = ["torch>=2.1", "transformers>=4.36"]      # PyTorch encoders; picked automatically when CUDA is available
-dev = ["pytest>=7", "ruff>=0.4"]
+gpu = ["torch>=2.1", "transformers>=4.37"]      # PyTorch encoders; picked automatically when CUDA is available
+images = ["pillow>=10"]                        # questions about images (Jev 1.14, experimental): [encoder] images
+dev = ["pytest>=7", "ruff>=0.4", "pillow>=10"]
 # Kept so older install commands still work; their packages are now in the plain install (or in `gpu`).
 server = []
 onnx = []

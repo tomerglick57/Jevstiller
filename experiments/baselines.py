@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "experiments"))
 from datasets import LOADERS  # noqa: E402
+from image_data import IMAGE_LOADERS, PrecomputedEncoder  # noqa: E402
 
 from jevstiller import Config, Task, load_encoder  # noqa: E402
 from jevstiller._calibrate import clopper_pearson_upper, fit_policy, threshold_grid  # noqa: E402
@@ -56,7 +57,10 @@ def point_threshold(conf: np.ndarray, agree: np.ndarray, budget: float) -> float
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset", default="banking77", choices=[d for d in LOADERS if d != "synthetic"])
+    ap.add_argument("--dataset", default="banking77",
+                    choices=[d for d in LOADERS if d != "synthetic"] + list(IMAGE_LOADERS),
+                    help="img_*: an image dataset; --encoder then names its embeddings, --jev-model its answers")
+    ap.add_argument("--jev-model", default="jev-1.14.0", help="image datasets: whose recorded answers")
     ap.add_argument("--encoder", default="small")
     ap.add_argument("--backend", default="onnx")
     ap.add_argument("--device", default="cpu")
@@ -67,13 +71,19 @@ def main() -> None:
     ap.add_argument("--calib-fraction", type=float, default=0.2)
     a = ap.parse_args()
     cfg = Config()
-    ds = LOADERS[a.dataset]()
+    images = a.dataset in IMAGE_LOADERS
+    ds = (IMAGE_LOADERS if images else LOADERS)[a.dataset]()
     task = Task(name=a.dataset, instructions=ds["instructions"], classes=ds["classes"], target_agreement=a.target)
     labels = list(task.labels)
     idx = {c: i for i, c in enumerate(labels)}
 
     cache = {}
-    for line in open(ROOT / "experiments" / "cache" / f"{a.dataset}.jsonl"):
+    if images:
+        from image_jev import cache_path
+        cache_file = cache_path(a.dataset.removeprefix("img_"), a.jev_model)
+    else:
+        cache_file = ROOT / "experiments" / "cache" / f"{a.dataset}.jsonl"
+    for line in open(cache_file):
         d = json.loads(line)
         cache[d["key"]] = d
     rows = [(t, c) for t, c in ds["rows"] if f"{task.version}\t{state_text(t)}" in cache]
@@ -94,7 +104,8 @@ def main() -> None:
     jev = P.argmax(axis=1)
     print(f"{len(rows):,} rows, {len(labels)} classes; Jev accuracy vs labels {(jev == truth).mean():.1%}")
 
-    enc = load_encoder(a.encoder, backend=a.backend, device=a.device)
+    enc = (PrecomputedEncoder(a.dataset.removeprefix("img_"), a.encoder) if images
+           else load_encoder(a.encoder, backend=a.backend, device=a.device))
     t0 = time.perf_counter()
     X = enc.encode(texts)
     print(f"encoded in {time.perf_counter() - t0:.0f} s ({enc.id})", flush=True)
@@ -150,7 +161,8 @@ def main() -> None:
         viol = sum(x["violated"] for x in runs)
         sacc = np.mean([x["system_accuracy"] for x in runs])
         print(f"{r:<11} {cov:9.1%} {dis:13.2%} {viol:>6}/{len(runs):<4} {sacc:11.1%}")
-    dst = ROOT / "experiments" / "results" / f"baselines-{a.dataset}.json"
+    dst = ROOT / "experiments" / "results" / (f"baselines-{a.dataset}-{a.encoder}.json" if images
+                                               else f"baselines-{a.dataset}.json")
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(out, indent=1))
     print(f"wrote {dst}")

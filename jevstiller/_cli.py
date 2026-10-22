@@ -67,7 +67,7 @@ def _serve(a: argparse.Namespace) -> None:
     from ._server import KeyRegistry, ProxySettings, create_app, load_salt
     from ._settings import redact_url
     from ._task import Config
-    from .encoders import BatchingEncoder, load_encoder
+    from .encoders import BatchingEncoder, load_encoder, load_image_encoder
 
     s = _settings(a)
     os.umask(0o077)                                     # task data is traffic: owner-only files and dirs
@@ -97,6 +97,15 @@ def _serve(a: argparse.Namespace) -> None:
     except ImportError as e:                            # a model encoder without its extra: say what to install
         raise SystemExit(f"encoder {s.encoder!r}: {e}") from None
     encoder.encode(["warm up"])
+    image_encoder = None
+    if s.images:
+        try:
+            # its own queue and worker thread: an image costs ~10x a text on CPU, and must not slow text tasks
+            image_encoder = BatchingEncoder(load_image_encoder(s.images, backend=s.backend, device=s.device),
+                                            max_batch=16)
+        except ImportError as e:
+            raise SystemExit(f"images {s.images!r}: {e}") from None
+        log.info("questions about images: learned with %s (experimental, as Jev's images are)", image_encoder.id)
     scheduler = TrainScheduler(workers=s.train_workers)
 
     class _NoTeacher:                                   # the proxy makes every teacher call itself
@@ -114,7 +123,7 @@ def _serve(a: argparse.Namespace) -> None:
         idle_ttl_s=s.idle_ttl_days * 86400 if s.idle_ttl_days else None,
         text_retention_s=s.text_retention_days * 86400 if s.text_retention_days else None,
         train_executor=scheduler, blas_threads=s.blas_threads, hash_key=salt, task_overrides=s.tasks,
-        confidence_floor=s.confidence_floor, noul_cutoffs=s.noul_cutoffs)
+        confidence_floor=s.confidence_floor, noul_cutoffs=s.noul_cutoffs, image_encoder=image_encoder)
     settings = ProxySettings(upstream=s.upstream, upstream_timeout_s=s.upstream_timeout_s,
                              max_upstream_inflight=s.max_upstream_inflight, tenancy=s.tenancy,
                              key_ttl_s=s.key_ttl_s, price_per_mtok=s.price_per_mtok, tenant_map=s.tenants,
@@ -302,6 +311,9 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--trust-forwarded-for", action="append",
                        help="proxy address whose X-Forwarded-For is trusted (repeatable)")
         p.add_argument("--max-body-mb", type=float)
+        p.add_argument("--images",
+                       help="learn questions about images (experimental): auto, siglip, siglip-so400m, … "
+                            "or onnx:<repo>")
         p.add_argument("--no-store-text", dest="store_text", action="store_const", const=False,
                        help="keep only hashes and embeddings of requests, never their text")
         p.add_argument("--text-retention-days", type=float, help="blank stored request text older than this")

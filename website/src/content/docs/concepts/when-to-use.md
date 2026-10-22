@@ -33,8 +33,8 @@ The ongoing Jev cost is the audit slice plus whatever the student passes on.
 ## Not a fit
 
 - **Changing class lists.** Adding or removing a class means retraining from scratch today.
-- **Images or audio.** Only text and JSON states are learned. Requests with images (Jev 1.14) are forwarded to Jev
-  unchanged.
+- **Audio, or images by default.** Text and JSON states are learned. Requests with images (Jev 1.14) are forwarded to
+  Jev unchanged unless image questions are turned on (`[encoder] images`, experimental: one image per request).
 - **Low volume.** If you'll never collect a few thousand examples, the student never gets trained.
 - **One-off calls.** It only pays off on repetition. Questions built fresh for every request (dynamic criteria) never
   become tasks: a question must be asked `admit_after` times (50 by default) first.

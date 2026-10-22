@@ -142,6 +142,8 @@ class ServeSettings:
     encoder: str = "small"                      # small | base | large | hash | onnx:<repo> | torch:<model>
     backend: str = "auto"
     device: str = "auto"
+    images: str | None = None                   # learn questions about images (Jev 1.14, experimental) with this
+    # image encoder: auto (so400m on a GPU, siglip on CPU) | a name in IMAGE_MODELS | onnx:<repo>. None: forwarded
     # [engine], [tasks]
     engine: dict[str, Any] = field(default_factory=dict)
     tasks: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -187,6 +189,12 @@ class ServeSettings:
             # httpx turns them into Basic auth that replaces every caller's bearer, so any made-up key "worked"
             # against an upstream that accepted them (security audit run 4)
             raise ValueError("upstream must not contain credentials (user:password@): callers bring their own keys")
+        if self.images is not None:
+            from .encoders import IMAGE_MODELS
+            if (self.images != "auto" and self.images not in IMAGE_MODELS
+                    and not (self.images.startswith("onnx:") and len(self.images) > 5)):
+                raise ValueError(f"images must be auto, one of {', '.join(IMAGE_MODELS)} or onnx:<repo>, "
+                                 f"got {self.images!r}")
         if self.tenancy not in ("shared", "per_key"):
             raise ValueError(f"tenancy must be 'shared' or 'per_key', got {self.tenancy!r}")
         if self.log_format not in ("text", "json"):
@@ -293,7 +301,7 @@ SECTIONS = {
                 "max_tasks_per_tenant", "max_new_tasks_per_key", "idle_ttl_days", "text_retention_days", "store_text",
                 "train_workers",
                 "blas_threads"),
-    "encoder": ("spec", "backend", "device"),
+    "encoder": ("spec", "backend", "device", "images"),
 }
 _FIELDS = {f.name: f for f in fields(ServeSettings)}
 

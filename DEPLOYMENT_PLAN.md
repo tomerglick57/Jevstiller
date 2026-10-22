@@ -256,7 +256,7 @@ first (experiments/README.md, "Images"):
 - The cost is on the local side: 60–75 ms per image on CPU with CLIP B/32, 150–200 ms with SigLIP B/16 (PyTorch,
   preprocessing included), against ~10 ms for text. Jev took ~270–320 ms per image request.
 
-**Decisions needed before building:**
+**Decisions** (2026-10-18: build now, as an opt-in marked experimental; the default encoder is SigLIP B/16; the v1 scope as proposed; TypeSafe's terms are still open):
 - **When.** TypeSafe calls images not for production and may change the request format, answers and limits between
   releases. Build now as an opt-in, or wait until images leave the danger zone? P8.1–P8.3 follow the format closely.
 - **Default encoder.** CLIP B/32 is cheaper on CPU. SigLIP B/16 covered 16 points more on documents and 4 more on
@@ -273,16 +273,19 @@ first (experiments/README.md, "Images"):
   - more than one seed;
   - a state with an image and text fields;
   - the crack question as a `noul`.
-- [ ] **P8.1** Read image requests (M). Multipart (the `request` part and file parts) and base64 `assets` in JSON,
+  *Partly done (2026-10-18):* ONNX Runtime on CPU, 4 threads, preprocessing included: SigLIP ~125 ms per image, OpenAI CLIP B/32 40–55 ms. The int8 versions save 25–35% but drift (cosine 0.97–0.99 to fp32), so they aren't used. *Done (2026-10-18/19):* CLIP against Jev's answers and ten splits per encoder, in the encoder comparison (experiments/README.md). Still open: image and text states, the crack question as a `noul`.
+- [x] **P8.1** Read image requests (M). Multipart (the `request` part and file parts) and base64 `assets` in JSON,
   within `max_image_body_bytes`.
   - Limits on part count and sizes, and image bytes never written to disk.
   - Anything the proxy can't parse is forwarded, as today.
-- [ ] **P8.2** Question identity (S).
+  *Result:* `jevstiller/_images.py` reads the body already in memory (at most 8 parts) and base64 `assets`. Anything it doesn't accept is forwarded.
+- [x] **P8.2** Question identity (S).
   - SDKs make a random reference per image (`<image:{uuid}>`). Replace references with a hash of the image's
     content in the instructions, criteria and state before fingerprinting, so one question is one task. Text tasks
     keep their fingerprints.
   - The modality is part of the task key: the same instructions over images and over text are two tasks.
-- [ ] **P8.3** Answer locally only what Jev would accept (M). Check each image against Jev's documented rules first:
+  *Result:* the image's reference becomes `<image:sha256:…>` before anything is keyed or stored. Image tasks have `modality = "image"` in their key; text keys are unchanged.
+- [x] **P8.3** Answer locally only what Jev would accept (M). Check each image against Jev's documented rules first:
   - the images header;
   - every asset referenced;
   - PNG or JPEG, not animated;
@@ -290,31 +293,45 @@ first (experiments/README.md, "Images"):
   - 16 MiB per file;
   - the reference lengths.
   Any doubt: forward. One test per rule. Follow docs.typesafe.ai/go/images when it changes.
-- [ ] **P8.4** An image encoder (L).
+  *Result:* all of the above, as `_images.read` and `encoders._image.check_image`, with a test per rule (tests/test_image_tasks.py).
+- [x] **P8.4** An image encoder (L).
   - The vision tower in ONNX (CLIP B/32 or SigLIP B/16), with its preprocessing (resize, crop, normalize) in
     Pillow and NumPy. One code path for serving and for replays, so stored embeddings match served ones.
   - The encoder id covers the model and the preprocessing.
   - The manager holds it next to the text encoder, and image tasks' engines use it.
   - A state with text fields too: the image embedding with the text encoder's embedding of the rest (P8.0 decides
     whether that helps).
+  *Result (2026-10-20, after comparing eleven encoders on Jev's answers):* `images = "auto"` is SigLIP so400m on a
+  GPU (PyTorch, `TorchImageEncoder`) and SigLIP B/16 on CPU (ONNX, `OnnxImageEncoder`); one model, chosen by hardware
+  as for text. Both preprocess in Pillow from the model's `preprocessor_config.json` (transformers 5's own
+  processors need torchvision); on an RTX 3090 so400m embeds an image in ~33 ms (~21 ms batched), cosine 0.99999 to the
+  comparison's embeddings. Earlier result: `jevstiller/encoders/_image.py`, `Xenova/siglip-base-patch16-224` by default, matching the PyTorch model the benchmark used (cosine 0.99999), so the Jev measurements carry over. v1 embeds the image only; text fields beside it are stored but not seen by the student.
 - [ ] **P8.5** Decode untrusted images safely (M).
   - Read the size from the header before decoding, and refuse anything beyond Jev's limits.
   - Decode in the encoder's bounded worker pool.
   - A fifth security audit covering the multipart parser and the decoder, with malformed-file fuzzing.
-- [ ] **P8.6** Store and privacy (S).
+  *Done:* the header check before any decoding, decoding in the encoder's worker, and failures forward. *Left:* the fifth audit.
+- [x] **P8.6** Store and privacy (S).
   - Never store image bytes: rows keep the content hash and the embedding, as with `store_text = false`.
   - Without the bytes, an encoder change can't re-embed old rows, so it starts a new lineage. Document it.
-- [ ] **P8.7** Capacity (M).
+  *Result:* rows keep `<image:sha256:…>` and the embedding, never the bytes (tested).
+- [x] **P8.7** Capacity (M).
   - Image encoding costs 6–20× text per item on CPU. A separate queue keeps image traffic from slowing text tasks.
   - `max_encoder_wait_ms` applies per queue.
   - Sizing in docs/deploy.md: CPU and GPU numbers.
-- [ ] **P8.8** Packaging (S).
+  *Result:* the image encoder has its own `BatchingEncoder`, and `max_encoder_wait_ms` applies to it separately; sizing is in docs/deploy.md. *Open:* under sustained overload an image task records nothing (by design), so on a busy CPU it learns slowly.
+- [x] **P8.8** Packaging (S).
   - `pip install "jevstiller[images]"` (Pillow and the image encoder), and `images = true` in `[proxy]`, off by default.
   - A container image variant with the encoder baked in (about +350 MB for CLIP B/32, more for SigLIP).
+  *Result:* `jevstiller[images]` (Pillow); `[encoder] images`, `--images` or `JEVSTILLER_IMAGES`; Docker `EXTRAS=images` and `PRELOAD_IMAGES=siglip`.
 - [ ] **P8.9** Tests and docs (M).
   - CI runs typesafe-sdk ≥ 0.7.5's `Image` objects end to end through the proxy. The lock pins 0.7.1, which has no
     images.
   - docs/coverage.md, configuration, compatibility, and an image section in docs/benchmarks.md from the experiments.
+  *Done:* the parser's rules, the whole path through the proxy, the docs. *Left:* CI with typesafe-sdk ≥ 0.7.5's `Image` objects, and an image section in docs/benchmarks.md.
+  *Decision (2026-10-22):* `min_samples_per_class` stays at 50 for image questions, as for text, and its cost on
+  questions with many classes is documented (configuration, coverage, deploy, operations). A per-question setting,
+  or a minimum that scales with the number of classes, would be its own measured change for text and images together.
 
 Order: P8.0 (it can change P8.4 and the scope), then P8.4 with its latency, P8.2, P8.1, P8.3, then P8.5 with the
 audit, then P8.6–P8.9. Release it as experimental for as long as Jev's images are.

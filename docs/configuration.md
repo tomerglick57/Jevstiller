@@ -54,7 +54,7 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 | Field | Default | Meaning |
 |---|---|---|
 | `min_train_samples` | `1000` | Teacher-labelled training rows before the first student. |
-| `min_samples_per_class` | `50` | Per class, before the first student (see `rare_classes`). |
+| `min_samples_per_class` | `50` | Teacher-labelled training rows a class needs before the student may answer it (see `rare_classes`). About 80% of the teacher's answers go to training (`calib_fraction`), so a class needs about 62 of them: with N equally common classes, roughly 62 × N requests before most of them can be answered locally (~1,000 for 16 classes, ~6,300 for 101), and longer for the rarer classes. Lower values answer sooner but less reliably: through the proxy, Food-101's 101 dishes reached 27% local over the last 1,000 of 6,444 requests at 10, with the local answers agreeing 96% with Jev, against 3.6% at 50 ([experiments](https://github.com/tomerglick57/Jevstiller/blob/main/experiments/README.md)). |
 | `rare_classes` | `"defer"` | `defer`: train as soon as the other thresholds are met; the policy never lets the student answer a class that is still below `min_samples_per_class` (`routing_reason="rare_class"`), so those requests keep going to the teacher. `wait`: no first student until every class has enough samples; a label the teacher never uses then blocks the task for good (CLINC150 in the benchmark). |
 | `min_new_samples` | `2000` | New teacher answers since the last training before a retrain. Requests the student answered don't count: they give a retrain nothing new to learn. |
 | `keep_versions` | `3` | Finished student versions (superseded, rejected, rolled back) that keep their files, per state. Older ones are deleted and stay listed as `deleted`. Production, shadow and candidates are always kept. Rollback goes back at most this many versions. |
@@ -229,6 +229,7 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 | `spec` | `small` | `--encoder` | `small` / `base` / `large` (bge, ONNX or torch), `hash`, `onnx:<repo>`, `torch:<model>`. The Docker image bakes in `small`. |
 | `backend` | `auto` | `--backend` | `onnx` / `torch` |
 | `device` | `auto` | `--device` | `cpu` / `cuda` |
+| `images` | none | `--images` | Learn questions about images (Jev 1.14, experimental, as Jev's images are). `auto`: SigLIP so400m on a GPU (PyTorch, ~33 ms an image on an RTX 3090), SigLIP B/16 elsewhere (ONNX, ~130 ms on 4 CPU cores), the way text picks PyTorch on a GPU. Or a name: `siglip-so400m` (the best overall), `siglip-384`, `siglip-large`, `siglip`, `clip`; or `onnx:<repo>`. `backend` and `device` apply to it as to text. Needs `pip install "jevstiller[images]"`, plus `jevstiller[gpu]` for PyTorch. The model downloads on first start (so400m: 3.5 GB; `siglip`'s ONNX: 372 MB). Unset: requests with images are forwarded, as before. Which model does what: [coverage](coverage.md). |
 
 ### [engine] and [tasks]
 

@@ -63,6 +63,22 @@ Always enforced, for every path:
 
 `GET`/`HEAD` on `/healthz` and `/readyz` need no token (probes). The proxy serves `/healthz`, `/readyz`, `/metrics` and `/jevstiller/*` itself and never forwards them.
 
+## Requests with images (experimental)
+
+With `[encoder] images` set, the proxy reads requests with images (Jev 1.14) instead of only forwarding them. That is
+new input handling, not covered by the audits below yet:
+- **Parsing.** A strict multipart reader works on the body already in memory (bounded by `max_image_body_mb`, with at
+  most `max_large_bodies` large bodies held at once). Nothing is written to disk. Anything it doesn't accept is
+  forwarded to Jev as it is.
+- **Decoding.** An image's header is checked against Jev's own limits first: PNG or JPEG, not animated, 280–1,568 px a
+  side, 78,400–2,458,624 px, 16 MiB. Only then is it decoded, in the image encoder's worker thread, so a request Jev
+  would refuse is never decoded, and a decompression bomb can't be one Jev accepts. A decoding failure forwards the
+  request.
+- **Storage.** Image bytes are never stored. A row keeps the state with the image replaced by its SHA-256 and the
+  image's embedding, as with `store_text = false` for text.
+
+A fifth audit should cover the reader and the decoder, including malformed files.
+
 ## Security audit, 2026-09-24
 
 A multi-agent audit ran against commit `65fe64b`: reconnaissance, four hunters, adversarial validation, and independent verification of every finding. All attacks were reproduced locally against mock upstreams. Twelve findings were confirmed and fixed in `1f29f42`, each with a regression test in `tests/test_audit_fixes.py`.

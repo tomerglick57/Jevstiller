@@ -94,14 +94,18 @@ def _weak(method):
     return call
 
 
-def task_key(tenant: str, task: Task, question_type: str = "choice", model: str | None = None) -> str:
+def task_key(tenant: str, task: Task, question_type: str = "choice", model: str | None = None,
+             modality: str = "text") -> str:
     """Stable id of (tenant, question, requested teacher model). Hex, so it is also a safe directory name.
     `model` is the model the caller asked for (e.g. "jev-latest"): callers asking different models are asking
     different teachers and must not share a student. The question is identified by its full 256-bit
-    fingerprint, never the 48-bit `Task.version` (security audit run 1)."""
+    fingerprint, never the 48-bit `Task.version` (security audit run 1). `modality="image"`: the same question
+    asked about images is another task, with its own encoder (text keys are unchanged)."""
     ident = {"tenant": tenant, "type": question_type, "question": task.fingerprint}
     if model:
         ident["model"] = model
+    if modality != "text":
+        ident["modality"] = modality
     return hashlib.sha256(canonical_json(ident).encode()).hexdigest()[:20]
 
 
@@ -118,6 +122,7 @@ class Routing:
     model: str | None = None
     uncounted: bool = False         # a new question not counted towards admission yet (see TaskManager.observe)
     caller: str | None = None       # who asked (the proxy: the caller's key hash), for the per-caller task quota
+    modality: str = "text"          # "image": the task `observe` admits is an image task
 
     @property
     def local(self) -> bool:
@@ -138,6 +143,7 @@ class TaskInfo:
     confidence_floor: float | None = None   # Task.confidence_floor
     kind: str = "choice"                # "noul": a yes/no question; part of the key
     cutoffs: list | None = None         # Task.cutoffs of a yes/no task
+    modality: str = "text"              # "image": asked about images (Jev 1.14), embedded by the image encoder
 
     def task(self) -> Task:
         return Task(self.key, self.instructions, self.classes, self.target_agreement, self.confidence_floor,
@@ -240,7 +246,7 @@ class TaskManager:
                  text_retention_s: float | None = None, max_tasks: int | None = 10_000,
                  hash_key: bytes | None = None, task_overrides: Mapping[str, Mapping[str, Any]] | None = None,
                  max_new_tasks_per_caller: int | None = 100, confidence_floor: float | None = None,
-                 noul_cutoffs: Sequence[float] | float | None = 0.5):
+                 noul_cutoffs: Sequence[float] | float | None = 0.5, image_encoder: Encoder | None = None):
         if blas_threads:
             # Serving runs many small matrix products from many threads; BLAS's default of one thread per
             # core for each of them oversubscribes the CPU (1 thread: 2.4x throughput, 4x lower p99 in
@@ -252,6 +258,7 @@ class TaskManager:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.max_tasks, self.hash_key = max_tasks, hash_key
         self.teacher, self.encoder = teacher, encoder
+        self.image_encoder = image_encoder          # None: questions about images are never tasks
         self.cfg = config or Config()
         self.target_agreement = target_agreement
         self.confidence_floor = check_floor(confidence_floor)
@@ -311,7 +318,7 @@ class TaskManager:
 
     def _migrate_key(self, info: TaskInfo, directory: Path) -> TaskInfo:
         """Tasks stored under an older key scheme are re-keyed (directory renamed) to the current one."""
-        expected = task_key(info.tenant, info.task(), info.kind, model=info.model)
+        expected = task_key(info.tenant, info.task(), info.kind, model=info.model, modality=info.modality)
         if info.key == expected and directory.name == expected:
             return info
         target = self.root / expected
@@ -398,17 +405,22 @@ class TaskManager:
 
     # ---- lookup -----------------------------------------------------------------
     def resolve(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str] | None,
-                model: str | None = None, kind: str = "choice") -> tuple[str, Task]:
+                model: str | None = None, kind: str = "choice", modality: str = "text") -> tuple[str, Task]:
         """The key and Task for a question, without creating anything. Raises ValueError for a question
         that cannot be a task (fewer than 2 or more than 255 classes, non-JSON values; a yes/no question when
-        `noul_cutoffs` is None). For `kind="noul"`, `classes` are the question's criteria or None."""
+        `noul_cutoffs` is None). For `kind="noul"`, `classes` are the question's criteria or None.
+        `modality="image"`: the question is asked about images (ValueError without an image encoder)."""
+        if modality not in ("text", "image"):
+            raise ValueError(f"modality must be 'text' or 'image', got {modality!r}")
+        if modality == "image" and self.image_encoder is None:
+            raise ValueError("questions about images are not answered locally (no image encoder)")
         if kind == "noul":
             if self.noul_cutoffs is None:
                 raise ValueError("yes/no questions are not answered locally (noul_cutoffs is None)")
             spec = Task("_", instructions, classes, self.target_agreement, None, "noul", self.noul_cutoffs)
         else:
             spec = Task("_", instructions, classes, self.target_agreement, self.confidence_floor, kind)
-        key = task_key(tenant, spec, kind, model=model)
+        key = task_key(tenant, spec, kind, model=model, modality=modality)
         info = self._index.get(key)
         if info is not None:
             return key, info.task()
@@ -442,7 +454,8 @@ class TaskManager:
 
     def route(self, tenant: str, instructions: Any, classes: Mapping[str, Any] | Sequence[str] | None,
               states: Sequence[State], model: str | None = None, stexts: Sequence[str] | None = None,
-              X: Any = None, admit: bool = True, caller: str | None = None, kind: str = "choice") -> Routing:
+              X: Any = None, admit: bool = True, caller: str | None = None, kind: str = "choice",
+              modality: str = "text") -> Routing:
         """First half of a request whose teacher call the caller makes itself (the proxy): find or admit the
         task and let its engine decide. Always follow with `complete` (it releases the engine). A task that
         is not admitted yet comes back with `engine=None` and `reason` set: send everything to the teacher.
@@ -455,12 +468,13 @@ class TaskManager:
         `caller` identifies who asked (the proxy passes the caller's key hash): each caller may create at most
         `max_new_tasks_per_caller` tasks per admission window, so one caller can't fill a shared tenant's task
         cap (security audit run 3)."""
-        key, task = self.resolve(tenant, instructions, classes, model, kind)
+        key, task = self.resolve(tenant, instructions, classes, model, kind, modality)
         if key not in self._index:
-            reason = self._admit(key, tenant, task, len(states), model, count=admit, caller=caller)
+            reason = self._admit(key, tenant, task, len(states), model, count=admit, caller=caller,
+                                 modality=modality)
             if reason:
                 return Routing(key, task, None, None, reason, tenant, model,
-                               uncounted=not admit and reason == "not_admitted", caller=caller)
+                               uncounted=not admit and reason == "not_admitted", caller=caller, modality=modality)
         engine = self._acquire(key)
         try:
             routed = engine.route(states, stexts, X() if callable(X) else X)
@@ -486,7 +500,7 @@ class TaskManager:
         if not routing.uncounted:
             return routing.key in self._index
         return self._admit(routing.key, routing.tenant or "", routing.task, 1, routing.model,
-                           caller=routing.caller) is None
+                           caller=routing.caller, modality=routing.modality) is None
 
     def engine(self, key: str) -> Jevstiller:
         """The loaded engine for `key` (loading it if needed). The manager may unload and close it at any time
@@ -554,7 +568,7 @@ class TaskManager:
         return None
 
     def _admit(self, key: str, tenant: str, task: Task, n: int, model: str | None = None,
-               count: bool = True, caller: str | None = None) -> str | None:
+               count: bool = True, caller: str | None = None, modality: str = "text") -> str | None:
         """None when `key` is (now) a registered task, else why its requests are passed through. With
         `count=False`, the requests are not counted towards admission (so a new task is never registered)."""
         if not count:
@@ -573,7 +587,7 @@ class TaskManager:
             self._note_caller(caller, now)
             info = TaskInfo(key, tenant, task.instructions, dict(task.classes), task.target_agreement, now, now,
                             model, confidence_floor=task.confidence_floor, kind=task.kind,
-                            cutoffs=list(task.cutoffs) if task.cutoffs else None)
+                            cutoffs=list(task.cutoffs) if task.cutoffs else None, modality=modality)
             (self.root / key).mkdir(parents=True, exist_ok=True, mode=0o700)
             self._write_info(info)
             self._index[key] = info
@@ -633,7 +647,10 @@ class TaskManager:
             if isinstance(ex, TrainScheduler):              # jobs carry the task's tenant and priority
                 ex = ex.for_task(key, info.tenant)
             cfg = dataclasses.replace(self.cfg, mode=info.mode or self.cfg.mode)
-            e = Jevstiller(info.task(), self.teacher, self.root, encoder=self.encoder, config=cfg,
+            if info.modality == "image" and self.image_encoder is None:
+                raise ValueError(f"task {key} is about images, and this manager has no image encoder")
+            encoder = self.image_encoder if info.modality == "image" else self.encoder
+            e = Jevstiller(info.task(), self.teacher, self.root, encoder=encoder, config=cfg,
                            train_executor=ex, hash_key=self.hash_key)
             if isinstance(ex, TaskExecutor):               # weakly: a strong one makes a cycle that keeps
                 ex.priority = _weak(e._training_priority)    # an unloaded engine (and its arrays) until a GC
