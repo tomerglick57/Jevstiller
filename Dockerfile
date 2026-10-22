@@ -27,8 +27,10 @@ RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin jevs
 COPY --from=build /wheels /wheels
 COPY --from=build /dist /dist
 COPY --from=build /src/requirements.txt /tmp/requirements.txt
+# pip goes once everything is installed: the server never runs it, and it brings its own CA bundle and advisories.
 RUN pip install --no-cache-dir --no-index --find-links /wheels --require-hashes -r /tmp/requirements.txt \
  && pip install --no-cache-dir --no-index --no-deps /dist/*.whl \
+ && pip uninstall --yes pip \
  && rm -rf /wheels /dist /tmp/requirements.txt
 ENV JEVSTILLER_DATA_DIR=/data \
     HF_HOME=/models \

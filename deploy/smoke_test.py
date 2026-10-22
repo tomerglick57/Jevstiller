@@ -5,6 +5,8 @@ Runs the image on a private Docker network next to a mock Jev (this script, run 
 - a /v1/systemone request is forwarded with the caller's key and Jev's answer comes back unchanged; a key Jev
   rejects gets Jev's 401;
 - the task is admitted and recorded (admin API), and /metrics needs the admin token;
+- neither CA bundle in the image (certifi's, the system's) trusts a root whose intermediates' keys are public, and
+  the image has no pip;
 - with no network at all, the baked-in encoder still loads (the image needs no network except to Jev);
 - `docker stop` shuts it down cleanly, and the log has no traceback.
 
@@ -27,6 +29,11 @@ LABELS = ["billing", "technical", "other"]
 REQUEST = {"state": "My invoice is wrong", "model": "jev-latest",
            "questions": {"team": {"type": "choice", "instructions": "Which team handles this?",
                                   "criteria": {c: "" for c in LABELS}}}}
+# SHA-256 of root certificates whose intermediates' private keys are public (eMudhra, 2026-10-17; Debian DSA-6572-1)
+COMPROMISED_ROOTS = {
+    "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b": "emSign ECC Root CA - G3",
+    "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4": "AAA Certificate Services",
+}
 
 
 class MockJev(BaseHTTPRequestHandler):
@@ -117,6 +124,18 @@ def run_checks(image: str, name: str, base: str, offline: str) -> None:
     check(ready.get("ready") is True and all(ready["checks"].values()), f"/readyz: {ready['checks']}")
     check(http("GET", f"{base}/healthz")[0] == 200, "/healthz")
     check(docker("exec", name, "id", "-u") == "10001", "runs as uid 10001")
+
+    # TLS to Jev is verified with certifi's bundle (the proxy, httpx) or the system's (truststore, ssl)
+    probe = ("import certifi, hashlib, ssl\n"
+             "for f in (certifi.where(), '/etc/ssl/certs/ca-certificates.crt'):\n"
+             "    ders = ssl.create_default_context(cafile=f).get_ca_certs(binary_form=True)\n"
+             "    print(f, len(ders), *sorted({hashlib.sha256(d).hexdigest() for d in ders} & BAD))\n")
+    for line in docker("exec", name, "python", "-c", f"BAD = {set(COMPROMISED_ROOTS)!r}\n{probe}").splitlines():
+        path, count, *bad = line.split()
+        check(int(count) > 0 and not bad, f"{path}: {count} roots, none compromised"
+              + "".join(f"; trusts {COMPROMISED_ROOTS[b]}" for b in bad))
+    check(docker("exec", name, "python", "-c", "import importlib.util; print(importlib.util.find_spec('pip'))")
+          == "None", "no pip in the image")
 
     status, headers, body = http("POST", f"{base}/v1/systemone", REQUEST, {"authorization": f"Bearer {KEY}"})
     answer = json.loads(body)

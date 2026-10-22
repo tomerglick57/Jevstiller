@@ -1,4 +1,6 @@
 """P4: tenants file, proxy access control, body limit, key handling, text retention, tenant deletion."""
+import asyncio
+import hashlib
 import logging
 import os
 import stat
@@ -9,6 +11,7 @@ import pytest
 from test_proxy import GOOD, LABELS, OTHER, QUESTION, FakeJev, ask, client, serve
 
 from jevstiller import Admission, Config, HashEncoder, TaskManager
+from jevstiller._server import Proxy
 from jevstiller.server import KeyRegistry, ProxySettings, create_app, load_salt
 
 ts = pytest.importorskip("typesafe_sdk")
@@ -128,3 +131,24 @@ def test_text_retention_and_tenant_deletion(tmp_path, world):
     assert len(deleted) == 2 and [i.tenant for i in m.tasks()] == ["globex"]
     assert not any((tmp_path / "tasks" / k).exists() for k in deleted)
     m.close()
+
+
+EMSIGN_ECC_ROOT_CA_G3 = "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"   # SHA-256 of the cert
+
+
+def test_upstream_client_distrusts_the_compromised_emudhra_root(tmp_path):
+    """eMudhra's intermediate CA private keys are public (2026-10-17), so anyone on the path to Jev could pose as it
+    to a client that trusts their root: callers' keys, the text, and answers the students then learn from. The proxy
+    verifies Jev with certifi's bundle (httpx's default); certifi < 2026.10.19 still has "emSign ECC Root CA - G3"."""
+    m = _manager(tmp_path)
+    proxy = Proxy(m, ProxySettings(), KeyRegistry(b"s", 3600))
+    try:
+        for c in proxy.clients:
+            ders = c._transport._pool._ssl_context.get_ca_certs(binary_form=True)    # what verifies Jev
+            roots = {hashlib.sha256(der).hexdigest() for der in ders}
+            assert roots, "no CA bundle loaded"
+            assert EMSIGN_ECC_ROOT_CA_G3 not in roots, "trusts emSign ECC Root CA - G3: needs certifi >= 2026.10.19"
+    finally:
+        for c in proxy.clients:
+            asyncio.run(c.aclose())
+        m.close()

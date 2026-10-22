@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Security: certifi 2026.10.19 or later.** The proxy checks Jev's TLS certificate against certifi's CA bundle. Before 2026.10.19, that bundle trusts "emSign ECC Root CA - G3".
+  - The private keys of eight eMudhra intermediate CAs under that root turned out to be public (2026-10-17; GHSA-6q48-6c7w-9gw2).
+  - Anyone on the network path between the proxy and api.typesafe.ai could have posed as Jev. They would have seen callers' keys and request text, and could have returned answers that the students learn and keep serving. No attack is known.
+  - `pyproject.toml` now requires `certifi>=2026.10.19`, and the lock and the image have it. A test checks what the proxy's upstream client trusts.
+  - **Until you upgrade:** mount certifi 2026.10.19's `cacert.pem` into the container and set `SSL_CERT_FILE` to its path.
+- **Image:** rebuilt on Debian's fixes for ca-certificates (DSA-6572-1, the same eMudhra roots) and xz-utils (DSA-6549-1).
+  - **It no longer contains pip.** The server never ran it, and pip 25.0.1 brings its own CA bundle and has advisories of its own. To add packages, build your own image from `python:3.12-slim` with `pip install jevstiller`.
+  - `deploy/smoke_test.py` checks that neither CA bundle in the image (certifi's, the system's) trusts the compromised roots, and that there is no pip.
+- `truststore>=0.10.5`, which the Python API's `JevTeacher` uses through typesafe-sdk. Before 0.10.5, concurrent TLS handshakes could turn certificate checks off on macOS and Windows (GHSA-pmqj-r2x2-vx88). Linux and the image weren't affected.
+- The lock and the image move filelock to 4.2.4. It had 18 advisories on 2026-10-17, all needing another local user who can write to the lock directory. Jevstiller doesn't use filelock itself; huggingface_hub does.
+- Docs: the GPU build now suggests a current CUDA image and an `apt-get upgrade`. The image it suggested was last updated in April 2024.
+
 - Docs: **benchmark numbers re-measured with the default settings.**
   - The published numbers were measured with `rare_classes = "wait"`, the default until 0.3.4. Since 0.3.4 the default `defer` lets a task's first student train sooner, and it ends lower.
   - Held-out coverage: Banking77 71.9% → 61.7%, CLINC150 69.0% → 65.1%, AG News 80.2% → 74.2%, TweetEval sentiment 22.2% → 19.3%, TweetEval offensive 24.1% → 21.3%. Agreement stays at 98.8–99.75%.

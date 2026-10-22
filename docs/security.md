@@ -14,6 +14,10 @@ Jevstiller is a self-hosted proxy on a company network. Services call it with th
 | Operator | trusted | Config, data directory, admin token, tenants map |
 | Someone with the data directory or a backup | trusted as much as your traffic | Holds request text (unless disabled/retained), embeddings and models, but never an API key |
 
+Trusting Jev means trusting the TLS certificate that says it is Jev. The proxy checks it against certifi's CA bundle, or the file in `SSL_CERT_FILE` if set.
+- In October 2026, the private keys of eight eMudhra intermediate CAs turned out to be public. Until certifi 2026.10.19 removed their root, anyone on the network path could have posed as Jev to the proxy: seen callers' keys and text, and returned answers for the students to learn.
+- Jevstiller requires that certifi from 0.5.3. The image's smoke test checks that neither CA bundle in the image trusts those roots.
+
 ## What is stored
 
 Per task, under `<data_dir>/tasks/<key>/` (directories 0700, files 0600 when run with `jevstiller serve`):
