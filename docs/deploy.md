@@ -25,7 +25,7 @@ About the image:
 To build it yourself: `docker build -t jevstiller .`. Every package in the build is hash-checked: the dependencies from `uv.lock`, and the build tools (the build backend, `build`, `uv`) from `build-requirements.txt`. The project is built without build isolation, so nothing unpinned is fetched. Build arguments: `PRELOAD_ENCODER` (default `small`; `base`, or empty, which downloads on first start), `EXTRAS` (default none; `gpu` adds PyTorch), `PYTHON=3.12`.
 
 **GPU:**
-1. Build on a CUDA base image with `--build-arg EXTRAS=gpu` (adds PyTorch), e.g. start from `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` and install Python 3.12.
+1. Build on a CUDA base image with `--build-arg EXTRAS=gpu` (adds PyTorch), e.g. start from `nvidia/cuda:13.4.3-cudnn-runtime-ubuntu24.04` and install Python 3.12 (Ubuntu 24.04's `python3`). CUDA images aren't rebuilt for every Ubuntu security update, so run `apt-get update && apt-get -y upgrade` in the build, and rebuild regularly.
 2. Run with `--gpus all`. With CUDA available, the encoder runs on PyTorch automatically.
 
 The encoder is the only GPU user. On CPU, bge-small encodes about 1.6–7 ms per text. Measured student-path throughput on CPU is about 130 messages/s per process, bounded by the encoder; a GPU raises it to ~2,000/s.
