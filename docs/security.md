@@ -69,19 +69,21 @@ Always enforced, for every path:
 
 ## Requests with images (experimental)
 
-With `[encoder] images` set, the proxy reads requests with images (Jev 1.14) instead of only forwarding them. That is
-new input handling, not covered by the audits below yet:
+With `[encoder] images` set, the proxy reads requests with images (Jev 1.14) instead of only forwarding them. Run 5
+audited this path (below).
+- **Who gets read.** Only a key Jev has accepted: a new key's image request is forwarded unread, and Jev's answer
+  accepts the key. At most `max_image_reads` (2) are read at once; more are forwarded.
 - **Parsing.** A strict multipart reader works on the body already in memory (bounded by `max_image_body_mb`, with at
-  most `max_large_bodies` large bodies held at once). Nothing is written to disk. Anything it doesn't accept is
-  forwarded to Jev as it is.
-- **Decoding.** An image's header is checked against Jev's own limits first: PNG or JPEG, not animated, 280–1,568 px a
-  side, 78,400–2,458,624 px, 16 MiB. Only then is it decoded, in the image encoder's worker thread, so a request Jev
-  would refuse is never decoded, and a decompression bomb can't be one Jev accepts. A decoding failure forwards the
-  request.
+  most `max_large_bodies` large bodies held at once, each within `body_timeout_s`). Nothing is written to disk.
+  Anything it doesn't accept, or could read differently from a standard parser (a boundary that isn't the only,
+  properly parsed parameter; an image with two sources or bytes after its end), is forwarded to Jev as it is. So is
+  a JSON body with more than 50,000 items, before it is parsed.
+- **Decoding.** An image's header is checked against Jev's own limits first: PNG or JPEG (the only formats Pillow
+  tries), not animated, 280–1,568 px a side, 78,400–2,458,624 px, 16 MiB, and for a PNG at most 256 chunks before
+  its pixels and 8 compressed ones. Only then is it decoded, in the image encoder's worker thread. A decoding failure
+  forwards that request; other requests in the same batch are encoded on their own.
 - **Storage.** Image bytes are never stored. A row keeps the state with the image replaced by its SHA-256 and the
   image's embedding, as with `store_text = false` for text.
-
-A fifth audit should cover the reader and the decoder, including malformed files.
 
 ## Security audit, 2026-09-24
 
@@ -203,4 +205,34 @@ Also fixed: a caller's `Accept-Encoding: br`/`zstd` could corrupt a relayed body
 - Release: the GitHub-release job doesn't re-check the artifacts' hashes; the Docker build's `cache-from` and the base image and encoder model aren't pinned by digest; no Dependabot entry for pip.
 - `uvicorn`/`h11` accept a request with both `Content-Length` and `Transfer-Encoding` and keep the connection: not reproduced as smuggling, but a reverse proxy in front normalises it.
 
-One area was only partly covered: the reviewer of the guarantee under adversarial input stopped before measuring the item above, so a fifth run should start there.
+One area was only partly covered: the reviewer of the guarantee under adversarial input stopped before measuring the item above, so a fifth run should start there. (Run 5 measured it: see finding 1 below.)
+
+## Security audit, 2026-10-24 (run 5)
+
+Run 5 audited `82db190` (0.5.3 plus image support, unreleased) and was weighted toward the new image path (the multipart and base64 reader, the image check and decoding), run 4's open question about the guarantee's predictable draws, and resource limits beyond disk. Everything was reproduced locally against mock upstreams, then re-run by a second reviewer trying to disprove it and checked line by line by a third. Regression tests are in `tests/test_audit_run5.py`.
+
+No finding exposes keys, request text, image bytes, other tenants' data or the admin API. Key acceptance held on the image path (a key Jev hasn't accepted never got an image task or a local image answer), image bytes are never stored, the new settings fail closed, and run 4's fixes held. Findings 1, 2, 5, 6, 7 and 9 affect released versions (images off); 3, 4 and 8 only the unreleased image support.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 1 | Medium | Every engine load restarted the audit and calibration draws from public values. A task reloaded before each request (more than `max_loaded` active tasks, or another tenant cycling 64 questions) drew the same first number every time: never audited, no drift fallback, no shadow judged. With Jev silently changing 10% of its answers: 6.4% wrong answers against a 2% budget, no fallback | The draws continue across reloads; in the server they are keyed with the deployment salt, so callers can't compute them |
+| 2 | Medium | One failing text failed every request in the shared encoder's batch: a lone surrogate (`\udc80`) in one request's state made the tokenizer raise, and up to ~40 concurrent requests of any caller lost their local answer and training row | A failed batch is encoded call by call; lone surrogates are replaced; failed batches count in the overload estimate |
+| 3 | Medium | Two request shapes let the proxy and Jev read different images in one request (a boundary hidden in another Content-Type parameter; an asset with both `part` and `data_base64`), so the proxy recorded Jev's answer about one image against another: 59 of 59 honest requests for the targeted kind of image got the wrong local answer. Depends on how Jev parses | Ambiguous boundaries, two-source assets and bytes after an image's end are forwarded |
+| 4 | Medium | Image bodies were parsed, and their image headers checked, before the caller's key was, with no bound on how many at once: 16 keyless 32 MiB JSON bodies went past a 4 GiB container on 5 of 8 waves; one crafted PNG cost 0.7 s of CPU | Read only for accepted keys, two at a time; JSON with more than 50,000 items refused before parsing; PNGs with too many chunks refused; PNG and JPEG only |
+| 5 | Medium | A production student was never checked against the encoder it was trained with. After a change of encoder (`small` → `base`, or `images = "auto"` on a host that lost its GPU) every trained task silently stopped answering locally and learning; with the same dimension the old student answered from embeddings it wasn't trained on | Such a student isn't served; the task learns again from the new encoder's rows; promote and rollback refuse it |
+| 6 | Low | A caller could name `authorization` in its Connection header: the proxy took its identity from the bearer, then forwarded the request without it. With a Jev that accepts another credential, made-up bearers were accepted (per-caller quota bypassed, new tenants under `per_key`) | Connection can't drop the bearer |
+| 7 | Low | 16 connections that sent only headers held every large-body slot (taken on the declared length), so every caller's request over 4 MiB got a 503 for as long as they stayed open | A slot is taken once the bytes arrive; bodies must arrive within `body_timeout_s` (408) |
+| 8 | Low | Some malformed image requests (non-string `part` or `format`, a deeply nested state) got a 500 instead of being forwarded | Forwarded; the reader type-checks those fields and walks the state iteratively |
+| 9 | Low | A caller who is a question's only one during its warm-up (about 3,500 rows by default) can steer it with text past the encoder's 256-token window, which Jev reads but the student doesn't: the bound passes on rows unlike later traffic. Depends on Jev answering on that text | Partly: finding 1's fix keeps the audit running, which catches it; see the open item |
+
+Also fixed: the image encoder is closed on shutdown.
+
+**Still open, needs deployment testing against the real Jev:** how Jev parses ambiguous multipart bodies and two-source assets (finding 3 now forwards them either way), whether it accepts credentials other than the bearer (finding 6, and run 3's item), and whether text past 256 tokens changes its answers (finding 9).
+
+**Open hardening items (new):**
+- Finding 9 has no direct fix: one caller can still supply all of a new task's calibration rows. Detecting rows whose embeddings match but whose full-text hashes and labels differ, or capping one caller's share of calibration, would be the next step. Until then, a task's first callers decide how well its bound describes later traffic (in shared tenancy, the bound covers the combined traffic: run 3's item).
+- `json.loads` of bodies up to 4 MiB runs on the event loop before the key check (~145 ms per 4 MiB). Standard for ASGI apps, and bounded by the body limit; a reverse proxy doesn't help with it.
+- The engine LRU is shared by all tenants: another tenant's questions can still make a task reload often (now without effect on its audit, at ~4 ms of CPU per reload).
+- After a restart without `images`, the admin API returns 500 for image tasks (a trusted caller; no state is changed).
+- `HF_HUB_OFFLINE` in the Dockerfile follows `PRELOAD_ENCODER` only, not `PRELOAD_IMAGES`; Hub downloads aren't pinned to a revision.
+- The `pillow`, `torch` and `transformers` floors in `pyproject.toml` allow versions with published advisories (none reachable through the image path as far as the audit found).

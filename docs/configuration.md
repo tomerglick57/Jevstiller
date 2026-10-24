@@ -95,7 +95,7 @@ The price is coverage. On the five benchmark datasets it was 4–12 points at a 
 |---|---|---|
 | `store_text` | `True` | `False` keeps only a hash and the embedding of each request, not its text. Stored text is cut at 8 KiB (UTF-8). |
 | `min_free_disk_mb` | `1024` | With less free space than this on the store's volume, new rows keep no text (`0`: never). Rows are bounded per task; text is what can fill a volume. |
-| `seed` | `0` | Seeds the audit draw, training, OOD sampling and, with the task version, the per-request train/calibration split (so a replay splits the same way on any machine). |
+| `seed` | `0` | Seeds the audit draw, training, OOD sampling and, with the task version, the per-request train/calibration split (so a replay splits the same way on any machine). With a hash key (the server always has one: its salt), the audit and split draws are keyed with it too, so callers can't compute them; in a `TaskManager` they continue across unloads and reloads. |
 
 ---
 
@@ -197,8 +197,9 @@ Environment variables use the setting's name in upper case: `JEVSTILLER_PORT`, `
 | `allow_networks` | `[]` (all) | `--allow-network` (repeat) | Client CIDRs allowed to use the proxy. |
 | `trust_forwarded_for` | `[]` | `--trust-forwarded-for` (repeat) | Proxies whose `X-Forwarded-For` is trusted for `allow_networks`: addresses or networks without host bits (`10.0.0.5`, `10.0.0.0/24`; `10.0.0.5/24` is an error, since uvicorn would silently ignore it). Empty: the TCP peer is used. |
 | `max_body_mb` | `4.0` | `--max-body-mb` | Larger bodies get 413 (declared or streamed), except image requests (next). |
-| `max_image_body_mb` | `32.0` | | Body limit for `POST /v1/systemone` with Jev's `TypeSafe-Danger-Zone-Images: true` header: Jev's own limit. These requests are forwarded and never parsed. Finite, > 0. |
-| `max_large_bodies` | `16` | | Image requests with a body above `max_body_mb` held at once (each is in memory until its response is sent); more → 503 `retry-after: 1`. At least 1. |
+| `max_image_body_mb` | `32.0` | | Body limit for `POST /v1/systemone` with Jev's `TypeSafe-Danger-Zone-Images: true` header: Jev's own limit. With `[encoder] images` unset these requests are forwarded and never parsed; with it set, they are read only for a key Jev has accepted, at most two at a time. Finite, > 0. |
+| `max_large_bodies` | `16` | | Image requests with a body above `max_body_mb` held at once (each is in memory until its response is sent), counted once more than `max_body_mb` has arrived; more → 503 `retry-after: 1`. At least 1. |
+| `body_timeout_s` | `120` | | A request body must arrive within this many seconds of the request; slower ones get 408 (a client that sends headers and then stalls can't hold a connection or a large-body slot). `0`: no limit. Finite, ≥ 0. |
 | `max_questions` | `32` | `--max-questions` | Distinct choice questions routed per request; more → forwarded unrouted. |
 | `max_encoder_wait_ms` | `200` | `--max-encoder-wait-ms` | If a local answer would wait longer than this for the shared encoder (traffic beyond its capacity), forward the request to Jev instead. `0` never forwards for this reason (requests queue). |
 | `price_per_mtok` | `0.042` | | For cost accounting. |
