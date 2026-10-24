@@ -55,7 +55,7 @@ def test_idle_call_is_not_delayed():
     enc.close()
 
 
-def test_errors_reach_every_caller_in_the_batch_and_the_encoder_recovers():
+def test_an_error_reaches_its_caller_and_the_encoder_recovers():
     enc = BatchingEncoder(SlowEncoder(fail_on="bad"))
     with pytest.raises(ValueError):
         enc.encode(["bad text"])
