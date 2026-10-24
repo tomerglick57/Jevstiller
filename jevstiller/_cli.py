@@ -130,7 +130,8 @@ def _serve(a: argparse.Namespace) -> None:
                              access_token=s.access_token, allow_networks=s.allow_networks,
                              max_body_bytes=int(s.max_body_mb * 2**20),
                              max_image_body_bytes=int(s.max_image_body_mb * 2**20),
-                             max_large_bodies=s.max_large_bodies, max_questions=s.max_questions,
+                             max_large_bodies=s.max_large_bodies, body_timeout_s=s.body_timeout_s,
+                             max_questions=s.max_questions,
                              max_encoder_wait_ms=s.max_encoder_wait_ms)
 
     import tempfile

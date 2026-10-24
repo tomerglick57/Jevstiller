@@ -181,7 +181,9 @@ def image_stack(tmp_path):
     with serve(jev.app()) as upstream:
         m = TaskManager(tmp_path, None, HashEncoder(dim=64), cfg, target_agreement=0.95,
                         admission=Admission(min_requests=1), janitor_interval_s=3600, image_encoder=ColourEncoder())
-        app = create_app(m, ProxySettings(upstream=upstream), KeyRegistry(b"salt", 3600))
+        keys = KeyRegistry(b"salt", 3600)
+        keys.accept(keys.hash(GOOD))                    # a key Jev has accepted: its image requests are read
+        app = create_app(m, ProxySettings(upstream=upstream), keys)
         with serve(app) as proxy:
             yield proxy, jev, m, app
         m.close()

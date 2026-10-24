@@ -21,6 +21,12 @@ MIN_SIDE, MAX_SIDE = 280, 1568
 MIN_PIXELS, MAX_PIXELS = 78_400, 2_458_624
 MAX_FILE_BYTES = 16 * 2**20
 FORMATS = ("PNG", "JPEG")
+# more than Jev's rules: a PNG's chunks before its pixel data, and its compressed text and colour profiles, which
+# Pillow reads (and inflates, up to 1 MiB each) before a header check can answer. An image has a handful; 325,000
+# empty chunks cost 0.7 s of CPU, and 63 zTXt chunks 64 MiB, per check (security audit run 5).
+MAX_PNG_CHUNKS = 256
+MAX_PNG_COMPRESSED = 8
+_PNG = b"\x89PNG\r\n\x1a\n"
 
 
 @dataclass(frozen=True)
@@ -32,15 +38,33 @@ class ImageCheck:
     format: str = ""
 
 
+def _png_lean(data: bytes) -> bool:
+    """Few chunks before the pixel data (MAX_PNG_CHUNKS), few of them compressed (MAX_PNG_COMPRESSED)."""
+    pos, n, compressed = len(_PNG), 0, 0
+    while pos + 8 <= len(data):
+        kind = data[pos + 4:pos + 8]
+        if kind == b"IDAT":
+            return True
+        n += 1
+        compressed += kind in (b"zTXt", b"iTXt", b"iCCP")
+        if n > MAX_PNG_CHUNKS or compressed > MAX_PNG_COMPRESSED:
+            return False
+        pos += 12 + int.from_bytes(data[pos:pos + 4], "big")
+    return True                                         # no pixel data: Pillow refuses it
+
+
 def check_image(data: bytes) -> ImageCheck:
-    """Whether Jev would take this image, from its header only (nothing is decoded)."""
+    """Whether Jev would take this image, from its header only (nothing is decoded). PNG and JPEG are the only
+    formats Pillow tries; PNGs with an unusual number of chunks before their pixel data are refused too."""
     from PIL import Image, UnidentifiedImageError
     if not data:
         return ImageCheck(False, "empty")
     if len(data) > MAX_FILE_BYTES:
         return ImageCheck(False, "file too large")
+    if data.startswith(_PNG) and not _png_lean(data):
+        return ImageCheck(False, "too many chunks", format="PNG")
     try:
-        with Image.open(io.BytesIO(data)) as im:      # reads the header; pixels stay undecoded
+        with Image.open(io.BytesIO(data), formats=FORMATS) as im:   # reads the header; pixels stay undecoded
             fmt, (w, h) = im.format or "", im.size
             animated = bool(getattr(im, "is_animated", False)) or getattr(im, "n_frames", 1) > 1
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
@@ -80,7 +104,7 @@ class _Preprocess:
     def __call__(self, data: bytes) -> np.ndarray:
         """(3, H, W) float32, as the model's own processor makes it. Call `check_image` first."""
         from PIL import Image
-        with Image.open(io.BytesIO(data)) as im:
+        with Image.open(io.BytesIO(data), formats=FORMATS) as im:
             im = im.convert("RGB")
             if self.resize_hw is not None:
                 im = im.resize((self.resize_hw[1], self.resize_hw[0]), resample=self.resample)

@@ -30,8 +30,10 @@ PART_TYPES = {"", "image/png", "image/jpeg", "image/jpg", "application/octet-str
 MAX_REF_BYTES = 1024
 MAX_PARTS = 8
 MAX_PART_HEADER = 8192
-_BOUNDARY = re.compile(r'boundary=(?:"([^"\r\n]{1,70})"|([^\s;"]{1,70}))', re.IGNORECASE)
+MAX_JSON_ITEMS = 50_000              # commas, brackets and braces in the request's JSON: parsing more cost up to
+                                     # 800 MiB per 32 MiB body (security audit run 5); a real request has a few dozen
 _B64 = re.compile(r"[A-Za-z0-9+/]*={0,2}")
+_END = {"PNG": b"\x00\x00\x00\x00IEND\xaeB`\x82", "JPEG": b"\xff\xd9"}   # how each format's file ends
 
 # reasons a request is forwarded instead (the `reason` of jevstiller_unrouted_total)
 UNREADABLE = "image_unreadable"     # not a well-formed image request
@@ -55,12 +57,29 @@ class _Part:
     data: bytes
 
 
+def _boundary(content_type: str) -> str | None:
+    """The boundary of a multipart/form-data content type, or None unless there is exactly one, read as standard
+    parsers read parameters. The first `boundary=` anywhere used to be taken, even inside another parameter's
+    quoted value, so the proxy and Jev could frame one body differently and the proxy record Jev's answer about
+    one image against another (security audit run 5)."""
+    if content_type.lower().count("boundary=") != 1:
+        return None
+    msg = Message()
+    msg["content-type"] = content_type
+    if msg.get_content_type() != "multipart/form-data":
+        return None
+    found = [v for k, v in msg.get_params(header="content-type")[1:] if k.strip().lower() == "boundary"]
+    if len(found) != 1 or not isinstance(found[0], str) or not 1 <= len(found[0]) <= 70:
+        return None
+    return found[0]
+
+
 def _multipart(content_type: str, body: bytes) -> list[_Part] | None:
     """The parts of a multipart/form-data body, or None if it isn't one this strict reader accepts."""
-    m = _BOUNDARY.search(content_type)
-    if m is None:
+    boundary = _boundary(content_type)
+    if boundary is None:
         return None
-    delim = b"--" + (m.group(1) or m.group(2)).encode("latin-1")
+    delim = b"--" + boundary.encode("latin-1")
     if not body.startswith(delim):
         return None                                    # no preamble: the SDK never sends one
     pieces = body[len(delim):].split(b"\r\n" + delim)
@@ -92,15 +111,17 @@ def _multipart(content_type: str, body: bytes) -> list[_Part] | None:
 
 
 def _strings(value: Any) -> Iterator[str]:
-    """Every string value in a JSON value (object keys aren't: Jev doesn't replace references in keys)."""
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for v in value.values():
-            yield from _strings(v)
-    elif isinstance(value, list):
-        for v in value:
-            yield from _strings(v)
+    """Every string value in a JSON value (object keys aren't: Jev doesn't replace references in keys). Iterative:
+    a state nested past the recursion limit made the recursive version raise, and the request fail (run 5)."""
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, str):
+            yield v
+        elif isinstance(v, dict):
+            stack.extend(v.values())
+        elif isinstance(v, list):
+            stack.extend(v)
 
 
 def _b64(s: Any) -> bytes | None:
@@ -130,6 +151,8 @@ def read(content_type: str, body: bytes, images_header: bool) -> ImageRequest | 
         raw = parts[0].data
     else:
         raw = body
+    if raw.count(b",") + raw.count(b"[") + raw.count(b"{") > MAX_JSON_ITEMS:
+        return UNREADABLE                              # before parsing it: see MAX_JSON_ITEMS
     try:
         req = json.loads(raw)
     except (ValueError, RecursionError):
@@ -143,15 +166,18 @@ def read(content_type: str, body: bytes, images_header: bool) -> ImageRequest | 
         return INVALID                                 # an empty `assets` is refused
     for ref, asset in assets.items():
         if (not ref.strip() or len(ref.encode("utf-8")) > MAX_REF_BYTES or not isinstance(asset, dict)
-                or not set(asset) <= ASSET_FIELDS or asset.get("type", "image") != "image"):
+                or not set(asset) <= ASSET_FIELDS or asset.get("type", "image") != "image"
+                or any(not isinstance(asset[k], str) for k in ("part", "format") if k in asset)):
             return INVALID
+        if "part" in asset and "data_base64" in asset:
+            return INVALID                             # two sources: which one Jev reads is unknown (run 5)
     claimed = [a["part"] for a in assets.values() if "part" in a]
     if not multipart and claimed or sorted(claimed) != sorted(files) or len(set(claimed)) != len(claimed):
         return INVALID                                 # each file part belongs to exactly one asset, and only parts
     if len(assets) != 1:
         return SCOPE
     (ref, asset), = assets.items()
-    if "part" in asset:                                # with both, Jev uses the part
+    if "part" in asset:
         data = files[asset["part"]].data
         if "format" in asset and asset["format"] not in FORMATS:
             return INVALID
@@ -164,6 +190,8 @@ def read(content_type: str, body: bytes, images_header: bool) -> ImageRequest | 
     check = check_image(data)
     if not check.ok:
         return INVALID
+    if not data.endswith(_END[check.format]):
+        return SCOPE                                   # bytes after the image: another reader may see more (run 5)
     state, questions = req["state"], req["questions"]
     if not any(ref in s for s in _strings(state)) and not any(ref in s for s in _strings(questions)):
         return INVALID                                 # every asset must be referenced somewhere
@@ -180,5 +208,9 @@ def read(content_type: str, body: bytes, images_header: bool) -> ImageRequest | 
     content = f"<image:sha256:{digest[:32]}>"
     canonical = content if slot is None else {**state, slot: content}
     from ._task import state_text
+    try:
+        text = state_text(canonical)
+    except (ValueError, RecursionError):                # e.g. a state nested past what json.dumps takes
+        return UNREADABLE
     out = {"state": canonical, "model": req["model"], "questions": questions}
-    return ImageRequest(out, data, digest, state_text(canonical))
+    return ImageRequest(out, data, digest, text)
