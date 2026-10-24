@@ -106,6 +106,90 @@ for f in img_crack-jev-1.14.0-s280 img_food101-jev-1.14.0-s280 img_rvl_cdip-jev-
 - One run per question: no seeds, no other encoders against Jev (a replay with another encoder asks Jev about the
   rows that one sends to the teacher and the cache doesn't have).
 
+## Images: through the proxy
+
+The product's own path: `jevstiller/encoders/_image.py` (SigLIP in ONNX), the proxy, its default settings, and a
+stand-in Jev that answers each image with Jev 1.14's recorded answer for it (step 2's cache), at Jev's measured 290 ms.
+
+```bash
+python3 experiments/image_onnx.py --dataset food101             # the ONNX encoder against the PyTorch one, and CPU cost
+python3 experiments/image_proxy_replay.py --dataset food101 --encoder siglip --device cpu --concurrency 3
+python3 experiments/image_proxy_replay.py --dataset food101 --encoder siglip --device cpu --concurrency 3 --min-per-class 10
+python3 experiments/image_proxy_replay.py --dataset rvl_cdip --encoder auto --concurrency 3      # a GPU: so400m
+```
+
+- **The encoder:** ONNX SigLIP matches the PyTorch model step 2 used (cosine 0.99999 on 300 images), so step 2's
+  numbers carry over. It costs ~125 ms per image on 4 CPU threads; OpenAI CLIP B/32 40–55 ms. The int8 versions save
+  25–35% but drift (cosine 0.97–0.99), so they aren't used.
+- **Through the proxy, on CPU** (`siglip`, ONNX; Food-101, 6,444 photos, 2026-10-18):
+
+| `min_samples_per_class` | First local answer | Local share, all | Local share, last 1,000 | Agreement of local answers | Local p50 |
+|---|---:|---:|---:|---:|---:|
+| 50 (default) | request 4,438 | 0.9% | 3% | 70% (60 answers) | 100 ms |
+| 10 | request 4,117 | 8.4% | 23% | 98.0% | 103 ms |
+
+  Requests Jev answered took ~390 ms: Jev's 290 ms, plus the image's encoding, which is done before forwarding.
+  With the default, the first student defers every class with fewer than 50 examples, so on 101 classes it
+  answers almost nothing for thousands of requests. The guarantee covers all requests: 18 local disagreements in 6,444
+  are 0.3%, inside the 2% budget, even though they are 30% of the few local answers. 425 requests went to Jev
+  unrecorded while the image encoder was busy (`overloaded`).
+- **Through the proxy, on a GPU** (`images = "auto"`: SigLIP so400m in PyTorch on an RTX 3090, 2026-10-20). The
+  encoder matches the comparison's so400m (cosine 0.99999) and takes ~33 ms an image (~21 ms batched, ~2 GB):
+
+| Question | `min_samples_per_class` | First local answer | Local share, all | Local share, last 1,000 | Agreement of local answers | Local p50 |
+|---|---|---:|---:|---:|---:|---:|
+| 101 dishes (6,444 photos) | 50 (default) | request 4,390 | 1.0% | 3.6% | 76% (66 answers) | 41 ms |
+| 101 dishes | 10 | request 3,764 | 10.9% | 26.6% | 96.2% (705 answers) | 42 ms |
+| 16 document types (8,559 pages) | 50 (default) | request 3,661 | 21.0% | 38.2% | 97.9% (1,795 answers) | 54 ms |
+| 16 document types | 10 | request 3,655 | 18.9% | 35.9% | 98.1% (1,621 answers) | 53 ms |
+
+  Requests Jev answered took ~337 ms (~390 on CPU), and only 17–20 per run went to Jev unrecorded as `overloaded`
+  (425 on CPU). Agreement over all requests was 99.6–99.8% in every run. The per-class minimum matters for 101
+  classes and not for 16.
+- This run found a bug, now fixed. A task admitted after several requests (the default admission) was admitted as a
+  text task, so its engine had the text encoder and every training failed.
+
+## Images: which encoder
+
+Eleven image encoders on Jev 1.14's recorded answers, with no Jev call. Only images with a recorded answer are used,
+so every encoder sees the same images and the same answers. Those lean towards the harder images, because step 2's
+loop answered the easy ones itself and never asked Jev about them. The numbers are therefore lower than step 2's;
+the comparison between encoders is what counts. `baselines.py`, 10 fixed splits, Jevstiller's rule (soft labels, the
+bound, the OOD gate), 2026-10-18:
+
+```bash
+python3 experiments/image_embed.py --dataset food101 --encoder siglip-b16-384 --only-cached jev-1.14.0
+python3 experiments/baselines.py --dataset img_food101 --encoder siglip-b16-384 --seeds 10 --test-size 1000
+python3 experiments/image_compare.py                                                 # the table
+python3 experiments/image_onnx.py --only siglip-b16,clip-b32-openai,siglip-b16-384    # CPU cost
+```
+
+| Encoder | Crack or not | 101 dishes | 16 document types | CPU ms/image (ONNX, 4 threads) |
+|---|---:|---:|---:|---:|
+| CLIP B/32, OpenAI (`clip`) | 78% ± 10 | 30% ± 3 | 20% ± 2 | 41 |
+| CLIP B/32, LAION | 86% ± 4 | 31% ± 3 | 20% ± 2 | – |
+| DINOv2-small | 87% ± 4 | 29% ± 4 | 12% ± 2 | – |
+| DINOv2-base | 85% ± 9 | 34% ± 4 | 15% ± 2 | 163 |
+| **SigLIP B/16, 224 px (`siglip`)** | 84% ± 6 | **42% ± 4** | 23% ± 3 | 132 |
+| SigLIP 2 B/16, 224 px | 86% ± 5 | 41% ± 4 | 21% ± 3 | 127 |
+| SigLIP B/16, 384 px | 85% ± 6 | 41% ± 4 | 36% ± 3 | 535 |
+| SigLIP L/16, 256 px | 88% ± 5 | 39% ± 4 | 32% ± 2 | 596 |
+| **SigLIP so400m, 384 px** | 88% ± 6 | 35% ± 5 | **47% ± 2** | ~3,600 in PyTorch (no ONNX export); 33 on an RTX 3090 |
+| DINOv3 ViT-S/16 † | 88% ± 5 | 29% ± 3 | 14% ± 2 | 45 |
+| DINOv3 ViT-B/16 † | 89% ± 4 | 36% ± 5 | 18% ± 2 | 130 |
+
+† DINOv3 is under Meta's DINOv3 License, accepted for this test only (it is accepted by using the weights, even through
+the ungated ONNX copies). It isn't one of the product's encoders: it would need the license copy, a "Built with
+DINOv3" notice and acceptance of its terms, and it didn't win a scenario.
+
+Coverage is held-out, at 98% agreement, mean ± sd over the splits; the worst split's disagreement stayed within
+1.2–2.8%. Read together:
+- **A simple visual question** (crack or not): every encoder lands within the noise (78–89%), so the cheapest one
+  will do.
+- **Photos of things** (dishes): the 224 px SigLIPs are best, and bigger models are not better.
+- **Documents:** resolution and size matter most: 23% at 224 px, 36% at 384 px, 47% with so400m. On CPU the 384 px
+  model costs 535 ms per image, more than Jev's ~300 ms, so it saves calls but not time; so400m needs a GPU.
+
 ## Dry-run results (oracle teacher, Banking77, 77 classes, target agreement 98%)
 
 Upper bound on distillation with a perfect teacher; 11,083 streamed rows, 2,000 held out.

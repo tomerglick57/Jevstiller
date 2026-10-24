@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Questions about images can be learned (experimental, off by default).** Jev 1.14 accepts images; until now the proxy only forwarded them.
+  - With `[encoder] images = "auto"` (or `--images auto`, `JEVSTILLER_IMAGES`) and `pip install "jevstiller[images]"` (plus `jevstiller[gpu]` on a GPU), a question about one image becomes an image task and is answered locally once trained, under the same guarantee.
+  - In scope: one image per request, as the whole state or one top-level field of it, referenced nowhere else, with `choice` and yes/no questions. Everything else goes to Jev unchanged (`jevstiller_unrouted_total{reason="image_scope"}`, and `image_invalid` for requests Jev would refuse).
+  - `auto` picks the best overall of eleven encoders compared on Jev's answers, SigLIP so400m, on a GPU (PyTorch, ~33 ms an image on an RTX 3090), and SigLIP B/16 on CPU (ONNX, ~130 ms on 4 cores), where so400m would be slower than Jev. Any of `siglip-so400m`, `siglip-384`, `siglip-large`, `siglip`, `clip` or `onnx:<repo>` can be named instead. The image encoder has its own queue, so image traffic doesn't slow text tasks.
+  - The proxy checks each image against Jev's rules before answering locally, decodes nothing before checking its header against Jev's limits, and never stores image bytes: a row keeps the image's SHA-256 and its embedding.
+  - Docker: `--build-arg EXTRAS=images --build-arg PRELOAD_IMAGES=siglip`.
+  - `jevstiller[gpu]` now needs transformers 4.37 or later (the first with SigLIP). Images are preprocessed in Pillow, so torchvision isn't needed.
+  - Python API: `TaskManager(image_encoder=...)`, `route(..., modality="image")`, `TaskInfo.modality`, `Routing.modality`, `jevstiller.encoders.load_image_encoder`, `image_choice` and `IMAGE_MODELS`.
+
 ## 0.5.3 — 2026-10-22
 
 Security: the proxy no longer trusts the root of eMudhra's compromised intermediate CA keys when it connects to Jev (certifi 2026.10.19). The image is rebuilt on Debian's fixes and no longer contains pip. Also a metric for image traffic, and new docs: comparison pages, a savings calculator and re-measured benchmarks.

@@ -19,7 +19,7 @@ What Jevstiller works with, what callers see, and what a version number promises
   - With the default settings that takes each task at least about 3,500 requests after the switch: about 2,500 for its first calibration rows (500 at the 20% calibration share), then 1,000 in shadow. A quiet task stays on Jev for longer.
   - Tasks asked for `jev-1.13.0` by name keep their students. The requested model is part of the task, so moving a caller from `jev-latest` to `jev-1.13.0` starts new tasks from nothing.
 - **Jev 1.14's experimental features** (the `TypeSafe-Danger-Zone-*` headers, which the proxy forwards unchanged):
-  - images are forwarded and never learned from (below);
+  - images are forwarded, unless `[encoder] images` is set; then a question about one image can be learned (below);
   - `box` questions are forwarded, like `score`;
   - with the long-context header the student still reads only the first 256 tokens ([coverage](coverage.md)).
 - **A response the proxy doesn't recognise:** it is returned to the caller unchanged and not recorded.
@@ -35,7 +35,7 @@ The proxy never fails a request that Jev would have answered.
 | `POST /v1/systemone` whose questions are `choice` and yes/no (`noul`) questions of trained tasks | The same: answered locally when every question clears its task's policy. A `noul` answer is `{"type": "noul", "noul": p}` with the student's probability, on Jev's side of your cut-off (`noul_cutoffs`, default 0.5) on at least `target_agreement` of requests. |
 | `POST /v1/systemone` with other question types (`score`, …), a `noul` question with fields beyond `instructions` and `criteria`, or any `noul` question when `noul_cutoffs` is empty | Forwarded. The request's choice and noul answers are still recorded. |
 | `POST /v1/systemone` the proxy doesn't understand: invalid JSON, unknown top-level fields, no bearer key, more than `max_questions` distinct questions | Forwarded as is; nothing is recorded |
-| `POST /v1/systemone` with images (Jev 1.14): a multipart body, or `assets` in the JSON | Forwarded as is; nothing is recorded. With the `TypeSafe-Danger-Zone-Images: true` header the body may be up to `max_image_body_mb` (32 MiB, Jev's own limit). Without the header the usual `max_body_mb` (4 MiB) applies; Jev refuses an image request without it anyway. |
+| `POST /v1/systemone` with images (Jev 1.14): a multipart body, or `assets` in the JSON | With `[encoder] images` set and a request in scope (one image, as the whole state or one top-level field of it, referenced nowhere else; `choice` and yes/no questions): routed like a text request, as an image task, answered locally once trained. Otherwise forwarded as is, and nothing is recorded. With the `TypeSafe-Danger-Zone-Images: true` header the body may be up to `max_image_body_mb` (32 MiB, Jev's own limit). Without the header the usual `max_body_mb` (4 MiB) applies; Jev refuses an image request without it anyway. |
 | Any other path or method (`GET /v1/models`, …) | Forwarded unchanged |
 | `/healthz`, `/readyz`, `/metrics`, `/jevstiller/*` | Served by the proxy, never forwarded |
 

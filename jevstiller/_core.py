@@ -467,6 +467,10 @@ class Jevstiller:
         n = len(texts)
         stexts = [state_text(t) for t in texts] if stexts is None else list(stexts)
         X = self.encoder.encode(stexts) if X is None else X
+        if X.ndim != 2 or X.shape[1] != self.encoder.dim:
+            # embeddings from another encoder (an image task's engine built with the text encoder): rows that can
+            # never train. Fail here, where the proxy forwards the request, not later in every training run
+            raise ValueError(f"embeddings of dimension {X.shape[-1]}, but this task's encoder has {self.encoder.dim}")
         with self._state:                                   # one consistent snapshot of the routing state
             mode, prod, shadow, audit_rate = self.mode, self._prod, self._shadow, self.audit_rate
             draws = self.rng.random(n)

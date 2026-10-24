@@ -103,6 +103,9 @@ def main() -> None:
     ap.add_argument("--rare-classes", default=None, choices=["wait", "defer"],
                     help="classes below --min-per-class: train and defer them to the teacher (Config's default), "
                          "or wait for them")
+    ap.add_argument("--only-cached", action="store_true",
+                    help="image datasets: only the images with a recorded answer from --jev-model, so any encoder can "
+                         "be compared on the same images without a Jev call")
     ap.add_argument("--jev-model", default=None,
                     help="the Jev model asked (and cached separately): jev-1.13.0 for text, jev-1.14.0 for images")
     ap.add_argument("--max-jev-calls", type=int, default=0,
@@ -121,6 +124,10 @@ def main() -> None:
     ds = (IMAGE_LOADERS if images else LOADERS)[a.dataset]()
     rng = np.random.default_rng(a.seed)
     rows = list(ds["rows"])
+    if a.only_cached and images:
+        cached = {json.loads(line)["key"].split("\t", 1)[1]
+                  for line in open(cache_path(a.dataset.removeprefix("img_"), model))}
+        rows = [r for r in rows if r[0] in cached]
     rng.shuffle(rows)
     ev, stream = rows[:a.eval_size], rows[a.eval_size:]
     if a.limit:

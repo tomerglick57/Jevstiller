@@ -80,7 +80,7 @@ Agreement is with Jev, not accuracy.
 | `jevstiller_questions_total{outcome}` | Questions answered locally, or why they went to Jev (`co_deferred`, `key_unverified`, `not_admitted`, `unsupported`, …) |
 | `jevstiller_upstream_responses_total{status}` | Jev's `2xx` / `4xx` / `5xx`, or the proxy's own: `timeout` (504), `unreachable` / `error` (502), `invalid_url` (400), `backoff` (429 during `retry-after`), `overload` (503). `retried` counts the one retry of a connection Jev had just closed. |
 | `jevstiller_upstream_duration_seconds` | Jev latency as seen by the proxy |
-| `jevstiller_unrouted_total{reason}` | `/v1/systemone` requests forwarded without routing or recording: `images` (Jev 1.14 requests with images), `not_understood`, `no_choice`, `too_many_questions`, `overloaded`, `proxy_error` |
+| `jevstiller_unrouted_total{reason}` | `/v1/systemone` requests forwarded without routing or recording: `images` (Jev 1.14 requests with images, when `[encoder] images` is unset), `image_scope` (with it set: outside what is learned, e.g. several images), `image_invalid` (breaks one of Jev's image rules: Jev refuses it too), `image_unreadable`, `not_understood`, `no_choice`, `too_many_questions`, `overloaded`, `proxy_error` |
 | `jevstiller_rejected_total{reason}` | Refused by the proxy: `network`, `token`, `duplicate_auth`, `path`, `body`, `large_bodies` (503: more than `max_large_bodies` image requests above `max_body_mb` at once) |
 | `jevstiller_tasks`, `jevstiller_tasks_loaded`, `jevstiller_student_memory_bytes` | Task counts and memory |
 | `jevstiller_training_jobs{state}` | `running` / `queued` |
@@ -127,7 +127,7 @@ Events worth watching (logger `jevstiller`):
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
-| Nothing is answered locally | Tasks not admitted yet (`admit_after`), the first student still collecting (`status` shows what it waits for), or the caller's key not yet accepted | `jevstiller admin tasks` / `status <key>`; wait, or lower `admit_after` (`[manager]`) or `min_train_samples` (`[engine]`) |
+| Nothing is answered locally | Tasks not admitted yet (`admit_after`), the first student still collecting (`status` shows what it waits for), most classes still below `min_samples_per_class` (a question with many classes needs about 62 requests per class), or the caller's key not yet accepted | `jevstiller admin tasks` / `status <key>`; wait, or lower `admit_after` (`[manager]`) or `min_train_samples` / `min_samples_per_class` (`[engine]`) |
 | A task stopped answering locally | Fallback: audit agreement confidently below target, or Jev's model changed | `status <key>` events; it retrains by itself on answers from the fallback on (`since_id`), usually within a few thousand requests. `mode <key> teacher_only` to hold it while you investigate. `mode <key> auto` ends a fallback by hand (serving the old student again). |
 | "classes below N … blocking" | Rare classes with `rare_classes = "wait"`, or fewer than two classes with enough samples yet | Wait, or use the default, `rare_classes = "defer"` (`[engine]`) |
 | Callers get 401 from the proxy | `access_token` set and the caller doesn't send `x-jevstiller-token` | Add the header in the SDK: `TypeSafeClient(headers={"x-jevstiller-token": ...})` |

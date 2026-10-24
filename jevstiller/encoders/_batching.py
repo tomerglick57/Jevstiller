@@ -46,7 +46,7 @@ class BatchingEncoder:
         self._worker: threading.Thread | None = None
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
-        texts = [t[:self.max_chars] for t in texts]
+        texts = [t[:self.max_chars] if isinstance(t, str) else t for t in texts]   # image bytes stay whole
         if not texts:
             return np.zeros((0, self.dim), np.float32)
         if len(texts) >= self.max_batch:

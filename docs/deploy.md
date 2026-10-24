@@ -75,6 +75,38 @@ Start from `deploy/jevstiller.toml`. Every key is in [configuration.md](configur
 
 Secrets (`admin_token`, `access_token`) belong in files or environment variables, not flags (flags show in the process list). `jevstiller config` prints the effective settings with secrets redacted.
 
+### Questions about images (experimental)
+
+Off by default: requests with images (Jev 1.14) are forwarded. To learn them:
+
+```bash
+pip install "jevstiller[gpu,images]"        # on a GPU; "jevstiller[images]" on CPU
+jevstiller serve --images auto              # or [encoder] images = "auto"; JEVSTILLER_IMAGES=auto
+```
+
+`auto` takes the best overall model, SigLIP so400m, on a GPU, and SigLIP B/16 on CPU, where so400m takes ~3.6 s an
+image, more than Jev. Name a model to pin it ([configuration](configuration.md)).
+
+For Docker, build with the image encoder baked in, then turn it on:
+
+```bash
+docker build -t jevstiller --build-arg EXTRAS=images --build-arg PRELOAD_IMAGES=siglip .
+docker run -e JEVSTILLER_IMAGES=siglip -p 8080:8080 -v jevstiller-data:/data jevstiller
+```
+
+- **What is learned:** one image per request, as the whole state or one top-level field of it, with `choice` and yes/no
+  questions. Everything else is forwarded ([coverage](coverage.md)).
+- **Many classes start slowly:** a class is answered locally only once the student has 50 of Jev's answers for it
+  (`min_samples_per_class`), about 62 × N requests for N equally common classes. Over 6,444 requests, 101 dishes
+  reached 3.6% local over the last 1,000 (27% with `min_samples_per_class = 10`, but the local answers then agreed
+  only 96% with Jev); over 8,559, 16 document types reached 38%. Text questions with many classes behave the same.
+- **Speed:** on an RTX 3090, so400m takes ~33 ms per image (~21 ms batched) and ~2 GB of GPU memory; on 4 CPU cores
+  SigLIP B/16 takes ~130 ms.
+  Jev takes ~300 ms, text ~10 ms.
+  The image encoder has its own queue, so image traffic doesn't slow text tasks. Requests that would wait for it longer
+  than `max_encoder_wait_ms` go to Jev unrecorded, so on a busy CPU an image task learns slowly; a GPU is much faster.
+- **Experimental:** TypeSafe calls Jev's images not for production, and may change their format between releases.
+
 ### TLS and reverse proxies
 
 - **Built in:** `ssl_certfile` + `ssl_keyfile`. Callers then use `https://`, and need to trust the certificate.

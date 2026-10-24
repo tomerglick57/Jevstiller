@@ -17,7 +17,8 @@ POST /v1/systemone  {state, model, questions}  +  Authorization: Bearer <caller'
         │
         ├─ access checks (network, token, one Authorization header, body limit) ── fail ─► 4xx, never forwarded
         ├─ not understood (bad JSON, unknown top-level fields, no key, no choice or noul question,
-        │  more than max_questions distinct questions, images) ────────────────────► forward as is, record nothing
+        │  more than max_questions distinct questions, images unless [encoder] images
+        │  is set) ───────────────────────────────────────────────────────────────► forward as is, record nothing
         │
         ├─ key NOT accepted by Jev yet ─► forward the whole request first; if Jev answers it (2xx, a valid
         │                                 systemone answer), the key becomes accepted and the choice answers

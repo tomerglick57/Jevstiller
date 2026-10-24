@@ -1,6 +1,9 @@
 # Jevstiller drop-in Jev proxy.
 #   docker build -t jevstiller .                                   # CPU, ONNX Runtime, bge-small preloaded
 #   docker build -t jevstiller --build-arg PRELOAD_ENCODER= .      # no preload (downloads on first start)
+#   docker build -t jevstiller --build-arg EXTRAS=images --build-arg PRELOAD_IMAGES=siglip .
+#                                                                  # questions about images (experimental); then run
+#                                                                  # with -e JEVSTILLER_IMAGES=siglip
 #   docker run -p 8080:8080 -v jevstiller-data:/data jevstiller
 # GPU: see docs/deploy.md (EXTRAS=gpu on a CUDA base image).
 ARG PYTHON=3.12
@@ -22,6 +25,7 @@ RUN uv export --locked --no-emit-project $(for e in $(echo "$EXTRAS" | tr ',' ' 
 
 FROM python:${PYTHON}-slim
 ARG PRELOAD_ENCODER=small
+ARG PRELOAD_IMAGES=
 RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin jevstiller \
  && mkdir -p /data /models && chown jevstiller:jevstiller /data && chmod 700 /data
 COPY --from=build /wheels /wheels
@@ -39,6 +43,10 @@ ENV JEVSTILLER_DATA_DIR=/data \
 RUN if [ -n "$PRELOAD_ENCODER" ]; then \
       python -c "from jevstiller import load_encoder; load_encoder('${PRELOAD_ENCODER}', backend='onnx', device='cpu')"; \
     else chown jevstiller:jevstiller /models; fi && chmod -R a+rX /models   # else: downloaded at first start
+# The image encoder too, when asked for (needs EXTRAS=images). Images stay off until JEVSTILLER_IMAGES is set.
+RUN if [ -n "$PRELOAD_IMAGES" ]; then \
+      python -c "from jevstiller.encoders import load_image_encoder; load_image_encoder('${PRELOAD_IMAGES}', device='cpu')" \
+      && chmod -R a+rX /models; fi
 # With a baked-in encoder, never contact the model hub at runtime (empty, i.e. off, when nothing was preloaded:
 # then the default encoder downloads on first start).
 ENV JEVSTILLER_ENCODER=${PRELOAD_ENCODER:-small} \
