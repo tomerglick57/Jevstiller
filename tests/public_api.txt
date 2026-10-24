@@ -231,7 +231,7 @@ module jevstiller.server
       def hash(self, key: 'str | None') -> 'str | None'
       def revoke(self, kh: 'str | None') -> 'None'
       def verified(self, kh: 'str | None') -> 'bool'
-  class jevstiller.server.ProxySettings(upstream: 'str' = 'https://api.typesafe.ai', upstream_timeout_s: 'float' = 9.0, max_upstream_inflight: 'int' = 256, tenancy: 'str' = 'shared', key_ttl_s: 'float' = 3600.0, price_per_mtok: 'float' = 0.042, tenant_map: 'dict[str, str]' = <factory>, access_token: 'str | None' = None, allow_networks: 'list[str]' = <factory>, max_body_bytes: 'int' = 4194304, max_image_body_bytes: 'int' = 33554432, max_large_bodies: 'int' = 16, max_questions: 'int' = 32, max_encoder_wait_ms: 'float' = 200.0) -> None
+  class jevstiller.server.ProxySettings(upstream: 'str' = 'https://api.typesafe.ai', upstream_timeout_s: 'float' = 9.0, max_upstream_inflight: 'int' = 256, tenancy: 'str' = 'shared', key_ttl_s: 'float' = 3600.0, price_per_mtok: 'float' = 0.042, tenant_map: 'dict[str, str]' = <factory>, access_token: 'str | None' = None, allow_networks: 'list[str]' = <factory>, max_body_bytes: 'int' = 4194304, max_image_body_bytes: 'int' = 33554432, max_large_bodies: 'int' = 16, max_image_reads: 'int' = 2, body_timeout_s: 'float' = 120.0, max_questions: 'int' = 32, max_encoder_wait_ms: 'float' = 200.0) -> None
       field upstream: str
       field upstream_timeout_s: float
       field max_upstream_inflight: int
@@ -244,6 +244,8 @@ module jevstiller.server
       field max_body_bytes: int
       field max_image_body_bytes: int
       field max_large_bodies: int
+      field max_image_reads: int
+      field body_timeout_s: float
       field max_questions: int
       field max_encoder_wait_ms: float
       def tenant_for(self, kh: 'str | None') -> 'str'

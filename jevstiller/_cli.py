@@ -160,7 +160,8 @@ def _serve(a: argparse.Namespace) -> None:
 
     app = create_app(manager, settings, KeyRegistry(salt, s.key_ttl_s), admin_token=s.admin_token,
                      metrics_public=s.metrics_public, ready=ready,
-                     closers=[lambda: scheduler.shutdown(wait=True, cancel_futures=True), encoder.close])
+                     closers=[lambda: scheduler.shutdown(wait=True, cancel_futures=True), encoder.close,
+                              *([image_encoder.close] if image_encoder is not None else [])])
     app.state.metrics.gauge("jevstiller_data_dir_writable", "1 if the data directory accepts writes (0: disk full?)",
                             fn=lambda: [((), 1.0 if writable() else 0.0)])
     log.info("jevstiller serving on %s:%d, upstream %s, tenancy %s, admin API %s", s.host, s.port,
