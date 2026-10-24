@@ -285,6 +285,7 @@ class Jevstiller:
         self._shadow: Bundle | None = self._load(shadows[-1]) if shadows else None
         if self._shadow is not None:
             self._shadow_started_id = self._shadow.meta.get("shadow_from_id", self.store.max_id())
+        self._drop_other_encoders()
         if any(b is not None and not self._calibrated(b) for b in (self._prod, self._shadow)):
             self._retrain_requested = True               # the confidence floor changed while the task was unloaded
         versions = self.registry.versions()             # the last training, whatever became of its result
@@ -302,7 +303,8 @@ class Jevstiller:
         # A confirmed drift restarts the training data at the row where it was detected (see _check_drift);
         # a fallback that no promotion or operator has ended since survives a restart.
         drift = self.store.last_event(("fallback",))
-        self._since_id: int = drift.get("since_id", 0) if drift else 0
+        switch = self.store.last_event(("encoder_changed",))   # rows of another encoder are another lineage too
+        self._since_id: int = max(drift.get("since_id", 0) if drift else 0, switch.get("since_id", 0) if switch else 0)
         last = self.store.last_event(("fallback", "promoted", "fallback_cleared"))
         if last and last["kind"] == "fallback" and self._prod is not None:
             self.forced_fallback = self._retrain_requested = True
@@ -318,6 +320,28 @@ class Jevstiller:
         b = self.registry.load(name)
         b.student.reorder(b.meta.get("labels") or self.labels, self.labels)
         return b
+
+    def _fits(self, b: Bundle) -> bool:
+        """Trained on this encoder's embeddings."""
+        return b.meta.get("encoder") in (None, self.encoder.id) and b.student.W.shape[0] == self.encoder.dim
+
+    def _drop_other_encoders(self) -> None:
+        """A production or shadow student trained with another encoder isn't served, and the task learns again
+        from rows of this one. Kept, it failed every request with a different dimension (forwarded, nothing recorded,
+        so the task never retrained), or answered from embeddings it wasn't trained on (security audit run 5)."""
+        stale = [b for b in (self._prod, self._shadow) if b is not None and not self._fits(b)]
+        if not stale:
+            return
+        log.warning("task %s: %s trained with another encoder (%s); learning again with %s", self.task.name,
+                    ", ".join(b.name for b in stale), stale[0].meta.get("encoder"), self.encoder.id)
+        if self._prod in stale:
+            self._prod = None
+        if self._shadow in stale:
+            self._shadow = None
+        last = self.store.last_event(("encoder_changed",))
+        if not last or last.get("encoder") != self.encoder.id:
+            self.store.event("encoder_changed", encoder=self.encoder.id, versions=[b.name for b in stale],
+                             since_id=self.store.max_id())
 
     # ---- teacher lineage ---------------------------------------------------------
     def _observe_teacher(self, models: Sequence[str]) -> None:
@@ -1035,6 +1059,8 @@ class Jevstiller:
             if self.registry.state(version) is None:
                 raise ValueError(f"unknown version {version!r}")
             bundle = self._load(version)
+            if not self._fits(bundle):
+                raise ValueError(f"version {version!r} was trained with another encoder")
             self.registry.promote(version)
             with self._state:
                 self._prod = bundle
@@ -1048,7 +1074,7 @@ class Jevstiller:
             target = self.registry.rollback()
             bundle = self._load(target) if target else None
             with self._state:
-                self._prod = bundle
+                self._prod = bundle if bundle is not None and self._fits(bundle) else None
             self.store.event("rollback", to=target)
             return target
 
