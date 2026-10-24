@@ -562,6 +562,14 @@ class SampleStore:
     def max_id(self) -> int:
         return self.db.execute("SELECT COALESCE(MAX(id),0) FROM samples").fetchone()[0]
 
+    def split_state(self):
+        """Where the calibration draw has got. Read it after `close` (pending rows draw as they are written)."""
+        return self._split_rng.getstate()
+
+    def set_split_state(self, state) -> None:
+        """Continue the calibration draw from `split_state` of an earlier store of this task, before any insert."""
+        self._split_rng.setstate(state)
+
     def answered(self, task_version: str, teacher_model: str, after_id: int, upto_id: int | None = None) -> int:
         """Rows with an answer from `teacher_model` after row `after_id` (up to `upto_id`): what a retrain has
         new to learn from. A row has a teacher model only if the teacher answered it. The split filter lets

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -256,10 +258,10 @@ class Jevstiller:
         self.hash_key = hash_key                # keys the per-row text hash (HMAC) when given
         self.dir = Path(data_dir) / task.name
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction,
-                                 split_seed=f"{self.cfg.seed}:{task.version}")
+        audit_seed, split_seed = self._draw_seeds(task)
+        self.store = SampleStore(self.dir / "samples.sqlite", self.cfg.calib_fraction, split_seed=split_seed)
         self.registry = Registry(self.dir / "versions", keep=self.cfg.keep_versions)
-        self.rng = np.random.default_rng(self.cfg.seed)
+        self.rng = np.random.default_rng(audit_seed)
         self._state = threading.Lock()
         self._maint = threading.Lock()
         self.forced_fallback = False
@@ -774,13 +776,29 @@ class Jevstiller:
                 return self._finish_train(raise_errors=True)
             return self._start_train(wait=True, raise_errors=True)
 
+    def _draw_seeds(self, task: Task) -> tuple[int, str]:
+        """Seeds of the audit draw and of the per-request calibration split. With a hash key (a server's
+        deployment salt) they are keyed with it, so a caller who knows the question can't compute which of its
+        requests are audited or held out for calibration; without one, the config seed, so a replay draws the same
+        way on any machine (security audit run 5)."""
+        if self.hash_key is None:
+            return self.cfg.seed, f"{self.cfg.seed}:{task.version}"
+
+        def mac(label: str) -> bytes:
+            return hmac.new(self.hash_key, f"{label}:{self.cfg.seed}:{task.version}".encode(), hashlib.sha256).digest()
+        return int.from_bytes(mac("audit")[:8], "big"), mac("split").hex()
+
     def _carry_state(self) -> dict:
         """In-memory progress worth keeping across an unload and reload of this task (TaskManager keeps it):
-        audit answers towards the next drift check, the recent rate of teacher calls, and how far the pruning of old
-        versions and rows has got (so a reload doesn't redo it)."""
+        audit answers towards the next drift check, the recent rate of teacher calls, how far the pruning of old
+        versions and rows has got (so a reload doesn't redo it), and where the audit draw has got. Without the last,
+        a task reloaded before every request (more active tasks than `max_loaded`, or another caller cycling its own)
+        drew the same first number every time, and was never audited (security audit run 5). The split draw's
+        position is added by the manager once the store has closed (`SampleStore.split_state`)."""
         with self._state:
             return {"audit_new": self._audit_new, "teacher_rate": self._teacher_rate, "pruned": self._pruned,
-                    "rows_unpruned": self._rows_unpruned, "prune_more": self._prune_more}
+                    "rows_unpruned": self._rows_unpruned, "prune_more": self._prune_more,
+                    "rng": self.rng.bit_generator.state}
 
     def _restore_state(self, carry: dict) -> None:
         with self._state:
@@ -790,6 +808,10 @@ class Jevstiller:
             if carry.get("rows_unpruned") is not None:
                 self._rows_unpruned = carry["rows_unpruned"] + (self._rows_unpruned or 0)
             self._prune_more = carry.get("prune_more", self._prune_more)
+            if "rng" in carry:
+                self.rng.bit_generator.state = carry["rng"]
+        if "split" in carry:                            # before any row is written: nothing draws yet
+            self.store.set_split_state(carry["split"])
 
     def _training_priority(self) -> float:
         """How much training this task could save: its recent rate of teacher calls (decayed, per minute)."""
