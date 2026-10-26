@@ -820,6 +820,10 @@ class TaskManager:
                 self._carry[key] = e._carry_state()
                 self.unloads += 1
             e.close()
+            with self._lock:                             # after close: pending rows have drawn their splits
+                carry = self._carry.get(key)
+                if carry is not None:
+                    carry["split"] = e.store.split_state()
         return True
 
     def delete(self, key: str, reason: str = "requested") -> bool:

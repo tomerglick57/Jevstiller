@@ -103,9 +103,14 @@ class ProxySettings:
     max_body_bytes: int = 4 * 2**20                        # larger requests get 413 (Jev's context is 64k tokens,
                                                            # 262k with long context: about 1 MiB of English)
     max_image_body_bytes: int = 32 * 2**20                 # except POST /v1/systemone with Jev's images header: up
-                                                           # to this (Jev's own limit), forwarded and never parsed
+                                                           # to this (Jev's own limit); read only with an image
+                                                           # encoder, and only for a key Jev has accepted
     max_large_bodies: int = 16                             # such bodies above max_body_bytes held at once; more get
                                                            # 503 + retry-after (the SDK retries)
+    max_image_reads: int = 2                               # image requests read (parsed, header-checked) at once;
+                                                           # more are forwarded as `overloaded`
+    body_timeout_s: float = 120.0                          # a request body must arrive within this; slower ones get
+                                                           # 408 (0 = no limit)
     max_questions: int = 32                                # distinct choice questions routed per request
     max_encoder_wait_ms: float = 200.0                     # encoder busier than this: forward (0 = never)
 
@@ -303,6 +308,7 @@ class Proxy:
         self.metrics = metrics or ProxyMetrics(MetricsRegistry())
         self._upstream_slots = settings.max_upstream_inflight   # event-loop only: no lock needed
         self._routing = 0                                       # requests inside _route (event loop only)
+        self._image_reads = 0                                   # image requests being read (event loop only)
         self.stats = {"local": 0, "forwarded": 0, "passthrough": 0, "errors": 0}
 
     # ---- upstream -----------------------------------------------------------------
@@ -325,7 +331,9 @@ class Proxy:
             try:
                 # raw bytes: header values may hold any byte h11 accepts (obs-text); httpx would encode str
                 # values as ASCII and fail on them
-                drop = FORWARD_DROP | _nominated(request.headers.raw)
+                # a caller's Connection header can't drop the bearer the proxy took its identity from: the key
+                # would be accepted for a request Jev authenticated some other way (security audit run 5)
+                drop = FORWARD_DROP | (_nominated(request.headers.raw) - {"authorization"})
                 headers = [(k, v) for k, v in request.headers.raw if k.decode("latin-1").lower() not in drop]
                 headers.append(UPSTREAM_ENCODINGS)
                 for attempt in (0, 1):
@@ -416,7 +424,19 @@ class Proxy:
             # images (Jev 1.14): a multipart body, `assets`, or a body only a request with images may send
             if self.manager.image_encoder is None:
                 return await self._plain_forward(request, body, kh, "images", t0, log_rec)
-            read = await anyio.to_thread.run_sync(_images.read, ctype, body, _images_requested(request.headers.raw))
+            if not (key and self.keys.verified(kh)):
+                return await self._image_unverified(request, body, kh, t0, log_rec)
+            if self._image_reads >= self.settings.max_image_reads:
+                return await self._plain_forward(request, body, kh, "overloaded", t0, log_rec)
+            self._image_reads += 1
+            try:
+                read = await anyio.to_thread.run_sync(_images.read, ctype, body,
+                                                      _images_requested(request.headers.raw))
+            except Exception as e:                      # a mistake here forwards the request, never fails it
+                log.warning("image request not readable (%s); forwarding", type(e).__name__)
+                read = _images.UNREADABLE
+            finally:
+                self._image_reads -= 1
             if isinstance(read, str):                   # not one an image task can take: Jev decides
                 return await self._plain_forward(request, body, kh, read, t0, log_rec)
             image, req = read, read.req
@@ -551,13 +571,22 @@ class Proxy:
         return True
 
     async def _plain_forward(self, request: Request, body: bytes, kh: str | None, reason: str, t0: float,
-                             log_rec: dict) -> Response:
-        """Forward without routing or recording anything."""
+                             log_rec: dict, accept: bool = False) -> Response:
+        """Forward without routing or recording anything (`accept`: a usable answer accepts the caller's key)."""
         self.stats["passthrough"] += 1
         self.metrics.unrouted.inc(reason)               # e.g. how much image traffic passes through (Jev 1.14)
         resp = await self.forward(request, body, kh)
+        if accept and kh is not None and _systemone_answer(resp) is not None:
+            self.keys.accept(kh)
         log_rec["reason"] = reason
         return self._upstream_reply(resp, None, t0, log_rec)
+
+    async def _image_unverified(self, request: Request, body: bytes, kh: str | None, t0: float,
+                                log_rec: dict) -> Response:
+        """An image request from a key Jev hasn't accepted: forwarded unread. Reading an image body (parsing it,
+        checking the image's header) costs far more than reading a text request, and nothing had checked the key
+        before it (security audit run 5). Jev's answer accepts the key; its next image request is read."""
+        return await self._plain_forward(request, body, kh, "key_unverified", t0, log_rec, accept=True)
 
     def _upstream_reply(self, resp: httpx.Response | Response, reasons: dict[str, str] | None, t0: float,
                         log_rec: dict) -> Response:
@@ -747,6 +776,10 @@ class _Busy(Exception):
     """`max_large_bodies` requests with a body above `max_body_bytes` are already held."""
 
 
+class _SlowBody(Exception):
+    """The body didn't arrive within `body_timeout_s`."""
+
+
 _BAD_PATH_CHARS = re.compile(r"[\x00-\x1f\x7f?#\\]|%(?:2e|2f|5c)|^//", re.IGNORECASE)
 # control characters, ? and # (decoded from %xx), backslashes, dot, slash or backslash still percent-encoded after
 # one decoding (%252e arrives as %2e), and a leading // (a scheme-relative URL to httpx): none appear in Jev's API,
@@ -761,9 +794,11 @@ class AccessMiddleware:
     Authorization header, no `.`/`..` path segments, and the body limit, enforced on the declared
     Content-Length and again while the body streams in (chunked bodies included).
 
-    A request with images may be larger (`_body_limit`). While its body is above `max_body_bytes` it holds one of
-    `max_large_bodies` slots, until its response is sent: the larger limit is 8 times the usual one by default,
-    and without a cap 100 slow uploads could hold 3 GiB.
+    A request with images may be larger (`_body_limit`). Once more than `max_body_bytes` of its body has arrived it
+    holds one of `max_large_bodies` slots, until its response is sent: the larger limit is 8 times the usual one by
+    default, and without a cap 100 slow uploads could hold 3 GiB. Every body must arrive within `body_timeout_s`
+    (408 otherwise): a slot taken on the declared length, before any byte, let 16 connections that sent only
+    headers deny every large request for as long as they stayed open (security audit run 5).
     """
 
     def __init__(self, app, settings: ProxySettings, metrics: ProxyMetrics | None = None):
@@ -826,19 +861,27 @@ class AccessMiddleware:
         if declared > limit:
             return await self._refuse("body", 413, "request body too large", scope, receive, send)
         busy = ("large_bodies", 503, "too many large requests at once; retry shortly")
-        held = declared > usual
-        if held and not self._take_large():
-            return await self._refuse(*busy, scope, receive, send, retry_after=1)
+        held = complete = False
         received = 0
+        timeout = self.settings.body_timeout_s
+        deadline = time.monotonic() + timeout if timeout else None
 
         async def limited_receive():
-            nonlocal received, held
-            message = await receive()
+            nonlocal received, held, complete
+            if deadline is None or complete:            # the body's deadline only (later receives: disconnects)
+                message = await receive()
+            else:
+                try:
+                    with anyio.fail_after(max(0.0, deadline - time.monotonic())):
+                        message = await receive()
+                except TimeoutError:
+                    raise _SlowBody() from None
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
+                complete = complete or not message.get("more_body", False)
                 if received > limit:
                     raise _TooLarge()
-                if received > usual and not held:       # a chunked body past the usual limit
+                if received > usual and not held:       # a slot once the bytes are here, not on the declared length
                     if not self._take_large():
                         raise _Busy()
                     held = True
@@ -849,6 +892,8 @@ class AccessMiddleware:
             await self._refuse("body", 413, "request body too large", scope, receive, send)
         except _Busy:
             await self._refuse(*busy, scope, receive, send, retry_after=1)
+        except _SlowBody:
+            await self._refuse("body_timeout", 408, "request body too slow", scope, receive, send)
         finally:
             if held:
                 self._large -= 1

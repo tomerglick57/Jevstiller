@@ -105,6 +105,8 @@ docker run -e JEVSTILLER_IMAGES=siglip -p 8080:8080 -v jevstiller-data:/data jev
   Jev takes ~300 ms, text ~10 ms.
   The image encoder has its own queue, so image traffic doesn't slow text tasks. Requests that would wait for it longer
   than `max_encoder_wait_ms` go to Jev unrecorded, so on a busy CPU an image task learns slowly; a GPU is much faster.
+- **Keys:** an image request is read only for a key Jev has accepted. A new key's first image request goes to Jev
+  unread, and its answer accepts the key; at most two image requests are read at once.
 - **Experimental:** TypeSafe calls Jev's images not for production, and may change their format between releases.
 
 ### TLS and reverse proxies
@@ -120,7 +122,7 @@ Measured on a 16-vCPU VM (docs/benchmarks.md):
 | Resource | Guide |
 |---|---|
 | CPU | Serving is about 2–5 ms of CPU per locally answered request with a real encoder, plus training bursts capped at `train_workers × 2` cores (low priority). 2–4 cores cover hundreds of requests per second. |
-| Memory | ~70 MB base, the encoder (~150 MB for bge-small ONNX), and ~2–8 MB per loaded task (`max_loaded`, default 64). Plan 2 GB, and cap it with `max_memory_mb`. Set `max_loaded` above the number of tasks that are active at once: below it, tasks reload from disk many times a second. That is safe (memory stays flat: a 20-minute soak with 20 active tasks and `max_loaded = 12` held ~160 MB) but costs CPU and disk reads, and slows each task's learning. |
+| Memory | ~70 MB base, the encoder (~150 MB for bge-small ONNX), and ~2–8 MB per loaded task (`max_loaded`, default 64). Plan 2 GB, and cap it with `max_memory_mb`. Set `max_loaded` above the number of tasks that are active at once: below it, tasks reload from disk many times a second. That is safe (memory stays flat: a 20-minute soak with 20 active tasks and `max_loaded = 12` held ~160 MB, and the audit and calibration draws continue across reloads) but costs CPU and disk reads, and slows each task's learning. |
 | Disk | Per task, bounded. The store keeps at most ~80,000 rows (`max_train_samples` + `max_calib_samples` + `keep_local_rows`) of ~3–4 KB each (text, embedding, answers and indexes): ~300 MB for a busy task, less for a quiet one. Add ~8 MB per kept model version (production, shadow and at most `keep_versions`, 3, of each finished state). `idle_ttl_days` deletes tasks nobody uses. |
 | Network | Only to the upstream (`api.typesafe.ai:443`) and from the callers. |
 

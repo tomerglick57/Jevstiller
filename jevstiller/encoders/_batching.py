@@ -1,6 +1,7 @@
 """One encoder shared by many tasks and threads, with concurrent calls merged into batches."""
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections import deque
@@ -10,6 +11,14 @@ from concurrent.futures import Future
 import numpy as np
 
 from .._task import MAX_TEXT_CHARS as MAX_CHARS  # characters of each text the encoder sees
+
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _clean(text: str) -> str:
+    """A text the model encoders can take: lone UTF-16 surrogates (which JSON's \\udcXX escapes produce, and which
+    the tokenizers refuse with a TypeError) become U+FFFD."""
+    return _SURROGATE.sub("\ufffd", text) if _SURROGATE.search(text) else text
 
 
 class BatchingEncoder:
@@ -25,7 +34,9 @@ class BatchingEncoder:
 
     Texts are cut to `max_chars` first. Model encoders read only the first 256 tokens (~1-2k characters of
     prose) but tokenize the whole text before truncating, and the hash encoder reads all of it, so without a
-    cap one 4 MB request took seconds of the shared encoder's time (security audit run 2).
+    cap one 4 MB request took seconds of the shared encoder's time (security audit run 2). Lone surrogates are
+    replaced, and if a batch fails anyway, each call in it is encoded on its own: one caller's text the encoder
+    can't take used to fail every call in the batch, other callers' and other tenants' included (run 5).
 
     `expected_wait_s()` estimates how long a new call would wait (texts queued or being encoded, times the
     measured time per text), so a caller can do something else when the encoder is saturated (the proxy
@@ -46,7 +57,7 @@ class BatchingEncoder:
         self._worker: threading.Thread | None = None
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
-        texts = [t[:self.max_chars] if isinstance(t, str) else t for t in texts]   # image bytes stay whole
+        texts = [_clean(t[:self.max_chars]) if isinstance(t, str) else t for t in texts]   # image bytes stay whole
         if not texts:
             return np.zeros((0, self.dim), np.float32)
         if len(texts) >= self.max_batch:
@@ -84,20 +95,38 @@ class BatchingEncoder:
                 self.batches += 1
             t0 = time.perf_counter()
             try:
-                X = self.inner.encode([t for texts, _ in batch for t in texts])
-            except BaseException as e:
-                for _, fut in batch:
-                    fut.set_exception(e)
-                continue
+                results = self._encode(batch)
             finally:
                 with self._cv:
                     self._inflight = 0
-            per = (time.perf_counter() - t0) / n
+            per = (time.perf_counter() - t0) / n           # failed batches count too: the time was spent
             self._per_text_s = per if not self._per_text_s else 0.8 * self._per_text_s + 0.2 * per
-            i = 0
-            for texts, fut in batch:
-                fut.set_result(X[i:i + len(texts)])
-                i += len(texts)
+            for (_, fut), r in zip(batch, results, strict=True):
+                if isinstance(r, BaseException):
+                    fut.set_exception(r)
+                else:
+                    fut.set_result(r)
+
+    def _encode(self, batch: list[tuple[list, Future]]) -> list:
+        """One result per call: its rows of the batch's embeddings, or what it raised. If the whole batch fails, each
+        call is encoded on its own, so only the call whose texts the encoder can't take gets the error."""
+        try:
+            X = self.inner.encode([t for texts, _ in batch for t in texts])
+        except BaseException as e:
+            if len(batch) == 1 or not isinstance(e, Exception):
+                return [e] * len(batch)
+            out: list = []
+            for texts, _ in batch:
+                try:
+                    out.append(self.inner.encode(texts))
+                except BaseException as err:
+                    out.append(err)
+            return out
+        out, i = [], 0
+        for texts, _ in batch:
+            out.append(X[i:i + len(texts)])
+            i += len(texts)
+        return out
 
     def time_per_text_s(self) -> float:
         """Measured encode time per text (moving average); 0 until the first batch."""
