@@ -7,18 +7,19 @@ from pathlib import Path
 
 import numpy as np
 
-from ._hf import default_pooling
+from ._hf import default_pooling, length_batches
 
 
 class OnnxEncoder:
     def __init__(self, repo: str = "Xenova/bge-small-en-v1.5", file: str = "onnx/model.onnx",
-                 device: str = "auto", pooling: str | None = None, max_length: int = 256, batch_size: int = 64):
+                 device: str = "auto", pooling: str | None = None, max_length: int = 256,
+                 batch_size: int | None = None):
         import onnxruntime as ort
         from huggingface_hub import hf_hub_download
         from tokenizers import Tokenizer
         self.repo, self.file = repo, file
         self.pooling = pooling or default_pooling(repo)
-        self.max_length, self.batch_size = max_length, batch_size
+        self.max_length = max_length
         model_path = Path(hf_hub_download(repo, file))
         for extra in ("onnx/model.onnx_data", "onnx/model.onnx.data"):   # large models keep weights beside the graph
             try:
@@ -36,6 +37,9 @@ class OnnxEncoder:
         so.log_severity_level = 3
         self.sess = ort.InferenceSession(str(model_path), so, providers=providers)
         self.device = "cuda" if providers[0].startswith("CUDA") else "cpu"
+        # On CPU, length-sorted batches of 8 beat 16 and 64 on real text at 16-256 concurrent callers (bge-small,
+        # benchmarks/encoders.py, docs/benchmarks.md); a GPU wants bigger batches
+        self.batch_size = batch_size or (64 if self.device == "cuda" else 8)
         self.input_names = [i.name for i in self.sess.get_inputs()]
         self.output_name = self.sess.get_outputs()[0].name
         h = hashlib.sha256()
@@ -56,17 +60,20 @@ class OnnxEncoder:
         return h, mask
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
-        chunks = []
-        for s in range(0, len(texts), self.batch_size):
-            h, mask = self._run(texts[s:s + self.batch_size])
+        out = None
+        for idx in length_batches(texts, self.batch_size):
+            h, mask = self._run([texts[i] for i in idx])
             if self.pooling == "cls":
                 e = h[:, 0]
             else:
                 m = mask[..., None].astype(h.dtype)
                 e = (h * m).sum(1) / np.maximum(m.sum(1), 1e-6)
             e = e / np.maximum(np.linalg.norm(e, axis=1, keepdims=True), 1e-12)
-            chunks.append(e.astype(np.float32))
-        out = np.concatenate(chunks) if chunks else np.zeros((0, getattr(self, "dim", 0)), np.float32)
+            if out is None:
+                out = np.empty((len(texts), e.shape[1]), np.float32)
+            out[idx] = e
+        if out is None:
+            out = np.zeros((0, getattr(self, "dim", 0)), np.float32)
         if not hasattr(self, "dim"):
             self.dim = int(out.shape[1])
         return out
