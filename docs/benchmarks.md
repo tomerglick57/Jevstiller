@@ -369,13 +369,48 @@ Latency is the server's own measurement (its access log). The clients share the 
 What it shows:
 
 - **Forwarding adds ~1–4 ms** up to 64 callers. At 256 callers one process forwards ~585 req/s, which is 30 keys' worth of the 1,200 requests/minute limit Jev published at the time (and three times what one key actually sustained on 2026-09-26, below).
-- **The local path is bounded by the encoder:** bge-small on this CPU embeds ~150 of these synthetic texts a second (~340/s for short English sentences). Below that, local answers take 11–25 ms p50. Above it, backpressure (`max_encoder_wait_ms`) sends the excess to Jev, so throughput keeps rising with load (424 req/s at 256 callers) instead of collapsing. At 256 callers the machine is CPU-bound, and local answers slow to ~350 ms, still no slower than Jev.
+- **The local path is bounded by the encoder:** bge-small on this CPU embedded ~150 of these synthetic texts a second at the time (~340/s for short English sentences; the encoder's capacity under load before and after length-sorted batches is in the next section). Below that, local answers take 11–25 ms p50. Above it, backpressure (`max_encoder_wait_ms`) sends the excess to Jev, so throughput keeps rising with load (424 req/s at 256 callers) instead of collapsing. At 256 callers the machine is CPU-bound, and local answers slow to ~350 ms, still no slower than Jev.
 - **The local shares here are not meaningful:** a language-model encoder can't make sense of the synthetic `w123` vocabulary, so fewer answers pass the confidence gate than with real text (compare the live Banking77 run).
 - **Found and fixed on the way:**
   - Forwarding collapsed to ~70 req/s at 256 callers (a single httpx pool of 256 connections; now pools of 16).
   - Past the encoder's capacity, latency grew to 15 s p99 and throughput halved (now backpressure).
   - Requests that were only forwarded were still being encoded (now lazily, only for tasks).
   - The load generator itself hit the same httpx limit, so it now spreads its connections over processes.
+
+## The encoder under concurrent callers (2026-10-29)
+
+`python benchmarks/encoders.py` → `experiments/results/encoders.json`. Before and after: the same command from outside both checkouts, with `PYTHONPATH` set to each, one after the other. Unrelated work shared the machine during this pair (load average 7–9). An earlier pair on a quieter machine, with batches of 16 (`--batch-sizes 16` on the new code), gave 1.9–3.1× on real text at 64–256 callers.
+
+The local path's ceiling is the encoder: `jevstiller serve` merges concurrent requests into one call of up to 256 texts (`BatchingEncoder`), and the encoder splits that call into batches, each padded to its longest text. Until 2026-10-29 the ONNX encoder cut batches of 64 in arrival order, so a short text was padded to the longest of the 64 around it, and throughput *fell* as load rose. The encoders now sort each call's texts by length, and the ONNX encoder on CPU uses batches of 8 (64 on CUDA). The embeddings are the same: `--embeddings old.npz` on the old code and `--same-as old.npz` on the new give a largest difference of 0.0 on 2,048 texts of each set.
+
+The script runs the encoder in its `BatchingEncoder` as the server does, with N threads each encoding one text at a time in a closed loop for 20 s. bge-small, ONNX on CPU, texts per second and latency per call:
+
+| Text | Callers | Texts/s, before → after | | p50 | p99 |
+|---|---|---|---|---|---|
+| TweetEval offensive | 16 | 73 → 100 | 1.4× | 207 → 152 ms | 410 → 264 ms |
+| | 64 | 50 → 124 | 2.5× | 1,072 → 502 ms | 2,096 → 834 ms |
+| | 256 | 48 → 129 | 2.7× | 5,554 → 1,863 ms | 6,191 → 3,380 ms |
+| Banking77 | 16 | 166 → 189 | 1.1× | 90 → 81 ms | 222 → 143 ms |
+| | 64 | 101 → 196 | 1.9× | 590 → 309 ms | 2,018 → 984 ms |
+| | 256 | 97 → 236 | 2.4× | 2,487 → 1,042 ms | 3,813 → 1,742 ms |
+| AG News | 16 | 52 → 74 | 1.4× | 265 → 196 ms | 979 → 565 ms |
+| | 64 | 38 → 73 | 1.9× | 1,536 → 776 ms | 2,364 → 1,689 ms |
+| | 256 | 30 → 90 | 3.0× | 8,472 → 2,744 ms | 12,116 → 4,070 ms |
+| Synthetic (`load.py`'s) | 16 | 154 → 146 | 1.0× | 102 → 104 ms | 142 → 202 ms |
+| | 64 | 150 → 186 | 1.2× | 417 → 327 ms | 519 → 781 ms |
+| | 256 | 114 → 189 | 1.7× | 2,123 → 1,316 ms | 4,226 → 1,742 ms |
+
+- **Under load, real text gains 1.9–3.0×**, and throughput now rises with load instead of falling. Synthetic text gains least (a plausible explanation, not tested: its lengths vary least), and its p99 at 16 and 64 callers came out higher in this pair.
+- **`load.py` can't show this:** in a before/after pair of its `local` and `mixed` runs on 2026-10-29, results differed by up to 12% in throughput and 2× in local p50 at 16 callers, where (with batches of 16 then) both versions ran the same batches. The fake teacher's latency and the clients sharing the CPU dominate there.
+
+**The batch size**, compared within one run (`python benchmarks/encoders.py --batch-sizes 8 16 64 --repeats 2 --seconds 15`, mean of 2, texts/s). Batches of 8 are fastest on all real text, by up to 1.6× over 16 at 16 callers, and lose 9% on the synthetic text at 64–256 callers. Smaller than 8 was not tried. Separate runs on this machine disagreed with each other by more than the differences between 8 and 16, so only the interleaved comparison counts.
+
+| Text | Callers | 8 | 16 | 64 |
+|---|---|---|---|---|
+| TweetEval offensive | 16 / 64 / 256 | 136 / 141 / 143 | 96 / 113 / 135 | 98 / 49 / 94 |
+| Banking77 | 16 / 64 / 256 | 202 / 254 / 269 | 173 / 229 / 267 | 163 / 152 / 224 |
+| AG News | 16 / 64 / 256 | 69 / 84 / 81 | 42 / 73 / 67 | 48 / 31 / 49 |
+| Synthetic | 16 / 64 / 256 | 157 / 179 / 171 | 152 / 195 / 189 | 144 / 149 / 177 |
 
 ## Soak (P6.6)
 

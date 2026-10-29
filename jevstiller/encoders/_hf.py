@@ -11,6 +11,14 @@ def default_pooling(model_name: str) -> str:
     return "cls" if "bge" in model_name.lower() else "mean"
 
 
+def length_batches(texts: Sequence[str], batch_size: int) -> list[list[int]]:
+    """Indices of `texts` in batches of similar length, shortest first. A batch is padded to its longest text, so in
+    arrival order short texts pay for the long ones beside them; sorted, each batch pads only to its own.
+    Characters stand in for tokens: no second tokenisation."""
+    order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+    return [order[s:s + batch_size] for s in range(0, len(order), batch_size)]
+
+
 class TorchEncoder:
     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", device: str = "auto",
                  pooling: str | None = None, max_length: int = 256, batch_size: int = 64):
@@ -34,8 +42,8 @@ class TorchEncoder:
         torch = self.torch
         out = np.empty((len(texts), self.dim), dtype=np.float32)
         with torch.inference_mode():
-            for s in range(0, len(texts), self.batch_size):
-                b = self.tok(list(texts[s:s + self.batch_size]), padding=True, truncation=True,
+            for idx in length_batches(texts, self.batch_size):
+                b = self.tok([texts[i] for i in idx], padding=True, truncation=True,
                              max_length=self.max_length, return_tensors="pt").to(self.device)
                 with torch.autocast(device_type="cuda", enabled=self.device.startswith("cuda")):
                     h = self.model(**b).last_hidden_state
@@ -45,5 +53,5 @@ class TorchEncoder:
                     m = b["attention_mask"].unsqueeze(-1).to(h.dtype)
                     e = (h * m).sum(1) / m.sum(1).clamp(min=1e-6)
                 e = torch.nn.functional.normalize(e.float(), dim=-1)
-                out[s:s + len(e)] = e.cpu().numpy()
+                out[idx] = e.cpu().numpy()
         return out
