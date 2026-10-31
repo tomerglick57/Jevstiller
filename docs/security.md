@@ -209,9 +209,9 @@ One area was only partly covered: the reviewer of the guarantee under adversaria
 
 ## Security audit, 2026-10-24 (run 5)
 
-Run 5 audited `82db190` (0.5.3 plus image support, unreleased) and was weighted toward the new image path (the multipart and base64 reader, the image check and decoding), run 4's open question about the guarantee's predictable draws, and resource limits beyond disk. Everything was reproduced locally against mock upstreams, then re-run by a second reviewer trying to disprove it and checked line by line by a third. Regression tests are in `tests/test_audit_run5.py`.
+Run 5 audited `82db190` (0.5.3 plus image support, before its release in 0.6.0) and was weighted toward the new image path (the multipart and base64 reader, the image check and decoding), run 4's open question about the guarantee's predictable draws, and resource limits beyond disk. Everything was reproduced locally against mock upstreams, then re-run by a second reviewer trying to disprove it and checked line by line by a third. Regression tests are in `tests/test_audit_run5.py`.
 
-No finding exposes keys, request text, image bytes, other tenants' data or the admin API. Key acceptance held on the image path (a key Jev hasn't accepted never got an image task or a local image answer), image bytes are never stored, the new settings fail closed, and run 4's fixes held. Findings 1, 2, 5, 6, 7 and 9 affect released versions (images off); 3, 4 and 8 only the unreleased image support.
+No finding exposes keys, request text, image bytes, other tenants' data or the admin API. Key acceptance held on the image path (a key Jev hasn't accepted never got an image task or a local image answer), image bytes are never stored, the new settings fail closed, and run 4's fixes held. Findings 1, 2, 5, 6, 7 and 9 affect versions before 0.6.0 (images off); 3, 4 and 8 only image support, and were fixed before its first release (0.6.0).
 
 | # | Severity | Finding | Fix |
 |---|---|---|---|

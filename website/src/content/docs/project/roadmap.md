@@ -63,6 +63,15 @@ and its own Jev key.
   2026.10.19). The image is rebuilt on Debian's fixes and drops pip.
 - **Docs:** comparison pages, a savings calculator, and benchmark numbers re-measured with the default settings.
 
+**0.6.0:**
+- **Questions about images are learned locally** (experimental, off by default): with `images = "auto"`, a
+  repeated `choice` or yes/no question about one image is answered locally once trained, under the same guarantee.
+  SigLIP so400m on a GPU, SigLIP B/16 on CPU; image bytes are never stored.
+- **Fixes from the fifth security audit** (docs/security.md, run 5): the audit keeps running when a task is
+  reloaded, one bad text no longer fails its whole encoder batch, a student trained with another encoder isn't
+  served, and slow or header-only uploads can't hold the large-body slots.
+- **Faster under load:** the text encoders batch by length, 1.9–3× the texts a second at 64–256 concurrent callers.
+
 ## Next
 
 - **A tolerance for yes/no answers.** Since 0.5 a `noul` answer is covered for its side of your cut-off. For
@@ -76,7 +85,6 @@ and its own Jev key.
 - **An OpenAI-compatible endpoint.** The proxy speaks Jev's API only. A `/v1/chat/completions` front that maps a
   constrained-choice prompt onto the same task loop would let the same local model, guarantee and audit sit in front
   of other providers' classification calls.
-- **Admin controls on tasks that are loading:** a mode or target change during a load reaches the live engine.
 - **An in-process option** for teams that can't run a service: a `TypeSafeClient`-compatible wrapper over the same
   engine.
 - **Hooks for a hosted version:** a pluggable store, an external key validator, metering.

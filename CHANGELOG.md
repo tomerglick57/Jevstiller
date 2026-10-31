@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-10-31
+
+Questions about images can now be learned and answered locally (experimental, off by default). Also fixes from the fifth security audit, several of which affect earlier releases, and text encoders that handle 1.9–3× as many texts a second under load.
 
 - **Security audit run 5** (docs/security.md): 5 medium and 4 low findings, all fixed except one low (see the open item). Regression tests in `tests/test_audit_run5.py`. These affect released versions:
   - **The audit kept running only while a task stayed loaded.** Every engine load restarted the audit and calibration draws from public values, so a task reloaded before each request (more active tasks than `max_loaded`, or another tenant cycling 64 questions) was never audited, never fell back on drift and never had a new student judged. The draws now continue across reloads, and in the server they are keyed with the deployment salt, so callers can't compute them. Replays (no hash key) draw as before.
@@ -8,7 +10,7 @@
   - **A student trained with another encoder isn't served.** After an encoder change (`small` → `base`, or `images = "auto"` on a host that gained or lost its GPU) trained tasks silently stopped answering locally and learning. Such a student is now dropped at load and the task learns again (an `encoder_changed` event); promote and rollback refuse it.
   - **`Connection: authorization`** no longer drops the bearer the proxy takes the caller's identity from.
   - **Large-body slots** are taken once more than `max_body_mb` has arrived, not on the declared length, and every request body must arrive within the new `[proxy] body_timeout_s` (120 s; 408 otherwise). 16 connections that sent only headers held every slot.
-  - Image support (unreleased) is hardened before release: requests the proxy and Jev could read differently are forwarded (an ambiguous boundary, an asset with both `part` and `data_base64`, bytes after an image's end); image bodies are read only for keys Jev has accepted, two at a time; JSON with more than 50,000 items, and PNGs with too many chunks before their pixels, are refused before any work; Pillow tries PNG and JPEG only; malformed image requests are forwarded instead of a 500.
+  - Image support, new in this release, was hardened before it shipped: requests the proxy and Jev could read differently are forwarded (an ambiguous boundary, an asset with both `part` and `data_base64`, bytes after an image's end); image bodies are read only for keys Jev has accepted, two at a time; JSON with more than 50,000 items, and PNGs with too many chunks before their pixels, are refused before any work; Pillow tries PNG and JPEG only; malformed image requests are forwarded instead of a 500.
   - Python API: `ProxySettings` gains `max_image_reads` and `body_timeout_s`.
 - **Questions about images can be learned (experimental, off by default).** Jev 1.14 accepts images; until now the proxy only forwarded them.
   - With `[encoder] images = "auto"` (or `--images auto`, `JEVSTILLER_IMAGES`) and `pip install "jevstiller[images]"` (plus `jevstiller[gpu]` on a GPU), a question about one image becomes an image task and is answered locally once trained, under the same guarantee.
