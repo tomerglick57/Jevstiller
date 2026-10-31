@@ -241,6 +241,7 @@ We don't believe Jevstiller does what that clause is about. Nothing it builds re
 - Each local model is a small classifier (one linear layer over a frozen open-source sentence encoder) for **one** of your questions, trained only on your own requests and Jev's answers to them.
 - It can't answer a question it hasn't seen many times, can't take new instructions, and is of no use outside your deployment.
 - It isn't offered to anyone else, and it keeps sending Jev every request it isn't sure of, plus a permanent audit share.
+- It never sends Jev a request your code didn't make. Every answer it learns from is one you asked for, paid for and used for your own purposes; there is no separate training traffic. The models are a generalizing cache over your own labels, not a harvest of Jev's behavior.
 
 This is our reading, not legal advice, and TypeSafe hasn't reviewed it. If your Jev access matters to your business, check with TypeSafe or a lawyer before you deploy. Jevstiller is an independent project, not affiliated with or endorsed by TypeSafe.
 

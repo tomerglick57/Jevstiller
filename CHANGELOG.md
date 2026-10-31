@@ -19,6 +19,7 @@
   - `jevstiller[gpu]` now needs transformers 4.37 or later (the first with SigLIP). Images are preprocessed in Pillow, so torchvision isn't needed.
   - Python API: `TaskManager(image_encoder=...)`, `route(..., modality="image")`, `TaskInfo.modality`, `Routing.modality`, `jevstiller.encoders.load_image_encoder`, `image_choice` and `IMAGE_MODELS`.
 - **More local answers per second under load.** The text encoders cut each call into batches in arrival order, each padded to its longest text, so short texts were padded to the long ones beside them, and throughput fell as load rose. They now sort each call's texts by length, and the ONNX encoder on CPU uses batches of 8 instead of 64 (64 still on CUDA). With bge-small on CPU, the encoder handles 1.9–3.0× as many texts a second on real text at 64–256 concurrent callers (Banking77: 97 → 236 at 256 callers), 1.1–1.4× at 16, and 1.0–1.7× on `load.py`'s synthetic text. Embeddings are the same. New `benchmarks/encoders.py` measures it (docs/benchmarks.md, "The encoder under concurrent callers").
+- Docs: the README's "TypeSafe's terms" section adds a fourth reason the clause doesn't fit: the proxy never sends Jev a request the caller's code didn't make, so every answer it learns from was asked for, paid for and used by the caller. There is no training traffic.
 
 ## 0.5.3 — 2026-10-22
 
