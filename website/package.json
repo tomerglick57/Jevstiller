@@ -15,12 +15,12 @@
     "indexnow": "node scripts/indexnow.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.42.6",
-    "astro": "^7.3.8",
+    "@astrojs/starlight": "^0.42.7",
+    "astro": "^7.4.2",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
-    "wrangler": "^4.149.0"
+    "wrangler": "^4.152.0"
   },
   "private": true
 }
