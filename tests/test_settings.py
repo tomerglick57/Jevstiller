@@ -1,7 +1,9 @@
 """P5.1: config file, environment and flags, with precedence and validation."""
+import math
+
 import pytest
 
-from jevstiller._settings import load
+from jevstiller._settings import SECTIONS, load
 
 TOML = """
 [server]
@@ -101,3 +103,35 @@ def test_encoder_wait_setting(tmp_path):
     assert load(p, environ={}).max_encoder_wait_ms == 50
     assert load(p, environ={"JEVSTILLER_MAX_ENCODER_WAIT_MS": "0"}).max_encoder_wait_ms == 0
     assert load(environ={}).max_encoder_wait_ms == 200
+
+
+NON_FINITE_FLOATS = ("max_encoder_wait_ms", "admit_window_s", "max_body_mb", "upstream_timeout_s")
+
+
+@pytest.mark.parametrize("name", NON_FINITE_FLOATS)
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_non_finite_float_from_file_is_rejected(tmp_path, name, bad):
+    section = next(s for s, keys in SECTIONS.items() if name in keys)
+    p = tmp_path / "j.toml"
+    p.write_text(f"[{section}]\n{name} = {bad}\n")
+    with pytest.raises(ValueError, match=f"{name} must be a finite number"):
+        load(p, environ={})
+
+
+@pytest.mark.parametrize("name", NON_FINITE_FLOATS)
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_non_finite_float_from_env_is_rejected(name, bad):
+    with pytest.raises(ValueError, match=f"{name} must be a finite number"):
+        load(environ={f"JEVSTILLER_{name.upper()}": bad})
+
+
+@pytest.mark.parametrize("name", NON_FINITE_FLOATS)
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_non_finite_float_from_cli_is_rejected(name, bad):
+    with pytest.raises(ValueError, match=f"{name} must be a finite number"):
+        load(cli={name: bad}, environ={})
+
+
+def test_finite_floats_still_load():
+    s = load(cli={"max_body_mb": 8.0, "upstream_timeout_s": 2.5}, environ={"JEVSTILLER_ADMIT_WINDOW_S": "60"})
+    assert (s.max_body_mb, s.upstream_timeout_s, s.admit_window_s) == (8.0, 2.5, 60.0)

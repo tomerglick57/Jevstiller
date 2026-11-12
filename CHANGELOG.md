@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Settings: `validate()` now refuses `nan`, `inf` and `-inf` in every numeric (float) setting, naming the setting, whether it comes from the config file, the environment or a flag. `nan` passed the `< 0` checks, so `max_encoder_wait_ms`, `admit_window_s`, `max_body_mb` and `upstream_timeout_s` accepted it (security audit run 4 open hardening item).
+
 ## 0.6.0 — 2026-10-31
 
 Questions about images can now be learned and answered locally (experimental, off by default). Also fixes from the fifth security audit, several of which affect earlier releases, and text encoders that handle 1.9–3× as many texts a second under load.
