@@ -160,6 +160,12 @@ class ServeSettings:
         for k, v in self.engine.items():
             if k in cfg_types and (problem := _type_problem(k, v, cfg_types[k])) is not None:
                 raise ValueError(f"[engine]: {problem}")
+        for f in fields(self):
+            # `nan` passes every `< 0` style check below, and `inf` most of them: refuse both up front, naming the
+            # setting, whether it came from the file, the environment or a flag (security audit run 4 open item)
+            v = getattr(self, f.name)
+            if "float" in str(f.type) and isinstance(v, float) and not math.isfinite(v):
+                raise ValueError(f"{f.name} must be a finite number, got {v!r}")
         if "store_text" in self.engine:
             # [engine] takes any Config field, store_text included; [manager] store_text used to override it
             # with its default (True). Either one saying False keeps text out of the store.

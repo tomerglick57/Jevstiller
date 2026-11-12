@@ -201,7 +201,7 @@ Also fixed: a caller's `Accept-Encoding: br`/`zstd` could corrupt a relayed body
 
 **Open hardening items (new):**
 - The calibration split and audit draws are seeded from public values (the config seed and the task version) and restart with each engine load, so they can be predicted. Whether an attacker in a shared task can use that to choose which of their inputs land in calibration was not measured: the reviewer was cut short.
-- `nan`/`inf` are accepted in a few numeric settings (`max_encoder_wait_ms`, `admit_window_s`, `max_body_mb`, `upstream_timeout_s`).
+- `nan`/`inf` are accepted in a few numeric settings (`max_encoder_wait_ms`, `admit_window_s`, `max_body_mb`, `upstream_timeout_s`). (Fixed since 0.6.0: every float setting must be finite.)
 - Release: the GitHub-release job doesn't re-check the artifacts' hashes; the Docker build's `cache-from` and the base image and encoder model aren't pinned by digest; no Dependabot entry for pip.
 - `uvicorn`/`h11` accept a request with both `Content-Length` and `Transfer-Encoding` and keep the connection: not reproduced as smuggling, but a reverse proxy in front normalises it.
 
